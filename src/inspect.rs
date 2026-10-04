@@ -2834,13 +2834,16 @@ fn check_nostr(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
         ),
     }
 
-    // The loudest thing in the layer, by name.
+    // The loudest thing in the layer, by name — one warning for the
+    // whole pile, so three apps on Trust read as one finding instead of
+    // the same finding three times.
     if let Ok(apps) = client.apps() {
-        for trusted in trust_apps(&apps) {
+        let trusted = trust_apps(&apps);
+        if !trusted.is_empty() {
             report(
                 Grade::Warn,
                 "nostr",
-                format!("{trusted} holds Trust: a standing grant, signing without asking"),
+                trust_warning_wording(&trusted),
                 Some(Action::new(
                     "review",
                     "kuma-nostr apps".to_string(),
@@ -2849,6 +2852,21 @@ fn check_nostr(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
             );
         }
     }
+}
+
+/// The standing-grant warning's wording: one line for the whole pile of
+/// apps on Trust, so three grants read as one finding instead of the
+/// same finding three times.
+fn trust_warning_wording(trusted: &[String]) -> String {
+    let (subject, holds) = if trusted.len() == 1 {
+        ("1 app".to_string(), "holds")
+    } else {
+        (format!("{} apps", trusted.len()), "hold")
+    };
+    format!(
+        "{subject} {holds} Trust: a standing grant, signing without asking: {}",
+        trusted.join(", ")
+    )
 }
 
 /// The reachability fact's wording: what a person with a phone that
@@ -4164,6 +4182,20 @@ mod tests {
             "a broken answer invents no findings"
         );
         assert!(trust_apps(&serde_json::json!({"apps": []})).is_empty());
+    }
+
+    #[test]
+    fn the_standing_grant_warning_is_one_line_however_many_apps_hold_it() {
+        let one = vec!["npub1trusted".to_string()];
+        assert_eq!(
+            trust_warning_wording(&one),
+            "1 app holds Trust: a standing grant, signing without asking: npub1trusted"
+        );
+        let three: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            trust_warning_wording(&three),
+            "3 apps hold Trust: a standing grant, signing without asking: a, b, c"
+        );
     }
 
     #[test]

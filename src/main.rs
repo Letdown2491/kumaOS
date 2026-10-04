@@ -2097,6 +2097,41 @@ fn clean(config_path: &Path, json: bool) -> Result<()> {
         say(format!("Removed {pruned} dangling image(s)."));
     }
 
+    // Where the doctor's stranded count and this prune disagree: a
+    // dangling image a container still holds is skipped by `prune -f`
+    // (it won't take an image out from under a container, even a
+    // stopped one), so without this the doctor warns "1 stranded build
+    // image" while `kuma clean` answers "Nothing to reclaim" — both
+    // telling the truth, together a lie. Naming the holder turns the
+    // finding into a road; deleting the container stays the holder's
+    // owner's call.
+    let held: Vec<String> = host_output(&["podman", "images", "-f", "dangling=true", "-q"])
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|id| {
+            let holders = host_output(&[
+                "podman",
+                "ps",
+                "-a",
+                "--filter",
+                &format!("ancestor={id}"),
+                "--format",
+                "{{.Names}}",
+            ])
+            .ok()?;
+            let holders: Vec<&str> = holders.lines().filter(|l| !l.trim().is_empty()).collect();
+            (!holders.is_empty()).then(|| format!("{id} (held by {})", holders.join(", ")))
+        })
+        .collect();
+    if !held.is_empty() {
+        say(format!(
+            "{} dangling image(s) not reclaimed, held by containers — remove the containers to reclaim them: {}",
+            held.len(),
+            held.join(", ")
+        ));
+    }
+
     // Composed bases are tagged, so dangling-pruning never reclaims
     // them, and every base manifest edit strands the previous content
     // tag (~1 GB each). Live means: the tag the current declaration
@@ -2172,6 +2207,7 @@ fn clean(config_path: &Path, json: bool) -> Result<()> {
 
     let nothing = abandoned.is_empty()
         && pruned == 0
+        && held.is_empty()
         && base_pruned == 0
         && !live_pruned
         && root_pruned == 0
