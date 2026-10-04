@@ -530,6 +530,13 @@ export XDG_CACHE_HOME=/var/lib/greetd/cache
 # both measured, Oct 04). RUST_LOG=debug stays until the greeter
 # smoke passes; drop it to info after.
 export RUST_LOG=debug
+# bash dies on SIGPIPE when a builtin writes a broken pipe: if the
+# logger reader of this redirect ever stalls or dies, the wrapper's
+# next echo kills the whole session silently — greetd reads that as
+# "greeter exited without creating a session" and shoots a greeter
+# that is mid-initialization (measured, Oct 04). The greeter itself
+# is Rust and ignores SIGPIPE, which is why it outlived its wrapper.
+trap '' PIPE
 exec 2> >(exec logger -t kuma-greeter)
 
 # The wrapper knows why the session ends: compositor death, socket

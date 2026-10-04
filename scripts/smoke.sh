@@ -247,7 +247,13 @@ bad()  {
         # the greeter's own log lines are the evidence a dead login
         # screen leaves. AVC denials are audit noise to the wide greps
         # but exactly the verdict an SELinux-bound greeter leaves.
-        guest 'journalctl -b --no-pager -t kuma-greeter | tail -40' || true
+        # The greeter chain logs to the journal tagged kuma-greeter
+        # (see GREETER_SESSION). The wrapper's exit markers are the
+        # story; naga's shader-compile debug can run to thousands of
+        # lines and bury them in a raw tail, so the interesting lines
+        # come first and the raw tail is only the last few.
+        guest 'journalctl -b --no-pager -t kuma-greeter | grep -aE "wrapper:|ERROR|WARN|panic" | tail -30' || true
+        guest 'journalctl -b --no-pager -t kuma-greeter | tail -15' || true
         guest 'journalctl -b --no-pager | grep -iE "avc.*denied|selinux" | tail -20' || true
         # a compositor or GPU client dying without its own log line
         # leaves a kernel line instead: traps/segfault, oom-kill
