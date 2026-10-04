@@ -492,9 +492,51 @@ hotkey-overlay {
 /// tmpfiles.d/kuma-greeter.conf, 0700 greetd) keeps the login screen
 /// from ever fighting SELinux over a home it should not own.
 /// Wallpaper, fonts and theme need nothing here: they read image paths.
+///
+/// The wrapper supervises instead of exec'ing, and this is a measured
+/// fix, not a shape preference. greetd's contract (greetd/src/context.rs,
+/// `start()`) gives the greeter session 5 seconds to exit on its own
+/// after StartSession before it shoots it ("we give the greeter 5
+/// seconds to prove itself well-behaved"); the session starts only when
+/// the greeter process is gone. With `exec niri -- kuma-greeter` the
+/// greeter process is niri, and niri double-forks its `--` child into a
+/// transient scope without ever watching it — kuma-greeter exits
+/// promptly, niri lingers forever, and every login paid greetd's full
+/// 5-second patience plus its 1-second alarm tick (~6 s of journal
+/// silence between PAM success and session start, reproduced on this
+/// image). tuigreet-class greeters are fast because the greeter process
+/// IS the session child. So the wrapper runs niri in the background,
+/// runs kuma-greeter against its socket, and the moment the greeter
+/// quits it SIGTERMs niri (measured: 0.9 s to a clean exit) and exits —
+/// greetd sees a well-behaved greeter and starts the session at once.
 pub(crate) const GREETER_SESSION: &str = r#"#!/usr/bin/env bash
 export XDG_CACHE_HOME=/var/lib/greetd/cache
-exec niri -c /usr/share/kumaos/greeter-niri.kdl -- /usr/bin/kuma-greeter
+
+niri -c /usr/share/kumaos/greeter-niri.kdl &
+niri_pid=$!
+cleanup() { kill "$niri_pid" 2>/dev/null; }
+trap cleanup EXIT
+
+# niri prints its socket when ready; wait for the file rather than a
+# fixed sleep, and bail if the compositor dies under us
+sock=""
+for _ in $(seq 1 100); do
+  sock=$(ls "$XDG_RUNTIME_DIR"/wayland-? 2>/dev/null | head -1)
+  [ -n "$sock" ] && break
+  kill -0 "$niri_pid" 2>/dev/null || exit 1
+  sleep 0.1
+done
+[ -n "$sock" ] || exit 1
+
+WAYLAND_DISPLAY=${sock##*/} /usr/bin/kuma-greeter
+rc=$?
+# the greeter only exits on success or crash: either way hand the
+# session back to greetd immediately, don't make it wait out its
+# 5-second patience on a compositor nobody is using
+cleanup
+trap - EXIT
+wait "$niri_pid" 2>/dev/null
+exit $rc
 "#;
 
 /// A broken greeter cannot strand a boot: if kuma-greeter dies, greetd
