@@ -1,0 +1,59 @@
+# A Kuma system definition for the COSMIC desktop. See niri.toml for
+# every field the schema accepts.
+schema_version = 1
+
+[system]
+# No `base` key: kuma composes its own from Fedora's repos. Name a bootc
+# image here only as an escape hatch (see niri.toml).
+
+# System76's full desktop: panel, launcher, settings, files, terminal.
+# It curates itself upstream, so kuma adds only hardware enablement and
+# identity on top.
+desktop = "cosmic"
+
+# The login shell accounts on this machine get. Separate from
+# [user].shell because that describes a person and this describes the
+# image: media you hand to somebody declares no user, and without this
+# an image that installs fish had no way to say to use it.
+shell = "fish"
+
+# Commented out so this file is safe to build shareable media from, the
+# same as niri.toml. A declared account is a property of the image, so it
+# rides into every machine built from it, password hash included.
+#
+# COSMIC ships no first-boot setup wizard here, so a machine built from
+# this file as it stands has no account at all. That is correct for media
+# you hand to someone else and wrong for a machine you are declaring for
+# yourself: uncomment for the second.
+# [user]
+# name = "me"
+# shell = "fish"
+# password_hash = '$6$...'   # from `kuma passwd`
+# autologin = true           # straight to the desktop at boot
+
+[packages]
+rpm = ["fish", "git-core", "git-core-doc", "distrobox"]
+
+# Converged on boot and daily, and convergence only takes back what it
+# installed: an app you install through a store stays yours until you
+# decide, and `kuma capture` offers to write it down here. Updates are
+# not scoped that way: everything installed is kept current.
+flatpak = [
+    "org.mozilla.firefox",
+    "org.gnome.Loupe",
+    "org.gnome.Papers",
+    "org.gnome.Calculator",
+    "io.github.celluloid_player.Celluloid",
+]
+
+# brew = ["ripgrep", "fd", "jq"]
+
+# Your additions only. COSMIC already enables what it needs (greeter,
+# firewalld, bluetooth, cups, avahi, chronyd), so those don't belong here.
+[services]
+enable = []
+
+# Hourly read-only snapshots of /var/home, kept 24 deep plus a week of
+# dailies. Skipped on a machine whose /var/home isn't a btrfs subvolume.
+[snapshots]
+enable = true

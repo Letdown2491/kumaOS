@@ -1,0 +1,19 @@
+/target
+/Containerfile
+# CPython writes these beside any script it imports or compiles, and the
+# name carries the interpreter version, so one ran on a laptop and got
+# committed. A binary nobody reads has no business in a repository whose
+# case rests on being auditable.
+__pycache__/
+# vm, vm-cosmic, vm-smoke, and any future disk directories
+/vm*
+/.claude
+
+# Build outputs and the real declarations stay local; the *.example
+# files are the committed ones.
+/iso
+/examples/kuma.toml
+/examples/*.kuma.toml
+# ...and the locks beside them. A kuma.lock belongs in git next to the
+# declaration it pins; these just pin declarations that don't live here.
+/examples/*.lock

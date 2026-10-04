@@ -1,0 +1,270 @@
+# Publish a kuma image to ghcr.
+#
+# Manual only, on purpose. A published image is the one artifact here that
+# strangers pull and boot, and the first ones should go out when somebody
+# decides to, not as a side effect of a tag. Tag-triggered publishing is
+# the eventual shape and costs one `on: push: tags:` block when the flow
+# has been run a few times by hand.
+#
+# What this buys, and it is worth being clear that it is the cheap half:
+# somebody already on an atomic Fedora can `bootc switch` to this image
+# and keep their accounts, because those live in /var/home. Installing
+# from live media is the other half and needs `kuma install`, which needs
+# this to exist first: there is nothing to install until something is
+# published.
+name: publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      example:
+        description: Declaration to build from
+        type: choice
+        options: [niri, cosmic]
+        default: niri
+      allow_unsigned:
+        description: >-
+          Publish without a cosign signature. Off by default: an unsigned
+          image can only be rebased onto with ostree-unverified-registry,
+          which verifies nothing.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    outputs:
+      remote: ${{ steps.ref.outputs.remote }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # The choice list above constrains the web UI only; the API hands
+      # whatever it is given to the expressions below, and those
+      # interpolate into the run blocks. So the input is guarded at the
+      # source, through an env var (data the shell reads) rather than a
+      # template (text the run block becomes), and only the two values
+      # the choice list names ever reach the steps downstream.
+      - name: guard the inputs
+        id: guard
+        env:
+          EXAMPLE: ${{ inputs.example }}
+        run: |
+          set -euo pipefail
+          case "$EXAMPLE" in
+            niri | cosmic) ;;
+            *) echo "::error::example must be niri or cosmic; the API does not enforce the choice list, this does" >&2; exit 1 ;;
+          esac
+          echo "example=$EXAMPLE" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      # The binary is baked into the image by `kuma build`, so its build
+      # paths ride along into everything published. Same remap as
+      # release.yml; scripts/publish-audit.sh fails on any that survive.
+      - name: build kuma
+        env:
+          RUSTFLAGS: >-
+            --remap-path-prefix=${{ github.workspace }}=/kuma
+            --remap-path-prefix=/home/runner/.cargo/registry=/cargo
+        run: cargo build --locked --release
+
+      # The image above is composed by the kuma this job just built, so
+      # the shell must sit beside it in target/release.
+      - uses: ./.github/actions/kuma-shell
+        with:
+          kuma-dir: target/release
+
+      # Lowercased because ghcr rejects an uppercase path, and the owner
+      # here is not.
+      # Two tags for one image: a moving one to track, and a pinned one
+      # to go back to. `:niri` means "the current niri image", which is
+      # what somebody rebasing wants and is also useless for saying "the
+      # one that worked last week": every publish overwrites what it
+      # means. kuma.lock exists because kuma cares about pinning what a
+      # build came from; the images it produces had no equivalent.
+      #
+      # The version comes from Cargo.toml, so a publish cannot label
+      # itself something the binary inside it disagrees with.
+      - name: name the image
+        id: ref
+        run: |
+          set -euo pipefail
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          repo="ghcr.io/$owner/kuma"
+          {
+            echo "remote=$repo:${{ steps.guard.outputs.example }}"
+            echo "pinned=$repo:${{ steps.guard.outputs.example }}-$version"
+            echo "local=localhost/kuma-publish:${{ steps.guard.outputs.example }}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Composes its own base, so this is the long step. The declaration
+      # is a committed example precisely because it declares no [user] and
+      # no hostname; the audit below is what enforces that rather than
+      # trusting the file to stay that way.
+      - name: build the image
+        run: |
+          ./target/release/kuma build \
+            --config "examples/${{ steps.guard.outputs.example }}.toml" \
+            --tag "${{ steps.ref.outputs.local }}"
+
+      # Before the registry, never after. A published image cannot be
+      # unpublished from anybody who already pulled it.
+      - name: audit for personal information
+        run: ./scripts/publish-audit.sh "${{ steps.ref.outputs.local }}"
+
+      # Pinned to the cosign 2.6 line, not the installer's default: v4 of
+      # this action installs cosign v3, and cosign v3 changed where
+      # `cosign sign` puts signatures — OCI 1.1 referrers, no longer the
+      # legacy `sha256-<digest>.sig` attachment tags. Every machine
+      # running a published image verifies pulls through its baked policy
+      # (sigstoreSigned over use-sigstore-attachments), which reads only
+      # the legacy tags, so a v3-signed image is unverifiable by the very
+      # fleet it exists for. Found 2026-09-28: 44.3.0's first publish
+      # failed every bootc upgrade in the cross-version validation in
+      # under three seconds, silently, while this workflow's own verify
+      # passed — the new cosign reads what it wrote. The pin stays until
+      # the images' baked policy understands referrers and a deliberate
+      # migration moves the fleet across. release.yml's installer is not
+      # pinned: it signs blobs keylessly, which has no attachment path.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        if: ${{ !inputs.allow_unsigned }}
+        with:
+          cosign-release: v2.6.5
+
+      # Twice, because they do not share a credential store. podman writes
+      # its auth file under XDG_RUNTIME_DIR; cosign reads Docker's
+      # keychain at ~/.docker/config.json and would find nothing there.
+      # Signing pushes a signature artifact to the registry, so it needs
+      # write access whether or not the package is public, and the failure
+      # without this arrives at the one step that cannot be rehearsed.
+      - name: log in to ghcr
+        env:
+          ALLOW_UNSIGNED: ${{ inputs.allow_unsigned }}
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if [ "$ALLOW_UNSIGNED" != "true" ]; then
+            echo "${{ secrets.GITHUB_TOKEN }}" \
+              | cosign login ghcr.io -u "${{ github.actor }}" --password-stdin
+          fi
+
+      # Refused rather than warned about. An image people rebase onto
+      # without a signature is one they cannot verify at all, and a
+      # workflow that quietly publishes the weaker thing is how that
+      # becomes permanent. `allow_unsigned` makes it a decision.
+      - name: require a signing key
+        if: ${{ !inputs.allow_unsigned }}
+        env:
+          KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::No COSIGN_PRIVATE_KEY secret."
+            echo "Generate one with 'cosign generate-key-pair', add the private"
+            echo "half as COSIGN_PRIVATE_KEY and its password as"
+            echo "COSIGN_PASSWORD, and commit the public half so machines can"
+            echo "verify. Or re-run with allow_unsigned to publish anyway."
+            exit 1
+          fi
+
+      # --digestfile, because the registry decides the digest and podman
+      # only finds out by being told. `podman inspect .RepoDigests` reports
+      # the LOCAL manifest, which is not what the registry stored once
+      # podman recompressed layers on the way up, and signing that gives a
+      # signature for a manifest nobody can fetch.
+      - name: push
+        id: push
+        run: |
+          set -euo pipefail
+          podman tag "${{ steps.ref.outputs.local }}" "${{ steps.ref.outputs.remote }}"
+          podman tag "${{ steps.ref.outputs.local }}" "${{ steps.ref.outputs.pinned }}"
+          podman push --digestfile digest.txt "${{ steps.ref.outputs.remote }}"
+          # Same manifest, so the same digest and the one signature below
+          # covers both tags.
+          podman push "${{ steps.ref.outputs.pinned }}"
+          echo "digest=$(cat digest.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: sign
+        if: ${{ !inputs.allow_unsigned }}
+        env:
+          COSIGN_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # By digest, not by tag: a tag can move between the push and the
+          # signature, and a signature on a tag says nothing about which
+          # bytes were signed. The digest comes from the push itself.
+          cosign sign --key env://COSIGN_KEY --yes \
+            "${{ steps.ref.outputs.remote }}@${{ steps.push.outputs.digest }}"
+        # A key pair rather than keyless, decided against the alternative:
+        # a policy.json sigstoreSigned requirement takes one of keyPath,
+        # fulcio or pki, and the fulcio block needs both oidcIssuer and
+        # subjectEmail. A GitHub Actions certificate carries no email, only
+        # a URI SAN naming the workflow, so no policy can express "signed
+        # by kuma's release workflow". The release binary stays keyless
+        # because `cosign verify-blob` has no such constraint.
+
+      # By TAG, with the committed public key: exactly the command
+      # SECURITY.md gives a stranger, run against the registry rather than
+      # against anything this job computed.
+      #
+      # That is the whole point, and the earlier version got it wrong. It
+      # verified the same digest string the sign step had produced, so when
+      # that digest turned out to name a manifest the registry did not
+      # have, cosign found the signature it had just written and passed.
+      # The step meant to catch a silent signing failure shared the
+      # failure's input and confirmed it. Verifying the tag resolves
+      # through the registry, so it can only pass if what people pull is
+      # what was signed.
+      - name: verify the way a stranger would
+        if: ${{ !inputs.allow_unsigned }}
+        run: |
+          set -euo pipefail
+          for ref in "${{ steps.ref.outputs.remote }}" "${{ steps.ref.outputs.pinned }}"; do
+            cosign verify --key cosign.pub "$ref" >/dev/null
+            echo "verified: $ref"
+          done
+
+      - name: summary
+        env:
+          ALLOW_UNSIGNED: ${{ inputs.allow_unsigned }}
+        run: |
+          # shellcheck disable=SC2016  # Actions substitutes its own
+          # expressions before the shell runs, so single quotes here are
+          # what keeps the markdown backticks literal.
+          {
+            echo "### Published"
+            echo
+            echo '`${{ steps.ref.outputs.remote }}`  (moves)'
+            echo '`${{ steps.ref.outputs.pinned }}`  (pinned)'
+            echo
+            if [ "$ALLOW_UNSIGNED" = "true" ]; then
+              echo "**Unsigned.** Rebasing onto it verifies nothing."
+            fi
+            echo "Rebase from an atomic Fedora with:"
+            echo
+            echo '```'
+            echo "sudo bootc switch ${{ steps.ref.outputs.remote }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The registry question can only change when the registry changes, so
+  # the publish that changes it triggers the validation rather than a
+  # person remembering to. Runs after, deliberately: this is the check
+  # that the published image installs and boots, and nothing it finds can
+  # unpublish anything. What it can do is tell somebody the same day.
+  #
+  # This is published.yml's only automatic trigger. It used to have a
+  # weekly schedule as well, which re-tested an unchanged artifact every
+  # Monday; the dispatch is still there for asking on purpose.
+  validate:
+    needs: publish
+    uses: ./.github/workflows/published.yml
+    with:
+      image: ${{ needs.publish.outputs.remote }}

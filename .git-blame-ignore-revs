@@ -1,0 +1,11 @@
+# Commits that changed only formatting. `git blame` reads through these
+# to whatever actually wrote the line, so a re-wrap never becomes the
+# answer to "why is this here".
+#
+# Forge hosting honours this file automatically. Locally it takes one
+# setting, once, per clone:
+#
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# cargo fmt, once, mechanically
+40e3c8ed75cd99845b2793b69079d06c18317e17

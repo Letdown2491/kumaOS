@@ -1,0 +1,11 @@
+# The action pins in the workflows are SHAs, not tags, for the reason
+# recorded beside the actionlint digest pin: a tag is a mutable name, and
+# the steps they run hold the workflow token and the signing identity.
+# These PRs update the SHA and its version comment together; review the
+# upstream diff between the two commits before merging.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

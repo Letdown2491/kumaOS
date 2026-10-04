@@ -1,0 +1,7 @@
+# Chosen by measuring, not by taste: of every combination tried, this is
+# the one closest to how the code was already written by hand. "Max" lets
+# a call or a chain use the full width before it breaks, which is what
+# most of the existing lines do; rustfmt's default breaks them at 60% of
+# max_width and would have rewritten twice as much.
+max_width = 100
+use_small_heuristics = "Max"

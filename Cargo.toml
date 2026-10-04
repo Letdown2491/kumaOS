@@ -1,0 +1,129 @@
+[package]
+name = "kuma"
+version = "44.5.0"
+edition = "2021"
+# Set by sha-crypt 0.6, the highest floor anything here asks for. Without
+# it, an older toolchain fails somewhere inside a dependency instead of
+# saying which version it wanted.
+rust-version = "1.85"
+description = "Declarative, atomic Fedora bootc system"
+license = "MIT"
+repository = "https://github.com/Letdown2491/kumaos"
+
+# The nostr layer's shared code is a library so the daemon and CLI bins can
+# hold it in common; the system tool does not use it, and the lib existing
+# changes nothing about what the kuma binary compiles to.
+[lib]
+name = "kuma"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kuma"
+path = "src/main.rs"
+
+[[bin]]
+name = "kuma-nostrd"
+path = "src/nostrd.rs"
+
+[[bin]]
+name = "kuma-nostr"
+path = "src/nostr-cli.rs"
+
+[[bin]]
+name = "nip46-relay"
+path = "src/nip46-relay.rs"
+
+# cargo-binstall fetches the release asset instead of compiling. Its
+# default URL patterns expect the version in the filename, which kuma's
+# assets deliberately omit, so the pattern is spelled out.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/kuma-{ target }"
+pkg-fmt = "bin"
+
+# No `[profile.release] trim-paths`, and it is not an oversight: the
+# feature is still unstable as of Cargo 1.97, and an unstable profile key
+# is a hard manifest parse error rather than a warning, so adding it
+# breaks every build on every toolchain that is not nightly. Tried, and it
+# failed exactly that way.
+#
+# The problem it would have solved is real: rustc records source paths so
+# panics can name a file, `kuma build` bakes the running binary into every
+# image, and a binary built in someone's home carries that path forever.
+# It is handled with `--remap-path-prefix` in RUSTFLAGS where the release
+# artifacts are built, and enforced by scripts/publish-audit.sh, which
+# fails on any home path it finds in a baked binary.
+
+# The binary is baked into every image kuma builds and fetched bare by
+# cargo-binstall, so binary size and start-up outrank release-build time:
+# thin LTO over one codegen unit shrinks both, and stripping symbols keeps
+# what publish-audit.sh holds the artifact to — a binary that carries no
+# paths from the machine that built it.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+# The offline suite runs the vault's NIP-49 round-trip at the strength the
+# vault actually ships (scrypt N=2^18), and unoptimized scrypt costs that
+# round-trip a minute of the test profile. The arithmetic, not the test,
+# is what needs releasing: these crates run at opt-level 3 everywhere the
+# tests run, and the round-trip drops to about a second. Everything else
+# in dev stays unoptimized, which is what makes its failures readable.
+[profile.dev.package.scrypt]
+opt-level = 3
+[profile.dev.package.salsa20]
+opt-level = 3
+[profile.dev.package.pbkdf2]
+opt-level = 3
+[profile.dev.package.hmac]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+toml_edit = "0.25"
+tempfile = "3"
+clap_complete = "4"
+rpassword = "7"
+# getrandom: 0.6 stopped generating a salt for you, and the trait method
+# that still does is behind this feature.
+sha-crypt = { version = "0.6", features = ["getrandom"] }
+sha2 = "0.11"
+schemars = { version = "1.2.2", features = ["derive"] }
+# The nostr layer (44.4.0): the protocol pieces only — nip06, nip19, nip44,
+# nip46, nip49 — deliberately not nostr-sdk, whose relay pool drags an async
+# stack the transport does not use (notes/44.4.0-plan.md, item 1). os-rng is
+# what key generation uses; the default feature set is `std` alone.
+nostr = { version = "0.45.5", features = ["nip06", "nip44", "nip46", "nip49", "os-rng"] }
+# The Secret Service client the vault stores through. Async-only and tokio
+# by default; the daemon bridges that for keyring reads and keeps its own
+# transport blocking. oo7 cannot be a dev-only or feature-gated dep: the
+# keyring is the vault's wall, not an optional backend.
+oo7 = "0.6.0"
+# The runtime oo7's keyring calls need, for the daemon's bridge and for
+# the test harness; the transport stays blocking beside it.
+tokio = { version = "1.53", features = ["rt", "macros"] }
+# Direct so the vault can mint its random wrap passphrase rather than
+# reaching through oo7 for one; the version is the tree's own.
+getrandom = "0.3"
+# Direct for the daemon's peer-uid check on the socket (SO_PEERCRED), which
+# std does not expose; already in the tree transitively.
+libc = "0.2"
+# The lean transport's WebSocket: blocking, client and server (the server
+# half is what the baked relay uses). rustls with the system's root store,
+# because the relays a bunker talks to are wss:// in the real world.
+tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+# Direct so the daemon can install one crypto provider by name: the
+# graph carries two (ring via tungstenite, aws-lc-rs via another door),
+# and rustls 0.23 refuses to guess — every wss:// connect panicked
+# until one was installed.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# Direct for the connect nonce's constant-time echo check; already in the
+# tree through rustls and ring.
+subtle = "2"
+qrencode = "0.14"

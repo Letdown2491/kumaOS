@@ -1,0 +1,181 @@
+name: install-boot
+description: >-
+  Build kuma, get a runner ready to boot a disk, and run one smoke stage.
+
+# Every job that boots a disk had the same twenty lines in front of it and
+# the same eight behind it, differing only in which smoke stage ran in the
+# middle. That sameness is not cosmetic: the jobs split across two
+# workflows for a reason (ci.yml asks whether the tree works, published.yml
+# asks whether the registry works), and a shared prelude is what lets that
+# split follow the question rather than the machinery. Before this, the one
+# job that installs an image built from *this tree* lived in published.yml
+# purely because that is where the KVM-and-install steps already were, so
+# it ran only when something was published, which is after a tag.
+#
+# The podman step is here rather than in the kvm action beside it because
+# it mutates the runner to suit `kuma install`, while that one only
+# asserts the runner is usable. Both notions of TOOL_DIRS now live in one
+# place; they had drifted apart, with the kvm action counting
+# /usr/local/bin and the boot job not.
+#
+# Scope is everything up to and including the stage: get ready, build,
+# run one smoke stage. What a failure leaves behind stays with the job,
+# for the reason at the bottom of this file.
+
+inputs:
+  smoke_args:
+    description: "Arguments to scripts/smoke.sh for the stage under test"
+    required: true
+  prebuild:
+    description: >-
+      Example to build first with `--keep`, for stages that install an
+      image from this tree rather than one from a registry. Empty to skip.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+    - shell: bash
+      run: cargo build --locked
+
+    # Every image this action leads to is a desktop image, and a desktop
+    # image needs the release's binaries together: `kuma build` copies
+    # kuma-shell from beside the kuma it runs and refuses to compose
+    # without it. The build above makes kuma; this makes its sibling. It
+    # lives here rather than in each job because every job that boots a
+    # disk builds an image through this action, and one staging gap is
+    # what made all of them red at once.
+    - uses: ./.github/actions/kuma-shell
+      with:
+        kuma-dir: target/debug
+
+    # The podman step runs BEFORE the kvm action, and the order is the
+    # whole point. kvm asserts podman is somewhere `kuma install` will
+    # look and `exit 1`s when it is not; this step is what makes that
+    # true. With it second, the repair could never run: the assertion it
+    # exists to satisfy had already failed the job.
+    # `kuma install` refuses to touch a disk when a tool it needs is
+    # absent, and it looks in fixed directories rather than $PATH, because
+    # it runs under sudo and sudo's PATH is not the one asking. That is
+    # right on the media kuma installs from and wrong here: the runner
+    # keeps podman somewhere else, so the first CI install failed on
+    # `podman (dnf install podman)` while the image job was building with
+    # it happily.
+    - name: make podman visible to the install preflight
+      shell: bash
+      run: |
+        echo "podman resolves to: $(command -v podman)"
+        # Runner images move under the repo without anyone pushing: the
+        # 20260828 image broke the install's own build where 20260819
+        # booted. A version in the log is how the next drift is named
+        # the day it lands instead of a week of red installs later.
+        echo "podman version: $(podman --version)"
+        major=$(podman --version | awk '{print $NF}' | cut -d. -f1)
+        if [ "${major:-0}" -ge 5 ]; then
+          for d in /usr/local/bin /usr/local/sbin /usr/bin /usr/sbin /bin /sbin; do
+            # Found, not exited: the probes at the bottom gate a shipped
+            # podman the same as a repaired one, because a shipped one
+            # drifts too.
+            [ -x "$d/podman" ] && echo "already at $d/podman" && podman_ok=1 && break
+          done
+          if [ -z "$podman_ok" ]; then
+            sudo ln -s "$(command -v podman)" /usr/bin/podman
+            echo "linked $(command -v podman) -> /usr/bin/podman"
+          fi
+        else
+          # Presence is not the whole gate. The install's own build mounts
+          # its working container with lowerdirs from the additional image
+          # store, and podman 4.9.3 cannot make that mount: the first COPY
+          # dies with "no such file or directory" whatever the sync
+          # unpacked first. Measured on 2026-09-04, where every job that
+          # drew apt's 4.9.3 at /usr/bin died there while the same commits
+          # on 5.8.4 installed and booted. So an old podman is repaired
+          # with a new one rather than accepted, into /usr/local/bin, which
+          # TOOL_DIRS orders ahead of /usr/bin and sudo's secure_path reads
+          # first as well. Homebrew is preinstalled on these images and
+          # bottles podman for linux, so the repair pours rather than
+          # builds; a runner without it fails here, naming the absence,
+          # instead of twenty minutes later at the COPY.
+          [ -x /home/linuxbrew/.linuxbrew/bin/brew ] \
+            || { echo "podman $major is too old for the install's build and there is no Homebrew to repair with" >&2; exit 1; }
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install podman
+          sudo ln -sf "$(command -v podman)" /usr/local/bin/podman
+          echo "podman version now: $(podman --version)"
+          # The poured podman brings matching helpers, but linking podman
+          # alone left the repair running the apt ones: podman resolves
+          # crun and pasta from fixed path lists that read /usr/bin before
+          # anywhere brew pours, and sudo's PATH never reaches the brew
+          # prefix either. The apt crun 0.17 rejected the OCI spec the new
+          # podman writes ("crun: unknown version specified") and the apt
+          # pasta rejected its --map-guest-addr ("pasta failed with exit
+          # code 1"), both measured 2026-09-04, each wall costing a run.
+          # So the repair replaces the old helpers where the lists look
+          # first, like the podman above. conmon is shadowed the same way
+          # but the apt one starts containers fine, so it is left alone.
+          for helper in crun pasta; do
+            [ -x "$(command -v "$helper")" ] \
+              || { echo "brew poured podman but no $helper came with it" >&2; exit 1; }
+            sudo ln -sf "$(command -v "$helper")" "/usr/bin/$helper"
+            echo "$helper now at: $(readlink "/usr/bin/$helper")"
+          done
+        fi
+        # Rootless podman re-executes itself inside a fresh user namespace
+        # before it does anything else, and a 2026-09-04 runner image
+        # denied that exec ("failed to reexec: Permission denied") where
+        # the morning's image allowed it: the kernel gained AppArmor's
+        # unprivileged-userns restriction, under which an unprofiled
+        # binary can enter a userns but not exec inside one. Rootless
+        # containers cannot exist without unprivileged user namespaces,
+        # so the restriction is cleared rather than worked around. The
+        # old value is printed either way, to name the next drift.
+        echo "apparmor_restrict_unprivileged_userns: $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo 'no such knob on this kernel')"
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 || true
+        # A new podman that cannot run as root would fail the install
+        # twenty minutes in at the same COPY. Running a container as root
+        # here costs seconds, exercises the store, the runtime and the
+        # mount the build needs, and would name the real problem. Network
+        # is left out on purpose: the install's build has no RUN step,
+        # and the runner's own network stack is already known noise.
+        sudo "$(command -v podman)" run --rm --network none quay.io/podman/hello >/dev/null
+        # The image build this prelude feeds runs podman as the runner
+        # user, where the default network is pasta and a shadowed pasta
+        # dies at the first run whatever the crun does. A rootless run
+        # here exercises that half for the same seconds.
+        "$(command -v podman)" run --rm --network pasta quay.io/podman/hello >/dev/null
+
+    - uses: ./.github/actions/kvm
+      with:
+        sshpass: "true"
+
+    # --keep, because the stage below installs the tag this leaves behind.
+    - name: build this tree's image
+      if: inputs.prebuild != ''
+      shell: bash
+      env:
+        PREBUILD: ${{ inputs.prebuild }}
+      run: ./scripts/smoke.sh --keep $PREBUILD
+
+    # Inputs travel as env values rather than template text: an input is
+    # a caller's string, and a template substitution inside `run:` is
+    # code before the shell ever parses it. Unquoted, on purpose — the
+    # value is flags, and word-splitting is how flags arrive.
+    - name: smoke
+      shell: bash
+      env:
+        QEMU_VGA: virtio-vga
+        QEMU_DISPLAY: none
+        SMOKE_ARGS: ${{ inputs.smoke_args }}
+      run: ./scripts/smoke.sh $SMOKE_ARGS
+
+# Keeping the console on failure is deliberately NOT in here, and the
+# reason is worth stating so nobody folds it in later for symmetry.
+# Whether `if: failure()` runs a step inside a composite action after an
+# earlier composite step failed is a behaviour this repo has never
+# measured, and the one time it matters is the one time nothing else can
+# tell you what happened. A shared prelude that silently ate the guest
+# console would be a worse trade than eight duplicated lines per job. If
+# somebody measures it, this is the place it belongs.

@@ -1,0 +1,28 @@
+# A container to build kuma in, for hosts that cannot.
+#
+# The machines most likely to run kuma are image-based and ship no
+# compiler, and layering one onto a bootc host to work on the tool that
+# builds bootc hosts is the wrong shape. Rust's toolchain installs fine
+# into a home directory; a linker does not, so that is all this adds.
+#
+# Cargo is deliberately absent. It comes from the mounted home directory
+# along with its registry cache and target/, so a build in here reuses
+# whatever a build outside it already did, and the image never pins a
+# toolchain version this repo would then have to keep current.
+#
+#   podman build -t kuma-dev-gcc -f scripts/Containerfile.dev .
+#
+#   podman run --rm --userns=keep-id --security-opt label=disable \
+#     -v "$HOME:$HOME" -w "$PWD" -e "HOME=$HOME" kuma-dev-gcc \
+#     sh -c 'export PATH=$HOME/.cargo/bin:$PATH; cargo test'
+#
+# --security-opt label=disable is required: SELinux otherwise blocks the
+# home mount. Do NOT reach for `:z` instead, which would relabel the
+# entire home directory. --userns=keep-id keeps target/ owned by you
+# rather than by a subuid nobody can write to afterwards.
+FROM registry.fedoraproject.org/fedora-toolbox:42
+
+# musl-gcc: the relay's ring (rustls's crypto) needs a C compiler for
+# the musl target, which is the release's target; a gnu-only container
+# builds the tree and not the release.
+RUN dnf -y install gcc musl-gcc && dnf clean all

@@ -1,0 +1,652 @@
+name: ci
+
+on:
+  # Named rather than left bare, which matched every branch and every tag.
+  # A bare `push` beside `pull_request` runs this twice for one push to a
+  # branch with a PR open on it, and a branch without one is work in
+  # progress that its PR will gate. main and tags are what is being
+  # claimed to work.
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+  # A dependency becomes vulnerable on the day the advisory lands, not on
+  # the day someone next touches the code. Pushes alone would mean a
+  # quiet week is indistinguishable from a clean one, so the audit gets a
+  # heartbeat. The image job opts out of it below: nothing it builds
+  # changes while the tree sits still.
+  #
+  # The daily entry is the boot job's heartbeat, and it exists for the
+  # opposite reason to the weekly one. Nothing kuma builds changes while
+  # the tree sits still, but the base it builds *on* moves without anyone
+  # pushing: a Fedora update can break a boot on a tree that was green
+  # yesterday. Jobs tell the two apart by matching github.event.schedule.
+  schedule:
+    - cron: "0 6 * * 1"
+    - cron: "0 5 * * *"
+
+env:
+  CARGO_TERM_COLOR: always
+  # The 2026-09-30 fedora-bootc float (44.20260930.0) broke every boot
+  # stage at once: the composed tree's bootloader-update.service died
+  # parsing the .bootc-aleph.json its own install writes. While that
+  # looked like upstream's bug, the base was pinned by digest to a ghcr
+  # mirror of the last good float (quay garbage-collects a manifest
+  # once its tag moves, and no registry reachable from here held the
+  # Sep 29 build). The pin came off when a recompose proved its tools
+  # byte-identical to the floating ones and the real root cause turned
+  # out to be kuma's own composed bases shipping no version label,
+  # which the generator now stamps. The heartbeat below is the tripwire
+  # for the next time the float breaks something this tree did not
+  # cause. See the issue this failure filed for the whole chain.
+
+# Declared rather than inherited. The repository default is already
+# read-only (measured, not assumed: `default_workflow_permissions` is
+# "read"), so this changes nothing today. It is the durable record: a
+# default lives in a web UI where nobody reviewing this file can see it,
+# and nothing here needs more than the checkout.
+permissions:
+  contents: read
+
+jobs:
+  # Which run is this. Four jobs below gate on "a push or the daily cron,
+  # but not the weekly audit", and each used to re-type the schedule
+  # string. Changing the time in the `schedule:` block above would have
+  # left all four matching nothing: both crons would run only the cheap
+  # jobs, the daily boot heartbeat would stop, and the workflow would
+  # stay green, because a skipped job is a green job. The hibernate job
+  # consumes this output too and deliberately gates differently, daily or
+  # dispatch and never a push; the reasons are in its own comment.
+  #
+  # A job rather than an `env:` value, because `env` is not available in
+  # a job-level `if:` and actionlint says so. The cost is one runner
+  # start ahead of the slow jobs; it does not gate `test`, which is what
+  # a pull request waits on.
+  when:
+    runs-on: ubuntu-latest
+    # a guard job that takes 3s
+    timeout-minutes: 5
+    outputs:
+      daily: ${{ steps.q.outputs.daily }}
+    steps:
+      - id: q
+        env:
+          DAILY_CRON: "0 5 * * *"
+          WEEKLY_CRON: "0 6 * * 1"
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != schedule ]; then
+            echo "daily=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          case "${{ github.event.schedule }}" in
+            "$DAILY_CRON")  echo "daily=true"  >> "$GITHUB_OUTPUT" ;;
+            "$WEEKLY_CRON") echo "daily=false" >> "$GITHUB_OUTPUT" ;;
+            # Loud, because the alternative is the failure this job
+            # exists to prevent: an unrecognised schedule would answer
+            # "not daily", the slow jobs would skip, and the run would be
+            # green. Moving a cron in the block above without moving it
+            # here now reddens one cheap job instead of silently
+            # stopping the heartbeat.
+            *)
+              echo "::error::schedule '${{ github.event.schedule }}' matches neither" \
+                   "DAILY_CRON nor WEEKLY_CRON; the crons above and this job have drifted"
+              exit 1
+              ;;
+          esac
+
+  # The gate that runs on every push. It covers everything checkable
+  # without a machine to run on, including the cheap tier of the smoke
+  # tests: every committed example parses, validates, and compiles to an
+  # image that keeps kuma's floor (greenboot, the lint, the baked
+  # declaration, a greeter check on every desktop).
+  test:
+    runs-on: ubuntu-latest
+    # cargo with a warm cache runs in under a minute
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo fmt --check
+      - run: cargo test --locked --all-targets
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo build --locked --release
+      # Pinned to an image rather than the runner's shellcheck, because
+      # the runner's version is whatever the Ubuntu image ships that week
+      # and it silently decides what this gate means. That is not
+      # hypothetical: 0.15 was written against 0.11.0 locally, which
+      # reports these files clean, while the runner had a version that
+      # still emits SC2015 and fails the step. "shellcheck clean locally"
+      # has to be the same sentence as "shellcheck clean in CI", and the
+      # only way to say it once is to name the version.
+      - name: shellcheck
+        run: |
+          docker run --rm -v "$PWD:/mnt:ro" -w /mnt \
+            koalaman/shellcheck:v0.11.0 scripts/smoke.sh
+
+      # A workflow can be valid YAML and still be nonsense to Actions,
+      # which only says so by refusing to run any job at all. That is a
+      # slow way to find out, and it already cost one push here: a
+      # `branches:` key one level too high parsed fine everywhere except
+      # GitHub. actionlint reads the event schema, and shellchecks the
+      # inline run blocks that the step above cannot see.
+      - name: actionlint
+        # Pinned by DIGEST, for the reason the step above gives about
+        # shellcheck: a moving tag silently decides what this gate means.
+        # A version tag would still be mutable, so this is the honest
+        # form of the same argument. Bump it deliberately. Every
+        # third-party action in these workflows is pinned by SHA for the
+        # same reason, Dependabot raising the bumps for review.
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: -color
+
+  interop:
+    # The plan's equivalence proof, green in CI: the same scripted
+    # NIP-46 client runs against both relays — the Go original at a
+    # pinned commit and this tree's Rust port — and the same behaviors
+    # must answer on both wires: the OK replies, the forwarding, the
+    # refusals with their rules named, the flood refused at the same
+    # budget, and the eviction emptying a one-minute store. Both runs
+    # configure the same knobs; the lane asserts structure, because a
+    # refusal's wording is an implementation's own voice.
+    #
+    # The Go relay's source is pinned by commit SHA — the same argument
+    # the action pins carry: a moving main silently decides what this
+    # gate means. Dependabot cannot see a raw git clone; the pin is
+    # bumped by hand, and the diff is the review.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      # v7 runs on node24, which v5 only reached by the runner forcing it
+      # there over its own node20 declaration — the one warning of its
+      # kind in this tree. The module cache is off because its restore
+      # looks for a go.sum at the workspace root and the tree has none:
+      # the only Go here is the relay cloned below into /tmp, pinned and
+      # single-module, so the check failed on every run for a download
+      # the build never needed.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          cache: false
+          # The relay's go.mod at the pinned commit asks for go >= 1.25.4,
+          # and GOTOOLCHAIN=local in this job's environment refuses to fetch
+          # a toolchain to satisfy it. The runner's preinstalled go is
+          # whatever the image last shipped (1.24.13 on the day this broke),
+          # so the job names the version the go.mod asks for and bumps when
+          # the pin bumps.
+          go-version: '1.25.4'
+      - name: build the Go relay at its pinned commit
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/Letdown2491/nip46-relay /tmp/go-relay
+          git -C /tmp/go-relay checkout --quiet 95b740a77bd279988913634b4605ecc3f68eab9d
+          cd /tmp/go-relay
+          go build -trimpath -ldflags="-s -w" -o /tmp/go-relay/nip46-relay .
+      - name: build the Rust port
+        run: cargo build --locked --bin nip46-relay
+      - name: the lane against the Go relay
+        run: |
+          set -euo pipefail
+          RELAY_PORT=":3339" \
+            KEEP_IN_MINUTES=1 ACCEPT_WINDOW_IN_MINUTES=1 RATE_LIMIT_PER_MINUTE=5 \
+            /tmp/go-relay/nip46-relay &
+          sleep 2
+          # The wait outlives the TTL plus one sweep: the Go store's
+          # evictor beats every quarter of the TTL from relay start, so
+          # an event that expires at ~64s is swept at ~75s, and the
+          # lane's replay must land after the sweep, not before it.
+          NIP46_RELAY_URL=ws://127.0.0.1:3339 \
+            NIP46_RATE_LIMIT=5 NIP46_EVICTION_WAIT_SECS=90 \
+            cargo test --locked --test interop -- --nocapture
+      - name: the lane against the Rust port
+        run: |
+          set -euo pipefail
+          ./target/debug/nip46-relay --bind 127.0.0.1:7778 \
+            --keep-minutes 1 --accept-window-minutes 1 --rate-limit 5 &
+          sleep 2
+          NIP46_RELAY_URL=ws://127.0.0.1:7778 \
+            NIP46_RATE_LIMIT=5 NIP46_EVICTION_WAIT_SECS=90 \
+            cargo test --locked --test interop -- --nocapture
+
+  # The image stage: actually build every committed declaration with
+  # podman and inspect the result.
+  #
+  # This built only `minimal` for a long time, on the stated grounds that
+  # a desktop image "does not fit a hosted runner's disk with room to
+  # spare". Measured on 2026-08-09 rather than argued: a runner ships with
+  # 88 GB free before reclaiming anything, and a compose plus a full niri
+  # image costs 5.5 GB of podman storage. The assumption was wrong by more
+  # than an order of magnitude.
+  #
+  # It was also load-bearing in a way nobody intended. `minimal` names a
+  # base on purpose to stay fast, so the compose kuma performs by default,
+  # which is the whole own-base architecture, had never run here once, and
+  # neither had any desktop arm. Every `RUN test -x`, every portal grep,
+  # the kitty config validation and the greeter check now run on a push
+  # instead of only when someone remembers to build locally.
+  #
+  # Cost is about ten minutes, and it does not scale with desktops: the
+  # compose is the slow part (~5.5 min), and desktops share one composed
+  # base because their packages are added in the image build, so each
+  # further desktop is ~2 min. No argument list, so a new example is
+  # covered without touching this file.
+  #
+  image:
+    runs-on: ubuntu-latest
+    # the real exposure here: it normally takes 12 to 14 minutes, and the default is six hours
+    timeout-minutes: 45
+    # Skipped on both scheduled runs: this builds a real image with
+    # podman, and the tree it builds from is the same one it built last
+    # week. The boot job below does run on the daily one, because its
+    # input is the moving base rather than the tree.
+    #
+    # Skipped on a tag for the same reason. Cutting a release means
+    # pushing main, waiting for it to go green, and tagging the commit
+    # that went green, so the tag names a tree this job has already built;
+    # rebuilding three composed images to reach the same answer only
+    # delays the release. The rest of this workflow still runs on the tag,
+    # so a tag made some other way is gated by everything cheap, and
+    # release.yml runs its own tests on the release target besides.
+    if: github.event_name != 'schedule' && !startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo build --locked
+      - uses: ./.github/actions/kuma-shell
+        with:
+          kuma-dir: target/debug
+      - name: smoke (check + image)
+        run: ./scripts/smoke.sh
+
+  # The heavy tier: write a real encrypted disk, then boot one and ask the
+  # running machine questions over ssh. Until 2026-08-16 this was
+  # local-only on the stated grounds that it "needs KVM and sudo", which
+  # was measured rather than argued and turned out to be one udev rule.
+  # /dev/kvm is present on a hosted runner and the CPU exposes svm; the
+  # runner user simply is not in the kvm group. A guest kernel boots under
+  # the result.
+  #
+  # What genuinely does not work here is `-display egl-headless`, which
+  # needs a DRM render node on the HOST, and a runner has no GPU. Plain
+  # virtio-vga still gives the guest a virtio-gpu DRM device, and a niri
+  # image brings up its greeter through it on llvmpipe alone, so the
+  # greeter assertion still measures kuma rather than qemu. That is what
+  # QEMU_VGA and QEMU_DISPLAY select.
+  #
+  # Not on pull requests: this is the slow tier and a PR is gated by
+  # everything cheap. Not on tags, for the same reason the image job skips
+  # them. One job per example rather than one job for all three, because
+  # wall clock then costs the slowest example instead of their sum, and a
+  # failure names the example without anyone opening a log. The price is a
+  # composed base per desktop instead of one shared between them.
+  #
+  # --install and --boot together on purpose: --boot already runs the
+  # image stage, so the install stage rides along for the cost of the
+  # install itself rather than a second build.
+  boot:
+    runs-on: ubuntu-latest
+    needs: when
+    if: >-
+      github.event_name != 'pull_request' &&
+      !startsWith(github.ref, 'refs/tags/') &&
+      (github.event_name != 'schedule' || needs.when.outputs.daily == 'true')
+    timeout-minutes: 60
+    strategy:
+      # One example failing says nothing about the others, and cancelling
+      # them costs the run its only evidence about the rest.
+      fail-fast: false
+      # niri only, deliberately, and this is the whole desktop policy:
+      # make one desktop first class before widening. The image job still
+      # builds every committed example on every push, so nothing here is
+      # untested, it is un-booted.
+      #
+      # cosmic is the experimental desktop and its live arm has never
+      # booted anywhere; boot-gating it would mean debugging a desktop
+      # through a harness that is itself new. minimal is not a competing
+      # desktop at all, it is the fast lane: it names a base rather than
+      # composing one, which makes it the only example covering
+      # `base = "..."`, and that coverage lives in the image job where it
+      # is cheap. Neither belongs in the slow tier yet.
+      matrix:
+        example: [niri]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: smoke (install + boot)
+        uses: ./.github/actions/install-boot
+        with:
+          smoke_args: --install --boot ${{ matrix.example }}
+
+      # A boot failure is only useful if the guest's own account of it
+      # survives the runner.
+      #
+      # `failure() || cancelled()`: failure() covers a red stage, and
+      # cancelled() covers the runner killing the job itself (a timeout).
+      # What it cannot cover is a step whose outcome is "cancelled" while
+      # the run was never cancelled -- and that shape happened twice
+      # (2026-08-21 and 2026-08-22), both times because smoke.sh's EXIT
+      # trap signaled its own process group and the step ended 143. The
+      # fix for that lives in the trap, not in this predicate; the smoke
+      # script also asks the guest for its own account before it dies,
+      # so a red stage no longer depends on these steps to be read.
+      - name: guest console
+        if: failure() || cancelled()
+        run: tail -200 "vm-smoke/${{ matrix.example }}/console.log" || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: failure() || cancelled()
+        with:
+          name: console-${{ matrix.example }}
+          path: vm-smoke/${{ matrix.example }}/console.log
+          if-no-files-found: warn
+
+  # The only job that installs and boots an image built from THIS TREE.
+  #
+  # That makes it the only place an unreleased change to install-time or
+  # first-boot behaviour can be tested at all. The published jobs test an
+  # artifact that by definition cannot contain it. The boot job used to be
+  # the weaker sibling here: its disks came out of bootc-image-builder and
+  # were ext4, so every path that only runs on a btrfs root did nothing
+  # and a broken converger looked identical to a working one. Since the
+  # qcow2 exit, `kuma vm` builds its disks with kuma's own installer, so
+  # the boot job's disks are btrfs-root like a real machine and the
+  # assertions below run for real there too.
+  #
+  # It lived in published.yml until 0.14 and was called `fix-verification`
+  # there, a name from the one fix it was written for. Being in that file
+  # meant it ran on publish.yml's call, i.e. after a tag was already
+  # public: the only job that could catch an install-time regression could
+  # only report one too late to stop it. v0.13.0 shipped two new boot-time
+  # units with no coverage here for exactly that reason. It tests the
+  # tree, so it runs when the tree changes.
+  install:
+    runs-on: ubuntu-latest
+    needs: when
+    if: >-
+      github.event_name != 'pull_request' &&
+      !startsWith(github.ref, 'refs/tags/') &&
+      (github.event_name != 'schedule' || needs.when.outputs.daily == 'true')
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: install the image this tree builds, and boot it
+        uses: ./.github/actions/install-boot
+        with:
+          prebuild: niri
+          smoke_args: --published localhost/kuma-smoke-niri:latest
+
+      - name: guest console
+        if: failure() || cancelled()
+        run: tail -200 vm-smoke/published/console.log || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: failure() || cancelled()
+        with:
+          name: console-install
+          path: vm-smoke/published/console.log
+          if-no-files-found: warn
+
+  # 0.15's gate. Every other job here asks whether a machine booted; this
+  # one asks whether it is the SAME boot.
+  #
+  # That distinction is the whole feature. A machine told to hibernate can
+  # write its memory to disk, power off, and then start fresh, and from
+  # the outside it is indistinguishable from one that worked: ssh answers,
+  # greenboot is green, the account is there. What is gone is whatever was
+  # open, and nothing logs it. So the verdict is the kernel's own boot_id,
+  # which is made at boot and lives in the memory a real resume restores,
+  # plus a marker in tmpfs that a cold boot would have cleared.
+  #
+  # It runs under Secure Boot, and that is not an extra: kuma ships shim,
+  # so Secure Boot machines are in scope, and a kernel locked down under
+  # Secure Boot has historically refused hibernation outright. Without
+  # this, kuma could tell exactly those machines that hibernate is ready
+  # while logind refuses to do it. Asking both questions in one job is
+  # cheap, because the expensive half is the install either way.
+  #
+  # It runs on the daily heartbeat and on a manual dispatch, and no longer
+  # on ordinary pushes. The fixture has accumulated documented QEMU
+  # artifact classes (a resume that resets instead of powering off, a
+  # second-firmware poweroff that dies 180ms in, and 2026-08-31's cycle
+  # that suspended, woke on the alarm, and then never hibernated with the
+  # guest alive), and a push gate that goes red for a fixture reason is
+  # one rerun away from being ignored. The nightly run keeps the coverage
+  # a moving Fedora demands, because resume is exactly what a base update
+  # breaks silently; the release flow dispatches this job on the exact
+  # commit before a tag, which CONTRIBUTING records. What it loses per
+  # push it keeps where the promise lives: this is the only automated
+  # check that a hibernated machine comes back.
+  hibernate:
+    runs-on: ubuntu-latest
+    needs: when
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && needs.when.outputs.daily == 'true')
+    # Longer than the install job it is built from, because it pays for
+    # two boots and a hibernation on top of the same install.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: install with a swapfile, hibernate under Secure Boot, resume
+        uses: ./.github/actions/install-boot
+        with:
+          prebuild: niri
+          smoke_args: >-
+            --published localhost/kuma-smoke-niri:latest
+            --hibernate --secure-boot
+
+      - name: guest console
+        if: failure() || cancelled()
+        run: tail -200 vm-smoke/published/console.log || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: failure() || cancelled()
+        with:
+          name: console-hibernate
+          path: vm-smoke/published/console.log
+          if-no-files-found: warn
+
+  # 0.14's gate, and the only job here that answers a question about
+  # data rather than about a machine.
+  #
+  # "A dead disk is recoverable" cannot be met by any amount of testing
+  # that a backup ran. It is met by destroying a disk and getting the
+  # files back, which is what this does: install a machine, write files
+  # in it, back them up, delete the disk, install again with --restore,
+  # and read the files. MinIO on the runner stands in for the far end,
+  # because the half under test is kuma's. Whether somebody's own server
+  # is reachable is a question about their network.
+  #
+  # Slow and worth it. It is the only check that exercises the path
+  # nobody takes twice: you install once, and a stranger installs once,
+  # and if a restore does not work then nothing else here mattered.
+  dead-disk:
+    runs-on: ubuntu-latest
+    needs: when
+    if: >-
+      github.event_name != 'pull_request' &&
+      !startsWith(github.ref, 'refs/tags/') &&
+      (github.event_name != 'schedule' || needs.when.outputs.daily == 'true')
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: install, back up, destroy, restore, boot
+        uses: ./.github/actions/install-boot
+        with:
+          smoke_args: --dead-disk
+
+      - name: guest console
+        if: failure() || cancelled()
+        run: tail -200 vm-smoke/dead-disk/console.log || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: failure() || cancelled()
+        with:
+          name: console-dead-disk
+          path: vm-smoke/dead-disk/console.log
+          if-no-files-found: warn
+
+  # The artifact a stranger downloads, and the only one that was built by
+  # hand on one laptop until now. Every other job here asks whether the
+  # tree works; this asks whether the thing on the download page works,
+  # which is the promise 0.10 rests on.
+  #
+  # Three questions in the order they fail. Does the ISO assemble at all
+  # (it never had, anywhere but one machine). Does it still fit a GitHub
+  # release asset, capped at 2 GB, with the ISO at 1.77 GB and every
+  # desktop package spending the difference. And does it boot to a
+  # desktop rather than to a black screen, which is asked over the serial
+  # console because installer media has no disk to inspect and its
+  # account has no password for ssh to use.
+  #
+  # niri only, and for the same reason the boot job is niri only: one
+  # desktop is first class and COSMIC's live arm has still never booted
+  # anywhere.
+  #
+  # This job is why a tag can attach an ISO at all. It builds and boots
+  # one on every push to main and on a daily cron, so the failures live
+  # here, where they cost a red run instead of a release; release.yml
+  # switched attaching on once this had gone green on a hosted runner.
+  iso:
+    runs-on: ubuntu-latest
+    needs: when
+    if: >-
+      github.event_name != 'pull_request' &&
+      !startsWith(github.ref, 'refs/tags/') &&
+      (github.event_name != 'schedule' || needs.when.outputs.daily == 'true')
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo build --locked
+      - uses: ./.github/actions/kuma-shell
+        with:
+          kuma-dir: target/debug
+
+      # For qemu and OVMF. The ISO is UEFI-only: it carries an EFI System
+      # Partition and no BIOS boot image, so a firmware-less qemu falls
+      # through to "no bootable device" and looks like a broken ISO.
+      - uses: ./.github/actions/kvm
+
+      # An ISO build unpacks the whole image and writes a 1.8 GB file
+      # beside it, and a hosted runner starts with about 25 GB free.
+      - name: reclaim runner disk
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h / | tail -1
+
+      - name: smoke (iso)
+        env:
+          QEMU_VGA: virtio-vga
+          QEMU_DISPLAY: none
+        run: ./scripts/smoke.sh --iso --keep niri
+
+      - name: what the live session said
+        if: failure() || cancelled()
+        run: tail -100 vm-smoke/niri-iso/console.log || true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: failure() || cancelled()
+        with:
+          name: iso-console
+          path: vm-smoke/niri-iso/console.log
+          if-no-files-found: warn
+
+      # Kept on success too, though the verdict is what this job is for:
+      # the ISO people download comes from a tag, and this one expires in
+      # a week. What the copy buys is a current known-good ISO between
+      # releases, which is worth a week of storage and is not a
+      # distribution channel. Compression is off: the ISO is already a
+      # solid zstd stream and re-compressing 1.8 GB buys nothing but
+      # minutes.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: kuma-live-iso
+          path: vm-smoke/niri-iso/KUMA.iso
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # Nothing else here asks whether the dependencies have known holes.
+  # Clippy reads our code and the tests read our behavior; neither has an
+  # opinion about an advisory against a crate we merely depend on. This
+  # reads Cargo.lock against the RustSec database, which is the other
+  # reason that lock is committed rather than only pinning our builds.
+  #
+  # Plain `cargo audit` fails on vulnerabilities and reports unmaintained
+  # or yanked crates without failing. That split is deliberate: a crate
+  # losing its maintainer is worth hearing about on a Monday, and is not
+  # worth blocking a push over.
+  audit:
+    runs-on: ubuntu-latest
+    # 17s in practice
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+
+      # What a stranger clones must say nothing about who built it.
+      #
+      # Three history rewrites established that before this repo went
+      # public, and every line of prose written afterwards put it back:
+      # sixteen in tracked files and four in commit messages, found by
+      # hand on 2026-08-22, six releases after the rule was set. A rule
+      # nothing grades is not kept, so this grades it.
+      #
+      # BY SHAPE, because a public gate cannot name the private strings
+      # without writing them into the repo it is protecting. An absolute
+      # home path has a shape, and scripts/publish-audit.sh already
+      # matches it against the built binary for the same reason;
+      # linuxbrew is excluded there and here because it is a real path
+      # that belongs to the software rather than to a person.
+      - name: no builder identity in the tree
+        run: |
+          set -euo pipefail
+          # The allowlist is names that are deliberately not anybody's:
+          # linuxbrew is the software's own path, runner is GitHub's, and
+          # the rest are fixtures. Adding a real name here is a visible
+          # act in review, which is the point of listing them.
+          allowed='linuxbrew|/home/runner/|myuser|home/x/|home/me/|home/shared/|mira|kai|testbox'
+          # No `head` to bound the output: the early exit SIGPIPEs the
+          # grep, pipefail reads the death as a failed condition, and a
+          # tree full of paths prints the all-clear.
+          if paths=$(grep -rInoE '/(var/)?home/[a-z_][a-z0-9_-]*/' \
+                --exclude-dir=.git . | grep -vE "$allowed") && [ -n "$paths" ]; then
+            echo "::error::an absolute home path is in the tree:"; echo "$paths"; exit 1
+          fi
+          echo "no absolute home paths outside linuxbrew"
+
+      # And by name, with the names kept OUT of the repo. The needle is a
+      # regex in a secret; the gate is public and the thing it looks for
+      # is not. Absent secret means skip, so a fork and an outside pull
+      # request do not fail on something they cannot see.
+      - name: no builder identity in the messages
+        env:
+          NEEDLE: ${{ secrets.IDENTITY_REGEX }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NEEDLE:-}" ]; then
+            echo "::notice::IDENTITY_REGEX is not set; name check skipped"
+            exit 0
+          fi
+          if git log --format='%H %B' -50 | grep -iqE "$NEEDLE"; then
+            echo "::error::a commit message in the last 50 names the builder"
+            exit 1
+          fi
+          if grep -rIlqE "$NEEDLE" --exclude-dir=.git . ; then
+            echo "::error::a tracked file names the builder"
+            exit 1
+          fi
+          echo "no builder identity by name"

@@ -1,0 +1,104 @@
+# A full Kuma system definition. Every field the schema accepts appears
+# here; the commented ones are optional and show their default.
+schema_version = 1
+
+[system]
+# Unset (the default) kuma composes its own base from Fedora's package
+# repos: Fedora's minimal bootc core (kernel, systemd, bootc, dnf) plus
+# hardware enablement, and none of the general-purpose weight
+# fedora-bootc carries. Set it to any bootc image reference to build
+# FROM that instead: the escape hatch for debugging against
+# fedora-bootc, a mirror, or a test tag.
+# base = "quay.io/fedora/fedora-bootc:44"
+
+# The composed base ships firmware for consumer hardware by default, so
+# a machine boots with working GPU/wifi/audio without saying anything
+# about itself. Name packages here to trim it to exactly your hardware
+# (see `kuma schema` for the set); leave it alone for media other people
+# will boot on machines you have never seen.
+# firmware = ["amd-gpu-firmware", "amd-ucode-firmware", "mt7xxx-firmware"]
+
+# A curated set kuma maintains, not a package list you assemble.
+# "niri" (scrollable tiling) or "cosmic" (see cosmic.toml).
+# Omit for a headless machine.
+desktop = "niri"
+
+# Bootstrap Homebrew without declaring formulae, for ad-hoc use.
+# A non-empty packages.brew implies this.
+# brew = true
+
+# Timezone and hostname are machine state: `timedatectl` and `hostnamectl`
+# set them and they survive image updates. Pin them here only to force
+# every machine built from this file to match. Unset, the hostname is
+# "kuma" and `kuma vm` mirrors the host's timezone.
+# timezone = "America/Denver"
+# hostname = "kuma-laptop"
+
+# Installs the matching glibc langpack and sets LANG.
+# locale = "en_US.UTF-8"
+
+# The primary account, created on first boot and converged on every boot
+# after: shell, declared groups, and kuma-managed ssh keys.
+#
+# Commented out so this file is safe to build shareable media from.
+# Declaring a user removes Anaconda's create-a-user screen, so an ISO
+# built from a declaration that names one but sets no password_hash
+# installs a machine whose only account is locked. Left undeclared,
+# `kuma iso` lets Anaconda ask and the person gets their own account;
+# `kuma iso --live` has no installer to ask, so media built from this
+# file is for trying kuma rather than installing it. `kuma vm` needs
+# nothing here either: it injects kuma/kuma into the disk it builds.
+# Uncomment for a machine you are declaring for yourself.
+# [user]
+# name = "me"
+# shell = "fish"
+
+# From `kuma passwd`. Applies only at creation, so change the password on
+# the machine afterward and kuma won't fight you.
+# password_hash = '$6$...'
+
+# groups = ["wheel"]                  # the default
+# ssh_keys = ["ssh-ed25519 AAAA..."]  # served to sshd from /etc/kuma/keys
+# autologin = true                    # straight to the desktop, no greeter
+
+[packages]
+# Baked into the image: changing this list needs a rebuild and a reboot.
+rpm = ["fish", "git-core", "git-core-doc", "distrobox", "tailscale"]
+
+# Flathub apps, converged on boot and daily: additions install, removals
+# uninstall. Convergence only ever takes back what it installed, so an
+# app you install yourself stays yours, from a store or the command line,
+# and `kuma capture` offers to write it down here. Updates are not scoped
+# that way: everything installed is kept current, declared or not.
+flatpak = [
+    "org.mozilla.firefox",
+    "org.gnome.Loupe",
+    "org.gnome.Calculator",
+    "io.github.celluloid_player.Celluloid",
+    "org.gnome.Papers",
+    "org.gnome.TextEditor",
+]
+
+# CLI tools that move faster than a rebuild-and-reboot cycle. Converged
+# like flatpaks; ad-hoc `brew install` stays yours, and `kuma capture`
+# offers to write it down here when you decide to keep it.
+brew = ["ripgrep", "fd", "jq", "gh", "lazygit", "btop"]
+
+# Your additions only. A desktop already enables what it needs (greeter,
+# firewalld, bluetooth, cups, avahi for .local names and driverless
+# printing, chronyd), so those don't belong here. Unit names are checked
+# at build time, so a typo fails the build instead of being ignored.
+[services]
+enable = ["tailscaled.service"]
+# disable = ["mdmonitor.service"]   # e.g. a service for hardware you don't have
+
+# Read-only btrfs snapshots of the state a rebuild can't restore. This
+# file reproduces a system; it does not reproduce /var/home. Local only:
+# it survives a bad update or a deleted directory, not a dead disk.
+# A target that isn't a btrfs subvolume is skipped, not an error.
+[snapshots]
+enable = true
+# target = "/var/home"   # snapshots land in <target>/.snapshots
+# interval = "hourly"    # any systemd OnCalendar expression
+# keep_recent = 24       # the newest N, whatever their age
+# keep_daily = 7         # plus the newest from each of N further days

@@ -1,0 +1,9 @@
+# The dev image reads nothing from its build context (scripts/test.sh
+# builds kuma-dev-gcc from scripts/Containerfile.dev, whose only
+# instruction is a dnf install), but podman still ships the whole
+# directory to the daemon. target/ alone is gigabytes of build cache.
+target/
+.git/
+vm-smoke/
+iso/
+*.lock

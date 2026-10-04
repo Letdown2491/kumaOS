@@ -1,0 +1,27 @@
+name: rolling
+
+# main runs the release path without releasing anything. It calls
+# release.yml rather than copying it, so every push compiles, tests on the
+# release target, packages, and signs exactly as a tag will, and a problem
+# surfaces here where it costs nothing instead of once a tag exists, which
+# is the one thing that cannot be taken back. The binary lands as a
+# workflow artifact; the releases page lists versions and nothing else.
+#
+# Documentation is excluded because rebuilding and re-signing an identical
+# binary rehearses nothing. Nothing under an ignored path reaches the
+# binary: the assets that do are compiled in from assets/, and ci.yml has
+# no path filter, so the tests that read README.md still run on every push.
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - LICENSE
+
+jobs:
+  rolling:
+    uses: ./.github/workflows/release.yml
+    permissions:
+      contents: write
+      id-token: write

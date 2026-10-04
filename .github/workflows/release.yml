@@ -1,0 +1,447 @@
+name: release
+
+on:
+  # A tag is a release: it gets a version number, release notes, and a URL
+  # that keeps meaning the same thing a year from now.
+  push:
+    tags:
+      - "v*"
+  # The rolling channel calls this workflow instead of sharing its push
+  # trigger. A path filter on `push` cannot be scoped to branches, so
+  # skipping doc-only builds here would also put the filter in front of
+  # every tag, and a tag usually points at a commit that was already
+  # pushed. What GitHub reports as "changed" for that push is not
+  # something to find out by cutting a release and watching nothing
+  # happen. See rolling.yml.
+  workflow_call:
+    inputs:
+      attach_iso:
+        description: "Build the live ISO and attach it to the release"
+        required: false
+        default: false
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      attach_iso:
+        description: "Build the live ISO and attach it to the release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  # Keyless signing: cosign trades this token for a short-lived certificate
+  # instead of anyone holding a private key.
+  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TARGET: x86_64-unknown-linux-musl
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      # Whether a release carries the live ISO, decided in one place.
+      #
+      # A tag is a `push` event, and the `inputs` context is empty for
+      # those: defaults declared under workflow_dispatch and
+      # workflow_call never materialise on a push. So the tag path, the
+      # only trigger that actually cuts a release, reads the literal
+      # below, and every other trigger reads its input verbatim. The
+      # literal is what to change to stop attaching the ISO; the steps at
+      # the end of this job say what has to be true for it to stay on.
+      ATTACH_ISO: ${{ github.event_name == 'push' && 'true' || inputs.attach_iso }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: work out what this build is
+        id: what
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "kuma") | .version')
+          # The asset name carries no version on purpose. A versioned
+          # filename would make releases/latest/download/<name> change
+          # every release, so the README could never hold a durable URL,
+          # and the version is not lost: the tag has it and the binary
+          # reports it.
+          echo "name=kuma-${TARGET}" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            # A tag that disagrees with Cargo.toml would publish a binary
+            # whose own --version contradicts the release it sits in. That
+            # is the exact class of lie the build stamp exists to prevent,
+            # so it fails here rather than shipping.
+            if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+              echo "tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${version}" >&2
+              exit 1
+            fi
+            {
+              echo "tag=v${version}"
+              echo "title=kuma v${version}"
+              echo "publish=true"
+            } >> "$GITHUB_OUTPUT"
+          else
+            # Everything above the publish step still runs from main. What
+            # main does not get is a release: the releases page lists
+            # versions, and a rolling entry sitting on top of them says a
+            # version shipped when none did. The binary is still built,
+            # tested, signed, and downloadable — as a workflow artifact,
+            # which is where a build that is not a release belongs.
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      # The relay's ring (rustls's crypto) needs a C compiler for the
+      # musl target, and the runner ships gcc without the musl variant.
+      # This arrived with the nostr layer's relay port; before it, the
+      # tree was pure Rust and this line was not needed.
+      - name: install the musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      # ci.yml runs on this same push, but nothing makes this job wait for
+      # it, so without a gate here a red tree still publishes a binary.
+      # Testing on the release target rather than the host's costs nothing
+      # extra: it is one compile instead of two, and it exercises the
+      # artifact actually being shipped.
+      - name: test
+        run: cargo test --locked --target "$TARGET"
+
+      # Static by construction, not by flag: kuma is pure Rust with no NSS
+      # calls and no in-process networking, so a musl build has nothing to
+      # dynamically link. That is what lets it run on an image-based
+      # desktop that has podman and no toolchain, which is the machine
+      # most likely to want it.
+      # remap-path-prefix, because rustc records source paths so a panic
+      # can name a file, and `kuma build` bakes this binary into every
+      # image it produces. Without it a published image carries the
+      # absolute paths of whoever built the binary, which on a laptop is
+      # their username. `[profile.release] trim-paths` would be the tidy
+      # way and is still unstable in Cargo 1.97, where an unstable profile
+      # key is a hard manifest error rather than a warning, so it cannot
+      # be used yet. scripts/publish-audit.sh fails on any home path that
+      # survives.
+      - name: build
+        env:
+          RUSTFLAGS: >-
+            --remap-path-prefix=${{ github.workspace }}=/kuma
+            --remap-path-prefix=/home/runner/.cargo/registry=/cargo
+        run: cargo build --locked --release --target "$TARGET"
+
+      - name: package
+        id: pkg
+        run: |
+          set -euo pipefail
+          name='${{ steps.what.outputs.name }}'
+          # The layer's binaries ride the same packaging as the tool
+          # that stages them into images: a nostr-enabled declaration
+          # stages kuma-nostrd and kuma-nostr from beside the running
+          # kuma, so a release carrying one of the three is a release
+          # whose nostr block fails honestly at build time. The asset
+          # name is the plain name plus the target — what the release
+          # notes curl and the draft attaches.
+          for bin in kuma kuma-nostrd kuma-nostr; do
+            cp "target/${TARGET}/release/$bin" "${bin}-${TARGET}"
+            strip "${bin}-${TARGET}"
+            sha256sum "${bin}-${TARGET}" > "${bin}-${TARGET}.sha256"
+            # Prove each artifact runs before publishing it. A binary
+            # that cannot answer --version on a clean runner is not a
+            # release.
+            "./${bin}-${TARGET}" --version
+          done
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # One bundle rather than a separate .sig and .pem: cosign deprecated
+      # --output-signature and --output-certificate, and the flags that
+      # read them back are deprecated on the verify side too. Those
+      # commands are quoted in the release notes below, and a release's
+      # notes cannot be corrected once people have them, so this uses the
+      # form that will still be current later.
+      - name: sign
+        run: |
+          set -euo pipefail
+          for bin in kuma kuma-nostrd kuma-nostr; do
+            cosign sign-blob --yes --bundle "${bin}-${TARGET}.bundle" "${bin}-${TARGET}"
+          done
+
+      # A build from main is not a release, so it does not get one. It is
+      # still the whole release path up to this point — same test, same
+      # target, same packaging, same signature — which is what makes every
+      # push to main a rehearsal of what a tag will do. The artifact keeps
+      # the binary reachable for anyone who wants main before a tag, and
+      # expires on its own instead of accumulating on the releases page.
+      - name: keep the build without releasing it
+        if: steps.what.outputs.publish != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: |
+            kuma-x86_64-unknown-linux-musl
+            kuma-x86_64-unknown-linux-musl.sha256
+            kuma-x86_64-unknown-linux-musl.bundle
+            kuma-nostrd-x86_64-unknown-linux-musl
+            kuma-nostrd-x86_64-unknown-linux-musl.sha256
+            kuma-nostrd-x86_64-unknown-linux-musl.bundle
+            kuma-nostr-x86_64-unknown-linux-musl
+            kuma-nostr-x86_64-unknown-linux-musl.sha256
+            kuma-nostr-x86_64-unknown-linux-musl.bundle
+          if-no-files-found: error
+
+      # The notes used to be identical for every release, so the page a
+      # download lands on said nothing about what changed. CHANGELOG.md is
+      # the source, and a tag with no section fails here rather than
+      # shipping generic notes. That is what keeps the file from rotting:
+      # a release cannot be cut without writing one.
+      - name: release notes
+        if: steps.what.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          heading='## ${{ steps.what.outputs.tag }}'
+          # Prefix match, so the heading can carry a date. Anchored with
+          # index() rather than a regex because a version is full of dots.
+          awk -v h="$heading" '
+            !found && index($0, h) == 1 \
+              && (length($0) == length(h) || substr($0, length(h) + 1, 1) == " ") {
+              found = 1
+              next
+            }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > section.md
+          if [ ! -s section.md ]; then
+            echo "CHANGELOG.md has no ${heading} section; a release nobody can read is not a release" >&2
+            exit 1
+          fi
+
+          # Unwrap the paragraphs before publishing.
+          #
+          # A release body is not rendered the way a .md file in the repo
+          # is. GitHub treats it like an issue comment, where every
+          # newline becomes a line break, so CHANGELOG.md's 78-column hard
+          # wrapping arrives as text that stops ragged at half the page
+          # while the docs beside it look fine. The file should stay
+          # wrapped; what gets published should not be.
+          #
+          # Joins a line onto the one before it unless that line starts
+          # something: a blank, a heading, a list item, a table row, or a
+          # fence. Inside a fence nothing is touched, because reflowing a
+          # command is how a release ships one nobody can paste.
+          awk '
+            /^```/ { fence = !fence; flush(); print; next }
+            fence  { print; next }
+            /^[[:space:]]*$/ || /^#/ || /^\|/ { flush(); print; next }
+            # A list item starts a buffer rather than printing: its own
+            # continuation lines have to join onto it, not follow it.
+            /^[-*+] / || /^[0-9]+\. / { flush(); buf = $0; next }
+            {
+              sub(/^[[:space:]]+/, "")
+              buf = (buf == "" ? $0 : buf " " $0)
+              next
+            }
+            END { flush() }
+            function flush() { if (buf != "") { print buf; buf = "" } }
+          ' section.md > reflowed.md && mv reflowed.md section.md
+
+      # Created as a draft and published at the very end of this job.
+      #
+      # `releases/latest/download/<name>` resolves against the newest
+      # release and does not fall back to an older one, and the
+      # walkthrough now makes that URL step one of installing kuma. A
+      # release that exists without its ISO is therefore not a smaller
+      # release, it is a broken front door for everybody, and it would
+      # stay broken for the forty minutes this job spends building the
+      # ISO even when nothing goes wrong.
+      #
+      # A draft is invisible to `latest`, so the previous release keeps
+      # answering that URL until this one is complete. If the ISO fails,
+      # the draft stays a draft with the binary already attached, which is
+      # a release waiting for a decision rather than a page nobody can
+      # install from.
+      #
+      # No --target here, though the tag naming an exact commit is the
+      # point: gh's release create with --target against a commit hash is
+      # refused with "Resource not accessible by integration" no matter
+      # what the token's permissions say — declared write, the repo's
+      # default set to write, write-all, all refused, and the same call
+      # with a personal token or without the flag goes through
+      # (cli/cli#9514, still open after two years). The flag is inert on
+      # this flow anyway: the tag already exists when the run starts, and
+      # target_commitish only names where GitHub should create a tag that
+      # does not exist.
+      - name: publish
+        if: steps.what.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          gh release create '${{ steps.what.outputs.tag }}' \
+            --draft \
+            --title '${{ steps.what.outputs.title }}' \
+            --notes "$(cat section.md; cat <<'NOTES'
+          Static `x86_64` binary, no runtime dependencies.
+
+          ```console
+          $ curl -LO ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ steps.what.outputs.tag }}/${{ steps.pkg.outputs.name }}
+          $ chmod +x ${{ steps.pkg.outputs.name }} && sudo mv ${{ steps.pkg.outputs.name }} /usr/local/bin/kuma
+          ```
+
+          A declaration with `[nostr]` enabled stages the layer's two
+          binaries from beside the running kuma, so they install to the
+          same place:
+
+          ```console
+          $ curl -LO ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ steps.what.outputs.tag }}/kuma-nostrd-x86_64-unknown-linux-musl
+          $ curl -LO ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ steps.what.outputs.tag }}/kuma-nostr-x86_64-unknown-linux-musl
+          $ chmod +x kuma-nostrd-x86_64-unknown-linux-musl kuma-nostr-x86_64-unknown-linux-musl
+          $ sudo mv kuma-nostrd-x86_64-unknown-linux-musl /usr/local/bin/kuma-nostrd
+          $ sudo mv kuma-nostr-x86_64-unknown-linux-musl /usr/local/bin/kuma-nostr
+          ```
+
+          Verify it came from this workflow:
+
+          ```console
+          $ cosign verify-blob \
+              --bundle ${{ steps.pkg.outputs.name }}.bundle \
+              --certificate-identity-regexp '^${{ github.server_url }}/${{ github.repository }}/.+@refs/tags/' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              ${{ steps.pkg.outputs.name }}
+          ```
+
+          Built from `${{ github.sha }}`.
+          NOTES
+          # The media block quotes the same command SECURITY.md does, and
+          # rides the same switch as the attach step: a release cut without
+          # its ISO does not quote a command for an asset it does not carry.
+          if [ "${ATTACH_ISO}" = 'true' ]; then cat <<'NOTES'
+
+          The installer media on this page verifies the same way:
+
+          ```console
+          $ cosign verify-blob \
+              --bundle kuma-x86_64.iso.bundle \
+              --certificate-identity-regexp '^${{ github.server_url }}/${{ github.repository }}/.+@refs/tags/' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              kuma-x86_64.iso
+          ```
+          NOTES
+          fi
+          )" \
+            kuma-x86_64-unknown-linux-musl \
+            kuma-x86_64-unknown-linux-musl.sha256 \
+            kuma-x86_64-unknown-linux-musl.bundle \
+            kuma-nostrd-x86_64-unknown-linux-musl \
+            kuma-nostrd-x86_64-unknown-linux-musl.sha256 \
+            kuma-nostrd-x86_64-unknown-linux-musl.bundle \
+            kuma-nostr-x86_64-unknown-linux-musl \
+            kuma-nostr-x86_64-unknown-linux-musl.sha256 \
+            kuma-nostr-x86_64-unknown-linux-musl.bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Everything below runs *after* the release object exists, and that
+      # ordering is the point: building the ISO means a full image build
+      # and a QEMU boot with a serial-console assertion, so putting it
+      # ahead of `publish` meant a live session that failed to reach a
+      # desktop left nothing behind at all. This way the binary, its
+      # checksum and its bundle are already attached and waiting when the
+      # ISO is asked for, and the draft above is what keeps that
+      # half-assembled state out of anyone's way.
+      #
+      # On since v0.11.0, and the condition for that was a run history
+      # rather than a decision: ci.yml builds and boots this ISO on every
+      # push to main and on a daily cron, which is where its failures
+      # belong, and it went green there before a tag was ever allowed to
+      # depend on it. Turn it off by flipping the `&& 'true'` in `env`
+      # above back to `&& 'false'` if that job starts being flaky, because
+      # a 1.8 GB asset is not worth a release that cannot be cut.
+      #
+      # Read through `env` rather than `inputs.attach_iso` directly
+      # because a tag is a `push` event, and the `inputs` context is empty
+      # for those: defaults declared under workflow_dispatch and
+      # workflow_call never materialise there. Testing the input alone
+      # meant the documented way to switch this on could not affect the
+      # only trigger that actually cuts a release.
+      - uses: ./.github/actions/kvm
+        if: env.ATTACH_ISO == 'true' && steps.what.outputs.publish == 'true'
+
+      # The ISO's image is composed by the packaged kuma, so the shell is
+      # staged at the workspace root beside it rather than beside a cargo
+      # target. The gate is the ISO's own: a rolling run rehearses the
+      # release path without publishing, and there is no image at the end
+      # of it to build a shell for.
+      - uses: ./.github/actions/kuma-shell
+        if: env.ATTACH_ISO == 'true' && steps.what.outputs.publish == 'true'
+        with:
+          kuma-dir: .
+
+      - name: live ISO
+        id: iso
+        if: env.ATTACH_ISO == 'true' && steps.what.outputs.publish == 'true'
+        env:
+          QEMU_VGA: virtio-vga
+          QEMU_DISPLAY: none
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          # `kuma build` bakes whichever kuma is running into the image it
+          # builds, so this is what decides which binary the ISO installs
+          # with. It is the packaged release artifact rather than a fresh
+          # `cargo build`, which would be a debug binary carrying
+          # /home/runner paths that publish-audit.sh fails an image for,
+          # and would be a second compile of code already built above.
+          KUMA=./${{ steps.pkg.outputs.name }} ./scripts/smoke.sh --iso --keep niri
+          # Unversioned for the same reason the binary is, and the reason
+          # binds harder here: this is the asset getting-started links, so
+          # `releases/latest/download/kuma-x86_64.iso` has to keep meaning
+          # the current ISO. The version is not lost. The release page
+          # carries the tag and the installed system says it in
+          # PRETTY_NAME.
+          name="kuma-x86_64.iso"
+          mv vm-smoke/niri-iso/KUMA.iso "$name"
+          sha256sum "$name" > "$name.sha256"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      # SECURITY.md says every release asset is signed with Sigstore, and
+      # that has to stay true of the asset that becomes a bootable
+      # machine. A checksum beside the file is not a substitute: it is
+      # served from the same page, so anything that can replace one can
+      # replace the other.
+      - name: sign the live ISO
+        if: env.ATTACH_ISO == 'true' && steps.what.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --bundle '${{ steps.iso.outputs.name }}.bundle' \
+            '${{ steps.iso.outputs.name }}'
+
+      # Uploaded separately rather than templated into the file list
+      # above, because the file does not exist when the release is
+      # created and a draft is the thing being filled in.
+      - name: attach the live ISO
+        if: env.ATTACH_ISO == 'true' && steps.what.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          gh release upload '${{ steps.what.outputs.tag }}' \
+            '${{ steps.iso.outputs.name }}' \
+            '${{ steps.iso.outputs.name }}.sha256' \
+            '${{ steps.iso.outputs.name }}.bundle'
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # The release becomes real here, complete, in one step. Anything
+      # above that failed leaves a draft holding whatever did get
+      # attached, which is visible to whoever cut the tag and to nobody
+      # else: `latest` still answers with the previous release, so the
+      # download URL in the walkthrough keeps working while this is
+      # sorted out. Finish it by hand with `gh release edit <tag>
+      # --draft=false` once you know what happened.
+      - name: publish the release
+        if: steps.what.outputs.publish == 'true'
+        run: gh release edit '${{ steps.what.outputs.tag }}' --draft=false
+        env:
+          GH_TOKEN: ${{ github.token }}

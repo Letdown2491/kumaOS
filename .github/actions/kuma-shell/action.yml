@@ -1,0 +1,116 @@
+name: kuma-shell
+description: >-
+  Build kuma-shell (and its sibling bin kuma-greeter) from the kumaui
+  tree at a pinned commit and stage them beside a kuma binary.
+
+# `kuma build` composes a desktop image only when kuma-shell sits beside
+# the kuma binary it runs: write_context copies the sibling into the build
+# context, because a desktop image needs the release's binaries together.
+# Locally the shell comes from the kumaui checkout and its build script,
+# which is also why it is missing here: nothing in CI built kuma-shell, so
+# every job that builds a desktop image died at staging with "it is not
+# beside the running kuma". This builds one.
+#
+# Built rather than downloaded because there is nothing to download it
+# from: kumaui cuts no releases, and a build from a pinned commit is the
+# same argument the nip46-relay clone carries — a moving main silently
+# decides what this gate means. Dependabot cannot see a raw git clone;
+# the pin is bumped by hand, and the diff is the review. The pin also only
+# resolves once kumaui's main carries it, so bumping means pushing first.
+#
+# No rust-cache here, deliberately. Every caller already runs one at the
+# job level for kuma's own build, and a second instance scoped to the
+# kumaui workspace is an interaction this repo has never measured; the
+# shell's build is a few minutes cold, which is a price paid for now.
+
+inputs:
+  kuma-dir:
+    description: >-
+      Directory, relative to the workspace, holding the kuma binary that
+      `kuma build` will run as; kuma-shell is staged beside it.
+    required: true
+  kumaui-ref:
+    description: >-
+      kumaui commit to build the shell from.
+    required: false
+    default: df205c391b25f126c986b421d7a0129b245ce0f2
+
+runs:
+  using: composite
+  steps:
+    # What a bare runner needs that the kumaui dev container carries over
+    # from the desktop stack it is built on: measured on ubuntu 24.04,
+    # this list builds and links the shell, and without one of them the
+    # build does not get past configure. pkg-config, a compiler and curl
+    # are preinstalled; pam is the lock screen's authenticator, the rest
+    # is what gpui links against.
+    - name: install the shell's build dependencies
+      shell: bash
+      run: >
+        sudo apt-get update
+        && sudo apt-get install -y --no-install-recommends
+        libfontconfig-dev libfreetype-dev libxkbcommon-dev libpam0g-dev
+        libwayland-dev libvulkan-dev
+
+    - name: check out kumaui at its pinned commit
+      shell: bash
+      env:
+        KUMAUI_REF: ${{ inputs.kumaui-ref }}
+      run: |
+        set -euo pipefail
+        git clone --quiet https://github.com/Letdown2491/kumaui "$GITHUB_WORKSPACE/kumaui"
+        git -C "$GITHUB_WORKSPACE/kumaui" checkout --quiet "$KUMAUI_REF"
+
+    # vendor/ is gitignored and travels with no clone, and it cannot:
+    # the crates.io gpui release predates the layer-shell API the shell
+    # is built on, so kumaui assembles it from zed main at the commit
+    # its own vendor script pins. Running that script here rather than
+    # cloning zed from over here keeps the zed pin in kumaui, beside the
+    # code that depends on it — bumping it is a kumaui commit, and this
+    # action follows on the next kumaui-ref bump instead of drifting.
+    - name: vendor gpui from zed at kumaui's pinned commit
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "$GITHUB_WORKSPACE/kumaui"
+        bash scripts/vendor-gpui.sh
+
+    - name: build kuma-shell and stage it beside kuma
+      shell: bash
+      env:
+        KUMA_DIR: ${{ inputs.kuma-dir }}
+        # The shell is baked into the image by `kuma build` the same way
+        # kuma is, so its build paths ride along into everything
+        # published. Same remap argument as kuma's own builds. The two
+        # specific remaps first, then the catch-all: whatever under the
+        # runner's home the specific ones miss (cargo's git checkouts,
+        # the rustup dir) still loses the prefix, and a path already
+        # renamed by a specific remap no longer starts with /home/runner
+        # so the catch-all cannot double-map it.
+        RUSTFLAGS: >-
+          --remap-path-prefix=${{ github.workspace }}/kumaui=/kumaui
+          --remap-path-prefix=/home/runner/.cargo/registry=/cargo
+          --remap-path-prefix=/home/runner/=/runner/
+      run: |
+        set -euo pipefail
+        # The toolchain is kumaui's own pin (rust-toolchain.toml), not the
+        # caller's stable: RUSTUP_TOOLCHAIN is unset so rustup reads the
+        # tree's file and installs what it names.
+        unset RUSTUP_TOOLCHAIN
+        # Release, always: these binaries run as the guest's session and
+        # greeter and ship in published images, and a debug gpui build is
+        # a memory hog no session should be handed. There is no debug
+        # shell to stage, here or anywhere.
+        cd "$GITHUB_WORKSPACE/kumaui"
+        # One package, two binaries: kuma-greeter is kuma-shell's
+        # sibling bin (src/bin/kuma-greeter.rs), and the image's greetd
+        # config points at both roads — the shell as the session, the
+        # greeter behind niri on VT1.
+        cargo build --locked --release -p kuma-shell
+        # Nothing on a runner can run a GUI binary, so "it works" here can
+        # only mean both exist and are executable where the next step looks.
+        [ -x "target/release/kuma-shell" ]
+        [ -x "target/release/kuma-greeter" ]
+        mkdir -p "$GITHUB_WORKSPACE/${KUMA_DIR%/}"
+        cp target/release/kuma-shell target/release/kuma-greeter \
+           "$GITHUB_WORKSPACE/${KUMA_DIR%/}/"

@@ -1,0 +1,211 @@
+name: published
+
+# Everything in ci.yml asks whether the tree works. This asks whether what
+# is on the registry works, which is a different question with a different
+# failure mode: it can go red without anyone having committed anything, so
+# putting it in ci.yml would turn a registry hiccup into a red mark on
+# somebody's pull request and teach people to ignore red.
+#
+# Everything here installs an image kuma published rather than one it
+# just built, which is what makes `kuma-home-subvol` verifiable: that
+# converger only does anything on a btrfs root, only `kuma install`
+# writes one, and until this existed nothing ever booted a disk it had
+# written.
+on:
+  # publish.yml calls this when it has moved the tag, which is the only
+  # moment the answer can change. Every job here reads the mutable
+  # `:niri` tag, so dispatching them before a publish just re-tests the
+  # previous release, and remembering the order was the whole mechanism
+  # until now.
+  #
+  # It reads "every job" rather than "three of four" because the fourth
+  # never belonged: `fix-verification` installed an image built from the
+  # tree, not from the registry, and lived here only because this is
+  # where the KVM-and-install steps were. That made the one job covering
+  # install-time and first-boot regressions run *after* a tag was public.
+  # It is `install` in ci.yml now, on the harness both share.
+  workflow_call:
+    inputs:
+      image:
+        description: "Image reference to install and boot, and to upgrade to"
+        required: false
+        type: string
+        default: "ghcr.io/letdown2491/kuma:niri"
+      from_image:
+        description: >-
+          Override the cross-version fixture. Empty derives the release
+          before this one from the registry.
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Image reference to install and boot, and to upgrade to"
+        required: false
+        default: "ghcr.io/letdown2491/kuma:niri"
+      from_image:
+        description: >-
+          Override the cross-version fixture. Empty derives the release
+          before this one from the registry.
+        required: false
+        default: ""
+  # No schedule. There was a weekly one, on the reasoning that a published
+  # tag sits still and could rot underneath. What it actually watched was
+  # ghcr, sigstore and the runner image, and it re-tested the same
+  # unchanged artifact every Monday to do it. The answer here can only
+  # change when the registry changes, and publish.yml now says when that
+  # happens, so the trigger is the event rather than the calendar. Anyone
+  # who wants the old behaviour has the dispatch above.
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Declared rather than inherited, same reason as ci.yml. publish.yml
+# calls this with `packages: write` in scope; these jobs only check out
+# and boot, so they say so.
+permissions:
+  contents: read
+
+jobs:
+  install-and-boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: install the published image and boot the disk it wrote
+        uses: ./.github/actions/install-boot
+        with:
+          smoke_args: --published ${{ inputs.image || 'ghcr.io/letdown2491/kuma:niri' }}
+
+      - name: guest console
+        if: failure() || cancelled()
+        run: tail -200 vm-smoke/published/console.log || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: failure() || cancelled()
+        with:
+          name: console-published
+          path: vm-smoke/published/console.log
+          if-no-files-found: warn
+
+  # 0.8's headline feature, booted for the first time.
+  #
+  # Encrypted installs were verified thoroughly and entirely offline: the
+  # LUKS header, the passphrase, the kargs and the account file all read
+  # through a loop device. What that cannot answer is the only question a
+  # person has, which is whether the machine comes up when you type the
+  # passphrase. Nothing had ever booted one, which made the headline
+  # feature of 0.8 the one shipped thing with no boot coverage at all.
+  #
+  # Runs against the published image rather than a build: encryption is a
+  # property of the install, not of the image, so this needs no compose
+  # and adds no build time.
+  encrypted-boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: install an encrypted disk, then unlock it at the console
+        uses: ./.github/actions/install-boot
+        with:
+          smoke_args: >-
+            --encrypted
+            --published ${{ inputs.image || 'ghcr.io/letdown2491/kuma:niri' }}
+
+      - name: guest console
+        if: failure() || cancelled()
+        run: |
+          tail -200 vm-smoke/published/console.log || true
+          echo "=== what the unlocker saw ==="
+          cat vm-smoke/published/unlock.log || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: failure() || cancelled()
+        with:
+          name: console-encrypted
+          path: |
+            vm-smoke/published/console.log
+            vm-smoke/published/unlock.log
+          if-no-files-found: warn
+
+  # Can a machine installed at one version reach a later one? Nothing has
+  # ever asked. Every other check builds and boots a single image, so
+  # "an existing machine survives moving forward" has been a promise
+  # rather than a result, and it is the promise 44.0 rests on.
+  #
+  # Installs an older published tag while pointing its update origin at
+  # the rolling one, so `bootc upgrade` inside the guest has somewhere
+  # newer to go. Not `kuma update`: that is the builder's verb, which
+  # pulls a base and rebuilds, and kuma's own update_check says a machine
+  # running a published image asks bootc instead.
+  #
+  # **The fixture is derived, not written down.** It used to be a
+  # hardcoded `:niri-0.7.0`, which was the right answer once and then
+  # aged six releases into testing a jump nobody makes, while the path
+  # almost every machine actually takes (the release before this one) was
+  # covered by nothing. A hardcoded newer tag would only move the rot:
+  # it goes stale the next time you tag, and it goes stale *quietly*,
+  # because the job keeps passing while answering a question about an
+  # older release than the one being published.
+  #
+  # So it asks the registry. Every pinned tag kuma has ever published is
+  # still there, which is why the rule about never deleting them matters:
+  # they are the only fixtures for this and they cannot be recreated.
+  #
+  # Oldest-to-current is deliberately NOT covered any more, and it was a
+  # different question: a file that did not exist when a machine was
+  # installed and can now only arrive through the /etc merge, which is
+  # the `policy.json` case. If that needs testing again, dispatch this
+  # with from_image set rather than adding a second job.
+  cross-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: the release before this one
+        id: fixture
+        env:
+          # Env, not interpolation: the input is a caller's string, and
+          # this run block is where it would otherwise become code.
+          FROM_IMAGE: ${{ inputs.from_image }}
+        run: |
+          set -euo pipefail
+          repo="ghcr.io/letdown2491/kuma"
+          if [ -n "$FROM_IMAGE" ]; then
+            echo "from=$FROM_IMAGE" >> "$GITHUB_OUTPUT"
+            echo "caller named the fixture: $FROM_IMAGE"
+            exit 0
+          fi
+          command -v skopeo >/dev/null || sudo apt-get install -y -qq skopeo
+          # The version being published already has its pinned tag by the
+          # time this runs, so "previous" is the highest one that is not
+          # it. Excluded by name rather than by comparison: a rebuilt tag
+          # would otherwise pick itself.
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          previous=$(skopeo list-tags "docker://$repo" \
+            | jq -r '.Tags[] | select(startswith("niri-"))' \
+            | sed 's/^niri-//' \
+            | grep -vx "$version" \
+            | sort -V | tail -1)
+          # Loud, because a silent fallback here is the whole failure mode
+          # this derivation exists to avoid.
+          [ -n "$previous" ] || { echo "::error::no pinned niri-* tag older than $version"; exit 1; }
+          echo "upgrading from $previous to $version"
+          echo "from=$repo:niri-$previous" >> "$GITHUB_OUTPUT"
+
+      - name: install an old version, upgrade it, and boot what it became
+        uses: ./.github/actions/install-boot
+        with:
+          smoke_args: >-
+            --published ${{ steps.fixture.outputs.from }}
+            --upgrade-to ${{ inputs.image || 'ghcr.io/letdown2491/kuma:niri' }}
+
+      - name: guest console
+        if: failure() || cancelled()
+        run: tail -200 vm-smoke/published/console.log || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: failure() || cancelled()
+        with:
+          name: console-cross-version
+          path: vm-smoke/published/console.log
+          if-no-files-found: warn

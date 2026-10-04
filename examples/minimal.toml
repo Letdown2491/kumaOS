@@ -1,0 +1,23 @@
+# The smallest declaration that still builds a real machine: no desktop,
+# no user, nothing beyond the base and one package. A starting point for
+# a headless box, and the cheap case in the smoke tests, since it builds
+# in a minute and boots without a compositor.
+#
+# Even this carries kuma's floor: greenboot and automatic rollback of a
+# failed boot are in every image, never opt-in.
+schema_version = 1
+
+[system]
+# Explicit on purpose, twice over: it keeps this the fast compose-free
+# build the smoke tests lean on, and it demonstrates the escape hatch:
+# any bootc image can be the base when you name one. Omit the key and
+# kuma composes its own base instead (the default everywhere else).
+base = "quay.io/fedora/fedora-bootc:44"
+# No `desktop` key, so this is headless. Adding one brings the whole
+# curated set: compositor, greeter, portals, audio, fonts, identity.
+
+[packages]
+rpm = ["fish"]
+
+[services]
+enable = []

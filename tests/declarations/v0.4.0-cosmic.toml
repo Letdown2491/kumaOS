@@ -1,0 +1,47 @@
+# A Kuma system definition for the COSMIC desktop. See
+# kuma.toml.example for every field the schema accepts.
+schema_version = 1
+
+[system]
+# No `base` key: kuma composes its own from Fedora's repos. Name a bootc
+# image here only as an escape hatch (see kuma.toml.example).
+
+# System76's full desktop: panel, launcher, settings, files, terminal.
+# It curates itself upstream, so kuma adds only hardware enablement and
+# identity on top.
+desktop = "cosmic"
+
+# COSMIC's first-boot setup wizard never appears: the account and the
+# defaults are declared here instead.
+[user]
+name = "me"
+shell = "fish"
+# password_hash = '$6$...'   # from `kuma passwd`
+# autologin = true           # straight to the desktop at boot
+
+[packages]
+rpm = ["fish", "git-core", "git-core-doc", "distrobox"]
+
+# Converged on boot and daily, and convergence only takes back what it
+# installed: an app you install through a store stays yours until you
+# decide, and `kuma capture` offers to write it down here. Updates are
+# not scoped that way: everything installed is kept current.
+flatpak = [
+    "org.mozilla.firefox",
+    "org.gnome.Loupe",
+    "org.gnome.Papers",
+    "org.gnome.Calculator",
+    "io.github.celluloid_player.Celluloid",
+]
+
+# brew = ["ripgrep", "fd", "jq"]
+
+# Your additions only. COSMIC already enables what it needs (greeter,
+# firewalld, bluetooth, cups, avahi, chronyd), so those don't belong here.
+[services]
+enable = []
+
+# Hourly read-only snapshots of /var/home, kept 24 deep plus a week of
+# dailies. Skipped on a machine whose /var/home isn't a btrfs subvolume.
+[snapshots]
+enable = true
