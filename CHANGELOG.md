@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v44.5.0 (2026-10-04)
+
 - **The desktop appears ~5 seconds sooner after logging in.** greetd
   gives the greeter session 5 seconds to exit on its own after a
   successful login before it kills it, and the greeter session was
@@ -11,9 +13,6 @@
   session is now a supervisor that runs niri in the background and exits
   the moment kuma-greeter quits, taking niri down with it in under a
   second; the session starts as soon as greetd sees the exit.
-
-## v44.5.0 (2026-10-04)
-
 - **Doctor's nostr trust warning is one line, not one per app.** Three
   apps holding Trust graded three identical warnings; one warning now
   names the whole pile. Nothing about the grants changed — only how
