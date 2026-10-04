@@ -464,11 +464,13 @@ user = "greetd"
 "#;
 
 /// The greeter compositor's niri config, verbatim from kumaUI's
-/// `greeter-niri.kdl`. Minimal on purpose: one layer-shell window, no
-/// keybinds, no session wiring, and `hotkey-overlay` with
-/// `skip-at-startup` so the Important Hotkeys popup never covers the
-/// login fields. Do not add keybinds here — this niri exists to host
-/// the greeter, nothing else.
+/// `greeter-niri.kdl` (pinned commit a795f43). Minimal on purpose: one
+/// layer-shell window, no keybinds, no session wiring. The layout
+/// block matches the shell wallpaper base, so greeter teardown into
+/// session start never flashes black. Do not add keybinds here — this
+/// niri exists to host the greeter, nothing else. Drift hazard: this
+/// is a copy, not a build-time fetch; re-sync it on every kumaUI pin
+/// bump that touches the file.
 pub(crate) const GREETER_NIRI_KDL: &str = r#"// The greeter compositor config: the smallest niri that can host
 // one greeter window. No keybinds, no gestures, no session wiring:
 // greetd launches this niri on the test VT, niri launches
@@ -476,6 +478,11 @@ pub(crate) const GREETER_NIRI_KDL: &str = r#"// The greeter compositor config: t
 // through the environment. The hotkey overlay is noise on a login
 // screen, so it never shows. Ctrl+Alt+F1 (or F3) still switches
 // VTs, that is compositor-independent.
+layout {
+    // Matches the shell wallpaper base (0x11111B) and the session
+    // config, so greeter teardown into session start never flashes.
+    background-color "#11111B"
+}
 hotkey-overlay {
     skip-at-startup
 }"#;
@@ -512,7 +519,16 @@ hotkey-overlay {
 pub(crate) const GREETER_SESSION: &str = r#"#!/usr/bin/env bash
 export XDG_CACHE_HOME=/var/lib/greetd/cache
 
-niri -c /usr/share/kumaos/greeter-niri.kdl &
+# The greeter chain's stderr (niri's protocol errors, kuma-greeter's
+# own log lines) goes to VT1 and dies with the session: the journal
+# never sees why a login screen failed. Both processes append to this
+# tmpfiles-owned log instead — see kuma-greeter-tmpfiles.conf. The
+# greeter's RUST_LOG=debug is a diagnosis aid for the smoke failure
+# ("greeter exited without creating a session"); drop to info once read.
+LOG=/var/log/kuma-greeter.log
+export RUST_LOG=debug
+
+niri -c /usr/share/kumaos/greeter-niri.kdl >>"$LOG" 2>&1 &
 niri_pid=$!
 cleanup() { kill "$niri_pid" 2>/dev/null; }
 trap cleanup EXIT
@@ -528,7 +544,7 @@ for _ in $(seq 1 100); do
 done
 [ -n "$sock" ] || exit 1
 
-WAYLAND_DISPLAY=${sock##*/} /usr/bin/kuma-greeter
+WAYLAND_DISPLAY=${sock##*/} /usr/bin/kuma-greeter >>"$LOG" 2>&1
 rc=$?
 # the greeter only exits on success or crash: either way hand the
 # session back to greetd immediately, don't make it wait out its
@@ -552,8 +568,10 @@ RestartSec=2
 /// The greeter's cache directory, created at boot before greetd runs
 /// (sysv order: tmpfiles-setup precedes greetd in graphical.target).
 /// See GREETER_SESSION for why the greeter cannot write a default
-/// cache location.
-pub(crate) const GREETER_TMPFILES: &str = "d /var/lib/greetd/cache 0700 greetd greetd -\n";
+/// cache location. The log file is where the greeter chain's stderr
+/// lands (see GREETER_SESSION): pre-created greetd-owned, or the first
+/// boot's append fails and the diagnostics die with it.
+pub(crate) const GREETER_TMPFILES: &str = "d /var/lib/greetd/cache 0700 greetd greetd -\nf /var/log/kuma-greeter.log 0600 greetd greetd -\n";
 
 /// What starts a session, and where each greeter reads it from.
 ///
