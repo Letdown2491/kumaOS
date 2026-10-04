@@ -553,8 +553,7 @@ RestartSec=2
 /// (sysv order: tmpfiles-setup precedes greetd in graphical.target).
 /// See GREETER_SESSION for why the greeter cannot write a default
 /// cache location.
-pub(crate) const GREETER_TMPFILES: &str =
-    "d /var/lib/greetd/cache 0700 greetd greetd -\n";
+pub(crate) const GREETER_TMPFILES: &str = "d /var/lib/greetd/cache 0700 greetd greetd -\n";
 
 /// What starts a session, and where each greeter reads it from.
 ///

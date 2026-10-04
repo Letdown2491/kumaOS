@@ -34,7 +34,7 @@ residual cost. Everything below decomposes it.
 
 From `journalctl -b -o short-precise`, Oct 04 01:33 boot:
 
-- 01:33:47.572 greetd PAM auth of martin completes
+- 01:33:47.572 greetd PAM auth of the local user completes
 - 01:33:48.669 greeter session closed
 - 01:33:48.958 PAM session opened
 - 01:33:49.310 `systemd[1517]: Starting niri.service` — the **user
@@ -242,7 +242,7 @@ cost; the phase split is not yet measured, so ranks 1–2 are first
   `/usr/lib/systemd/user/kuma-shell.service`,
   `~/.config/systemd/user/kuma-shell.service.d/override.conf`
   (`systemctl --user cat`).
-- Image side: `/var/home/martin/Documents/kuma/src/containerfile/blocks.rs`
+- Image side: `src/containerfile/blocks.rs` in this repo
   (`SHELL_SERVICE` ~2035, niri session config ~1970) — read locations
   per the session brief; generation content confirmed via the
   installed units above.

@@ -22,7 +22,7 @@ test — see "Where we are". Kept for the record.)
 
 - This host boots a bootc/ostree image; `/usr` is read-only. Persistent
   machine-local files go in `/etc`.
-- `sudo` is NOPASSWD for martin (`/etc/sudoers.d/opencode`) — added for
+- `sudo` is NOPASSWD for the local user (`/etc/sudoers.d/opencode`) — added for
   this experiment; delete when done.
 
 ## Where we are
