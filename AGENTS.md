@@ -112,6 +112,11 @@ road every release ships.
   without creating a session" is greetd's whole testimony. The chain
   appends to `/var/log/kuma-greeter.log` (tmpfiles-owned, 0600
   greetd) — that file is the reader, not `journalctl`.
+- The audit gate reads the last 50 commit messages as well as the
+  tree: a fix that quotes what it scrubbed puts the name back into
+  history where no later commit can reach — rewriting costs a
+  force-push the branch rule exists to prevent. Describe the match
+  ("the builder's name"), never quote it.
 - A KDL config string embedded as an `r#"…"#` literal breaks the
   compile the moment the config gains a `"#` sequence (a color like
   `background-color "#11111B"`): the literal ends at the color. Use
