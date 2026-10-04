@@ -256,6 +256,12 @@ bad()  {
         guest 'journalctl -b --no-pager -t kuma-greeter | grep -a "wrapper:" | tail -30' || true
         guest 'journalctl -b --no-pager -t kuma-greeter | grep -aE "ERROR|panic" | tail -30' || true
         guest 'journalctl -b --no-pager -t kuma-greeter | tail -15' || true
+        # oomd kills cgroups from userspace: no kernel oom-kill line,
+        # just a line in its own unit that no tag grep above reads.
+        guest 'journalctl -b --no-pager -u systemd-oomd | tail -10' || true
+        # And whatever else ended the boot, its last words are here:
+        # the unfiltered end of the journal, no tag can exclude it.
+        guest 'journalctl -b --no-pager | tail -40' || true
         guest 'journalctl -b --no-pager | grep -iE "avc.*denied|selinux" | tail -20' || true
         # a compositor or GPU client dying without its own log line
         # leaves a kernel line instead: traps/segfault, oom-kill
@@ -957,7 +963,7 @@ smoke_published() {
                      -global "ICH9-LPC.disable_s3=1")
         fi
         qemu-system-x86_64 \
-            -enable-kvm -cpu host -smp 4 -m 4096 \
+            -enable-kvm -cpu host -smp 4 -m 8192 \
             "${machine[@]}" "${globals[@]}" \
             -drive "if=pflash,format=raw,readonly=on,file=$code" \
             -drive "if=pflash,format=raw,file=$vars" \
@@ -2788,7 +2794,7 @@ dead_disk_run() {
     fi || bad "cannot stage the OVMF vars"
 
     qemu-system-x86_64 \
-        -enable-kvm -cpu host -smp 4 -m 4096 \
+        -enable-kvm -cpu host -smp 4 -m 8192 \
         -machine q35 \
         -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
         -drive "if=pflash,format=raw,file=$dir/OVMF_VARS.fd" \
@@ -2979,7 +2985,7 @@ smoke_iso() {
     cp "$ovmf_vars" "$dir/vars.fd"
 
     env LIBGL_ALWAYS_SOFTWARE=1 qemu-system-x86_64 \
-        -enable-kvm -cpu host -smp 4 -m 4096 \
+        -enable-kvm -cpu host -smp 4 -m 8192 \
         -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
         -drive "if=pflash,format=raw,file=$dir/vars.fd" \
         -cdrom "$iso" -boot d \
@@ -3100,7 +3106,7 @@ smoke_boot() {
     cp "$ovmf_vars" "$dir/OVMF_VARS.fd" || bad "cannot stage the OVMF vars"
 
     env LIBGL_ALWAYS_SOFTWARE=1 qemu-system-x86_64 \
-        -enable-kvm -cpu host -smp 4 -m 4096 \
+        -enable-kvm -cpu host -smp 4 -m 8192 \
         -machine q35 \
         -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
         -drive "if=pflash,format=raw,file=$dir/OVMF_VARS.fd" \

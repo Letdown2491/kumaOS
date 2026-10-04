@@ -529,7 +529,7 @@ export XDG_CACHE_HOME=/var/lib/greetd/cache
 # and a 0700 greetd dir cannot be read back by the smoke's ssh user —
 # both measured, Oct 04). RUST_LOG=debug stays until the greeter
 # smoke passes; drop it to info after.
-export RUST_LOG=debug
+export RUST_LOG=info
 # bash dies on SIGPIPE when a builtin writes a broken pipe: if the
 # logger reader of this redirect ever stalls or dies, the wrapper's
 # next echo kills the whole session silently — greetd reads that as
@@ -537,6 +537,10 @@ export RUST_LOG=debug
 # that is mid-initialization (measured, Oct 04). The greeter itself
 # is Rust and ignores SIGPIPE, which is why it outlived its wrapper.
 trap '' PIPE
+# A silent death needs a witness: TERM is what systemd sends before
+# the cgroup goes, and if the wrapper is killed with the scope its
+# last marker never lands. Log it and go.
+trap 'echo >&2 "wrapper: SIGTERM at $((SECONDS - started))s"; exit 143' TERM
 exec 2> >(exec logger -t kuma-greeter)
 
 # The wrapper knows why the session ends: compositor death, socket
