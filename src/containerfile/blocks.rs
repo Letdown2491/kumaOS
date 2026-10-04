@@ -572,7 +572,11 @@ if [ -z "$sock" ]; then
 fi
 echo >&2 "wrapper: wayland socket up after $((SECONDS - started))s"
 
-WAYLAND_DISPLAY=${sock##*/} /usr/bin/kuma-greeter
+# the greeter runs at trace: its own account of WHY the loop ends is
+# the evidence a silent rc=0 quit withholds, and the per-command
+# override keeps niri (which shares the exported RUST_LOG) at info so
+# naga's compile does not flood the journal
+RUST_LOG=trace WAYLAND_DISPLAY=${sock##*/} /usr/bin/kuma-greeter
 rc=$?
 echo >&2 "wrapper: greeter exited rc=$rc after $((SECONDS - started))s"
 # the greeter only exits on success or crash: either way hand the

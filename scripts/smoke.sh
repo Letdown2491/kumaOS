@@ -255,7 +255,7 @@ bad()  {
         # debug runs to thousands of lines, so the raw tail is small.
         guest 'journalctl -b --no-pager -t kuma-greeter | grep -a "wrapper:" | tail -30' || true
         guest 'journalctl -b --no-pager -t kuma-greeter | grep -aE "ERROR|panic" | tail -30' || true
-        guest 'journalctl -b --no-pager -t kuma-greeter | tail -15' || true
+        guest 'journalctl -b --no-pager -t kuma-greeter | tail -250' || true
         # oomd kills cgroups from userspace: no kernel oom-kill line,
         # just a line in its own unit that no tag grep above reads.
         guest 'journalctl -b --no-pager -u systemd-oomd | tail -10' || true
