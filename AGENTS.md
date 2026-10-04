@@ -106,6 +106,18 @@ road every release ships.
   more than its diff gets caught by the gate that runs the diff.
 - `egl-headless` wants a host DRM node a runner lacks. The GPU-less
   console combo is `virtio-vga` plus `none`.
+- The greeter chain's stderr (niri's protocol errors, kuma-greeter's
+  log lines) goes to VT1 and dies with the greetd session: the
+  journal never sees why a login screen failed, and "greeter exited
+  without creating a session" is greetd's whole testimony. The chain
+  appends to `/var/log/kuma-greeter.log` (tmpfiles-owned, 0600
+  greetd) — that file is the reader, not `journalctl`.
+- A KDL config string embedded as an `r#"…"#` literal breaks the
+  compile the moment the config gains a `"#` sequence (a color like
+  `background-color "#11111B"`): the literal ends at the color. Use
+  `r##"…"##` for anything that quotes. The staging goldens caught it
+  only after rustfmt and the identity checks were already fixed —
+  `cargo test` in the container is the gate that actually runs first.
 
 ## Agent skills
 
