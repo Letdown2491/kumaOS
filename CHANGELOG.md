@@ -1,6 +1,19 @@
 # Changelog
 
+## Unreleased
+
 ## v44.5.0 (2026-10-04)
+
+- **Doctor's nostr trust warning is one line, not one per app.** Three
+  apps holding Trust graded three identical warnings; one warning now
+  names the whole pile. Nothing about the grants changed — only how
+  the doctor counts them.
+- **`kuma clean` names what prune could not take.** A dangling image a
+  container still holds is skipped by `podman image prune`, so the
+  doctor warned "1 stranded build image" while `kuma clean` answered
+  "Nothing to reclaim" — both true, together a lie. Clean now says
+  which container holds which image, so reclaiming it is one `podman
+  rm` away.
 
 Entries land with the change they describe; the next tag takes this section
 as its release notes. Say what changed and what a reader has to do
