@@ -532,8 +532,13 @@ export XDG_CACHE_HOME=/var/lib/greetd/cache
 export RUST_LOG=debug
 exec 2> >(exec logger -t kuma-greeter)
 
+# The wrapper knows why the session ends: compositor death, socket
+# timeout, or greeter exit with its status. Say so — three laps of a
+# silent "greeter exited without creating a session" bought this.
+echo "wrapper: greetd started the session (pid $$)"
 niri -c /usr/share/kumaos/greeter-niri.kdl &
 niri_pid=$!
+started=$SECONDS
 cleanup() { kill "$niri_pid" 2>/dev/null; }
 trap cleanup EXIT
 
@@ -543,19 +548,29 @@ sock=""
 for _ in $(seq 1 100); do
   sock=$(ls "$XDG_RUNTIME_DIR"/wayland-? 2>/dev/null | head -1)
   [ -n "$sock" ] && break
-  kill -0 "$niri_pid" 2>/dev/null || exit 1
+  if ! kill -0 "$niri_pid" 2>/dev/null; then
+    wait "$niri_pid"
+    echo "wrapper: niri died after $((SECONDS - started))s (exit $?)"
+    exit 1
+  fi
   sleep 0.1
 done
-[ -n "$sock" ] || exit 1
+if [ -z "$sock" ]; then
+  echo "wrapper: no wayland socket after 10s, niri still alive"
+  exit 1
+fi
+echo "wrapper: wayland socket up after $((SECONDS - started))s"
 
 WAYLAND_DISPLAY=${sock##*/} /usr/bin/kuma-greeter
 rc=$?
+echo "wrapper: greeter exited rc=$rc after $((SECONDS - started))s"
 # the greeter only exits on success or crash: either way hand the
 # session back to greetd immediately, don't make it wait out its
 # 5-second patience on a compositor nobody is using
 cleanup
 trap - EXIT
 wait "$niri_pid" 2>/dev/null
+echo "wrapper: niri reaped (exit $?)"
 exit $rc
 "#;
 

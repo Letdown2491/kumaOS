@@ -249,6 +249,9 @@ bad()  {
         # but exactly the verdict an SELinux-bound greeter leaves.
         guest 'journalctl -b --no-pager -t kuma-greeter | tail -40' || true
         guest 'journalctl -b --no-pager | grep -iE "avc.*denied|selinux" | tail -20' || true
+        # a compositor or GPU client dying without its own log line
+        # leaves a kernel line instead: traps/segfault, oom-kill
+        guest 'journalctl -k -b --no-pager | grep -iE "segfault|general protection|traps:|oom-kill|killed process" | tail -10' || true
         guest 'journalctl -b --no-pager | grep -iE "greetd|niri|noctalia|kuma-shell|kuma-greeter" | tail -30' || true
         guest 'journalctl -b --no-pager | grep -vE "sshd|logind|audit|session-[0-9]+" | tail -30' || true
         guest 'journalctl --user -b --no-pager | grep -vE "sshd|logind|audit|session-[0-9]+" | tail -30' || true
