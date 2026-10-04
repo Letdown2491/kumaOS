@@ -53,8 +53,10 @@ RUN grep -q '"alacritty"' /usr/share/doc/niri/default-config.kdl \
     && grep -qF 'Mod+D hotkey-overlay-title="Run an Application: fuzzel" { spawn "fuzzel"; }' /usr/share/doc/niri/default-config.kdl \
     && grep -qF 'Super+Alt+L hotkey-overlay-title="Lock the Screen: swaylock" { spawn "swaylock"; }' /usr/share/doc/niri/default-config.kdl \
     && grep -qF 'Super+Alt+S allow-when-locked=true hotkey-overlay-title=null { spawn-sh "pkill orca || exec orca"; }' /usr/share/doc/niri/default-config.kdl \
+    && grep -qF '// skip-at-startup' /usr/share/doc/niri/default-config.kdl \
+    && grep -q '^layout {' /usr/share/doc/niri/default-config.kdl \
     && mkdir -p /etc/niri \
-    && sed -e 's/alacritty/kitty/g' -e '/starts waybar/d' -e '/^spawn-at-startup "waybar"$/d' -e '/XF86Audio/d' -e '/XF86MonBrightness/d' -e 's|Mod+D hotkey-overlay-title="Run an Application: fuzzel" { spawn "fuzzel"; }|Mod+D hotkey-overlay-title="Toggle Applications menu" { spawn "kuma-shell" "msg" "launcher-toggle"; }|' -e 's|Super+Alt+L hotkey-overlay-title="Lock the Screen: swaylock" { spawn "swaylock"; }|Super+Alt+L hotkey-overlay-title="Lock the Screen" { spawn "loginctl" "lock-session"; }|' -e '/pkill orca/d' -e '/^binds {/r /usr/lib/kuma/niri-binds.kdl' /usr/share/doc/niri/default-config.kdl > /etc/niri/config.kdl \
+    && sed -e 's/alacritty/kitty/g' -e '/starts waybar/d' -e '/^spawn-at-startup "waybar"$/d' -e '/XF86Audio/d' -e '/XF86MonBrightness/d' -e 's|// skip-at-startup|skip-at-startup|' -e '/^layout {/a\    background-color "#11111B"' -e 's|Mod+D hotkey-overlay-title="Run an Application: fuzzel" { spawn "fuzzel"; }|Mod+D hotkey-overlay-title="Toggle Applications menu" { spawn "kuma-shell" "msg" "launcher-toggle"; }|' -e 's|Super+Alt+L hotkey-overlay-title="Lock the Screen: swaylock" { spawn "swaylock"; }|Super+Alt+L hotkey-overlay-title="Lock the Screen" { spawn "loginctl" "lock-session"; }|' -e '/pkill orca/d' -e '/^binds {/r /usr/lib/kuma/niri-binds.kdl' /usr/share/doc/niri/default-config.kdl > /etc/niri/config.kdl \
     && cat /usr/lib/kuma/niri-extras.kdl >> /etc/niri/config.kdl \
     && niri validate --config /etc/niri/config.kdl
 RUN grep -q '^\[preferred\]' /usr/share/xdg-desktop-portal/niri-portals.conf \
