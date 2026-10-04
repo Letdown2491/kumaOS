@@ -471,7 +471,7 @@ user = "greetd"
 /// niri exists to host the greeter, nothing else. Drift hazard: this
 /// is a copy, not a build-time fetch; re-sync it on every kumaUI pin
 /// bump that touches the file.
-pub(crate) const GREETER_NIRI_KDL: &str = r#"// The greeter compositor config: the smallest niri that can host
+pub(crate) const GREETER_NIRI_KDL: &str = r##"// The greeter compositor config: the smallest niri that can host
 // one greeter window. No keybinds, no gestures, no session wiring:
 // greetd launches this niri on the test VT, niri launches
 // kuma-greeter as its startup command, and GREETD_SOCK flows down
@@ -485,7 +485,7 @@ layout {
 }
 hotkey-overlay {
     skip-at-startup
-}"#;
+}"##;
 
 /// What greetd actually runs: niri hosting kuma-greeter, with the
 /// greeter's cache pointed at a directory of its own. The greeter
