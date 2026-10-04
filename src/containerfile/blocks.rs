@@ -522,10 +522,13 @@ export XDG_CACHE_HOME=/var/lib/greetd/cache
 # The greeter chain's stderr (niri's protocol errors, kuma-greeter's
 # own log lines) goes to VT1 and dies with the session: the journal
 # never sees why a login screen failed. Both processes append to this
-# tmpfiles-owned log instead — see kuma-greeter-tmpfiles.conf. The
-# greeter's RUST_LOG=debug is a diagnosis aid for the smoke failure
-# ("greeter exited without creating a session"); drop to info once read.
-LOG=/var/log/kuma-greeter.log
+# log instead. It lives under /var/lib/greetd — xdm_var_lib_t, the
+# type xdm_t owns — because /var/log is var_log_t and an xdm_t append
+# there fails the redirect outright: the file stays empty and niri
+# never starts (measured: empty log, death inside a second).
+# RUST_LOG=debug is a diagnosis aid for the smoke failure ("greeter
+# exited without creating a session"); drop to info once read.
+LOG=/var/lib/greetd/cache/greeter.log
 export RUST_LOG=debug
 
 niri -c /usr/share/kumaos/greeter-niri.kdl >>"$LOG" 2>&1 &
@@ -568,10 +571,10 @@ RestartSec=2
 /// The greeter's cache directory, created at boot before greetd runs
 /// (sysv order: tmpfiles-setup precedes greetd in graphical.target).
 /// See GREETER_SESSION for why the greeter cannot write a default
-/// cache location. The log file is where the greeter chain's stderr
-/// lands (see GREETER_SESSION): pre-created greetd-owned, or the first
-/// boot's append fails and the diagnostics die with it.
-pub(crate) const GREETER_TMPFILES: &str = "d /var/lib/greetd/cache 0700 greetd greetd -\nf /var/log/kuma-greeter.log 0600 greetd greetd -\n";
+/// cache location. The greeter's log file lives under this directory
+/// too (see GREETER_SESSION): xdm_var_lib_t is the one type xdm_t can
+/// write, so the log rides the directory that already ships.
+pub(crate) const GREETER_TMPFILES: &str = "d /var/lib/greetd/cache 0700 greetd greetd -\n";
 
 /// What starts a session, and where each greeter reads it from.
 ///

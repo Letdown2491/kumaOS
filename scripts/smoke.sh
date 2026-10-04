@@ -245,7 +245,8 @@ bad()  {
         # The greeter chain's stderr goes to this file, not the journal
         # (see GREETER_SESSION): niri's protocol errors and the greeter's
         # own log lines are the evidence a dead login screen leaves.
-        guest 'cat /var/log/kuma-greeter.log 2>/dev/null | tail -40' || true
+        guest 'cat /var/lib/greetd/cache/greeter.log 2>/dev/null | tail -40' || true
+        guest 'journalctl -b --no-pager | grep -iE "avc.*denied|selinux" | tail -20' || true
         guest 'journalctl -b --no-pager | grep -iE "greetd|niri|noctalia|kuma-shell" | tail -30' || true
         guest 'journalctl -b --no-pager | grep -vE "sshd|logind|audit|session-[0-9]+" | tail -30' || true
         guest 'journalctl --user -b --no-pager | grep -vE "sshd|logind|audit|session-[0-9]+" | tail -30' || true
