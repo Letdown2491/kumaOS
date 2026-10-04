@@ -69,9 +69,12 @@ Idle lock, `Super+Alt+L` and locking before suspend are all the shell's, so it
 runs as a systemd user service that restarts if it stops rather than as a
 one-shot spawn that could vanish quietly. `kuma doctor` grades that it is
 running and that its idle watcher is alive. The idle contract — lock at 15
-minutes, screens off a minute later, lock before sleep — is compiled into the
-shell rather than baked as a config file, so there is nothing a broken
-override can silently disagree with; the one failure mode left (a compositor
+minutes, screens off a minute later, lock before sleep — is the shell's
+defaults, and the settings panel or `~/.config/kuma-shell/config.toml`'s
+`[idle]` keys change it (a `0` disables a clause); `kuma doctor` reads the
+same file, so it grades the machine's actual timeouts and reports a
+deliberately disabled lock as a choice rather than a failure. The failure
+mode left (a compositor
 without the idle protocol, a dead Wayland connection) is what the journal
 says, and the doctor grades exactly that. If the shell is not there at all
 when the machine is asked to

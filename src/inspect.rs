@@ -1944,6 +1944,42 @@ fn shell_idle_broken() -> Option<Option<String>> {
     Some(idle_watcher_failure(&log))
 }
 
+/// The shell's configured idle lock, in seconds, read off the same file
+/// the shell reads: `XDG_CONFIG_HOME` (or `~/.config`)
+/// `kuma-shell/config.toml`'s `[idle] lock_timeout`.
+///
+/// `None` — nothing configured (no file, no `[idle]` section, a file
+/// that does not parse), which means the defaults run; the shell treats
+/// an unparsable config the same way, so doctor agrees with the shell
+/// on every input. `Some(0)` — the lock is disabled, and deliberately:
+/// a 0 is a choice made in the settings panel or by hand, not a
+/// broken machine.
+fn shell_idle_lock() -> Option<u64> {
+    let base = match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(dir) => PathBuf::from(dir),
+        None => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
+    };
+    let text = std::fs::read_to_string(base.join("kuma-shell/config.toml")).ok()?;
+    configured_idle_lock(&text)
+}
+
+/// The `[idle] lock_timeout` of a shell config's text. A missing
+/// section, a missing key, or a file that does not parse all read as
+/// "nothing configured": the defaults run, which is how the shell
+/// itself treats every one of those inputs.
+fn configured_idle_lock(text: &str) -> Option<u64> {
+    #[derive(serde::Deserialize, Default)]
+    struct Idle {
+        lock_timeout: Option<u64>,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct ShellConfig {
+        #[serde(default)]
+        idle: Idle,
+    }
+    toml::from_str::<ShellConfig>(text).ok()?.idle.lock_timeout
+}
+
 fn shell_env_missing() -> Option<String> {
     let pid = host_output_any(&[
         "systemctl",
@@ -2032,12 +2068,16 @@ fn check_shell(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
             // minutes and screen-off at 16, and no machine ever armed
             // either: noctalia wanted each behavior to name an `action`
             // and kuma gave it only a timeout, so both were dropped at
-            // startup, invisibly. The kuma-shell's contract is compiled
-            // in instead — the same numbers, in the binary — so the
-            // failure mode is narrower now, and the journal says it in
-            // one line when it happens.
+            // startup, invisibly. Those numbers are the shell's
+            // defaults now, and they are configurable — 44.4.0 put the
+            // [idle] keys in ~/.config/kuma-shell/config.toml, and the
+            // settings panel edits them live. Doctor reads the same
+            // file, so the text says what this machine does rather
+            // than what shells do, and a deliberately disabled lock is
+            // named as a choice instead of failed as a bug.
+            let disabled = shell_idle_lock() == Some(0);
             match shell_idle_broken() {
-                Some(Some(line)) => report(
+                Some(Some(line)) if !disabled => report(
                     Grade::Fail,
                     "idle lock",
                     format!(
@@ -2047,19 +2087,44 @@ fn check_shell(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
                     Some(Action::new(
                         "read",
                         "journalctl --user -b -u kuma-shell.service | grep -i idle",
-                        "the watcher's failures name their cause; the contract itself \
-                         (lock at 15 min, screens off at 16, lock before sleep) is \
-                         compiled into kuma-shell and has no config file to mis-edit",
+                        "the watcher's failures name their cause; the timeouts themselves \
+                         live in the settings panel (Mod+S) or \
+                         ~/.config/kuma-shell/config.toml's [idle] keys",
                     )),
                 ),
-                Some(None) => report(
+                Some(Some(line)) => report(
                     Grade::Ok,
                     "idle lock",
-                    "the shell's idle watcher is running: lock at 15 minutes, screens \
-                     off a minute later, lock before sleep"
+                    format!(
+                        "idle locking is disabled by config ([idle] lock_timeout = 0), so \
+                         the watcher's failure — \"{line}\" — breaks nothing this machine \
+                         asked for"
+                    ),
+                    None,
+                ),
+                Some(None) if disabled => report(
+                    Grade::Ok,
+                    "idle lock",
+                    "idle locking is disabled by config ([idle] lock_timeout = 0): this \
+                     desktop does not lock itself on idle by choice"
                         .into(),
                     None,
                 ),
+                Some(None) => {
+                    let lock = match shell_idle_lock() {
+                        Some(seconds) => format!("lock after {seconds} seconds"),
+                        None => "lock after 15 minutes".to_string(),
+                    };
+                    report(
+                        Grade::Ok,
+                        "idle lock",
+                        format!(
+                            "the shell's idle watcher is running: {lock}, screens off a \
+                             minute later, lock before sleep"
+                        ),
+                        None,
+                    )
+                }
                 None => report(
                     Grade::Warn,
                     "idle lock",
@@ -3359,6 +3424,26 @@ mod tests {
             ),
             Some("idle watcher stopped: compositor went away".to_string())
         );
+    }
+
+    /// The shell's [idle] section is optional and partial-tolerant: a
+    /// config that predates it, or names only some keys, must read as
+    /// "the defaults run" rather than as an error, because that is
+    /// exactly how the shell reads it. A 0 is not missing — it is the
+    /// user's "never lock on idle", and doctor's grading branches on
+    /// the difference.
+    #[test]
+    fn the_shells_idle_config_is_optional_until_it_says_zero() {
+        // nothing configured: the defaults run
+        assert_eq!(configured_idle_lock(""), None);
+        assert_eq!(configured_idle_lock("[notifications]\ndnd = true\n"), None);
+        // a partial section: only one key named is still a valid config
+        assert_eq!(configured_idle_lock("[idle]\nscreen_off_timeout = 60\n"), None);
+        assert_eq!(configured_idle_lock("[idle]\nlock_timeout = 600\n"), Some(600));
+        // the disabled lock: a fact about a choice, not an absence
+        assert_eq!(configured_idle_lock("[idle]\nlock_timeout = 0\n"), Some(0));
+        // a file that does not parse is the shell's default too
+        assert_eq!(configured_idle_lock("[idle\nlock_timeout = 600"), None);
     }
 
     /// `systemctl show` answers for many units in one flat stream, and

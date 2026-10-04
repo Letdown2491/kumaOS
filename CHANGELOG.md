@@ -23,6 +23,17 @@ differently. Why it changed belongs in the commit that made it.
   (`kuma doctor` names it, and `sudo cp /usr/etc/greetd/config.toml
   /etc/greetd/config.toml` takes the flip by hand).
 
+### Changed
+
+- **Doctor's idle check knows about the settings.** The check still
+  fails when the shell's idle watcher is down, but its text no longer
+  claims the timeouts are compiled into the shell — they are the
+  defaults, changed in the settings panel or
+  `~/.config/kuma-shell/config.toml`'s `[idle]` keys, and the check now
+  reads the same file: it reports the machine's actual timeouts rather
+  than the defaults, and a deliberately disabled lock (`lock_timeout =
+  0`) is graded as a choice rather than a failure.
+
 ## v44.4.0 (2026-10-04)
 
 ### Fixed
