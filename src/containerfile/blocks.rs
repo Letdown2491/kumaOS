@@ -484,14 +484,16 @@ hotkey-overlay {
 /// greeter's cache pointed at a directory of its own. The greeter
 /// renders the default wallpaper and theme (it cannot know the user
 /// before login) and reads only image paths — the one thing it writes
-/// is fontconfig's cache, and the greetd account's home is not a place
-/// the image guarantees is writable. Its own cache directory (created
-/// at boot by tmpfiles.d/kuma-greeter.conf, 0700 greetd) keeps the
-/// login screen from ever fighting SELinux over a home it should not
-/// own. Wallpaper, fonts and theme need nothing here: they read image
-/// paths.
+/// is its cache (fontconfig plus Mesa's shader caches). The greetd
+/// account's home is not a place the image guarantees is writable, and
+/// /var/cache carries the var_t label xdm_t may not create under;
+/// /var/lib/greetd is already xdm_var_lib_t, the type xdm_t owns. Its
+/// cache directory under there (created at boot by
+/// tmpfiles.d/kuma-greeter.conf, 0700 greetd) keeps the login screen
+/// from ever fighting SELinux over a home it should not own.
+/// Wallpaper, fonts and theme need nothing here: they read image paths.
 pub(crate) const GREETER_SESSION: &str = r#"#!/usr/bin/env bash
-export XDG_CACHE_HOME=/var/cache/kuma-greeter
+export XDG_CACHE_HOME=/var/lib/greetd/cache
 exec niri -c /usr/share/kumaos/greeter-niri.kdl -- /usr/bin/kuma-greeter
 "#;
 
@@ -510,7 +512,7 @@ RestartSec=2
 /// See GREETER_SESSION for why the greeter cannot write a default
 /// cache location.
 pub(crate) const GREETER_TMPFILES: &str =
-    "d /var/cache/kuma-greeter 0700 greetd greetd -\n";
+    "d /var/lib/greetd/cache 0700 greetd greetd -\n";
 
 /// What starts a session, and where each greeter reads it from.
 ///
