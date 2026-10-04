@@ -6,6 +6,23 @@ Entries land with the change they describe; the next tag takes this section
 as its release notes. Say what changed and what a reader has to do
 differently. Why it changed belongs in the commit that made it.
 
+### Added
+
+- **The login screen is kuma-greeter.** kumaUI's graphical greeter
+  replaces tuigreet as the niri desktop's default: greetd now starts a
+  minimal niri (`/usr/share/kumaos/greeter-niri.kdl`) hosting
+  `/usr/bin/kuma-greeter`, built from the same kumaUI build as the
+  shell. It shows the default wallpaper and theme (it cannot know the
+  user before login) and takes free-text usernames; PAM goes through
+  greetd unchanged. A `Restart=on-failure` drop-in brings greetd back
+  in two seconds if the greeter ever dies, and the tuigreet line stays
+  in `/etc/greetd/config.toml` as a comment — reverting is a comment
+  swap from a TTY. Upgrades get all of it through the usual `/etc`
+  merge: an unmodified `/etc/greetd/config.toml` takes the new default
+  on upgrade, while a locally edited one keeps winning over the image
+  (`kuma doctor` names it, and `sudo cp /usr/etc/greetd/config.toml
+  /etc/greetd/config.toml` takes the flip by hand).
+
 ## v44.4.0 (2026-10-04)
 
 ### Fixed

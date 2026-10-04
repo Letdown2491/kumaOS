@@ -9,10 +9,16 @@ RUN --mount=type=cache,target=/var/cache/libdnf5 \
     && dnf -y install --setopt=keepcache=1 --allowerasing mesa-va-drivers-freeworld
 RUN test -d /usr/share/themes/adw-gtk3-dark
 COPY greetd-config.toml /etc/greetd/config.toml
+COPY greetd-restart.conf /usr/lib/systemd/system/greetd.service.d/10-kuma-restart.conf
+COPY kuma-greeter-tmpfiles.conf /usr/lib/tmpfiles.d/kuma-greeter.conf
+COPY greeter-niri.kdl /usr/share/kumaos/greeter-niri.kdl
+RUN niri validate --config /usr/share/kumaos/greeter-niri.kdl
+COPY --chmod=755 kuma-greeter-session /usr/libexec/kuma-greeter-session
 COPY kargs-desktop.toml /usr/lib/bootc/kargs.d/10-kuma-desktop.toml
 COPY niri-extras.kdl /usr/lib/kuma/niri-extras.kdl
 COPY kuma-wallpaper.jpg /usr/share/backgrounds/kuma/kuma-wallpaper.jpg
 COPY --chmod=755 kuma-shell /usr/bin/kuma-shell
+COPY --chmod=755 kuma-greeter /usr/bin/kuma-greeter
 COPY kitty.conf /etc/xdg/kitty/kitty.conf
 RUN rc=0; kitty +runpy "import sys; from kitty.config import load_config; bad = []; load_config('/etc/xdg/kitty/kitty.conf', accumulate_bad_lines=bad); sys.exit('malformed kitty.conf lines: %s' % bad if bad else 0)" 2>/tmp/kitty.err || rc=$?; \
     cat /tmp/kitty.err >&2; \

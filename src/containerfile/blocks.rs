@@ -441,13 +441,76 @@ RUN said=$(bootc container lint 2>&1); rc=$?; \
     exit $rc
 "#;
 
+/// The greeter session. The command is a wrapper, not the greeter
+/// directly: see GREETER_SESSION for what it adds and why.
+///
+/// The tuigreet line stays as a comment — reverting to it is a comment
+/// swap from a TTY, the recovery path when the graphical greeter cannot
+/// log anyone in. Upgrades reach this file through /etc's ordinary
+/// merge: an unmodified config takes the new default on upgrade, a
+/// locally edited one keeps winning over the image (kuma doctor names
+/// it; `sudo cp /usr/etc/greetd/config.toml /etc/greetd/config.toml`
+/// takes the flip by hand).
 pub(crate) const GREETD_CONFIG: &str = r#"[terminal]
 vt = 1
 
 [default_session]
-command = "tuigreet --time --remember --greeting 'Welcome to kumaOS' --cmd niri-session"
+# kuma-greeter: keep the tuigreet line as a commented fallback,
+# reverting is a comment swap from a TTY
+command = "/usr/libexec/kuma-greeter-session"
 user = "greetd"
+# command = "tuigreet --time --remember --greeting 'Welcome to kumaOS' --cmd niri-session"
+# user = "greetd"
 "#;
+
+/// The greeter compositor's niri config, verbatim from kumaUI's
+/// `greeter-niri.kdl`. Minimal on purpose: one layer-shell window, no
+/// keybinds, no session wiring, and `hotkey-overlay` with
+/// `skip-at-startup` so the Important Hotkeys popup never covers the
+/// login fields. Do not add keybinds here — this niri exists to host
+/// the greeter, nothing else.
+pub(crate) const GREETER_NIRI_KDL: &str = r#"// The greeter compositor config: the smallest niri that can host
+// one greeter window. No keybinds, no gestures, no session wiring:
+// greetd launches this niri on the test VT, niri launches
+// kuma-greeter as its startup command, and GREETD_SOCK flows down
+// through the environment. The hotkey overlay is noise on a login
+// screen, so it never shows. Ctrl+Alt+F1 (or F3) still switches
+// VTs, that is compositor-independent.
+hotkey-overlay {
+    skip-at-startup
+}"#;
+
+/// What greetd actually runs: niri hosting kuma-greeter, with the
+/// greeter's cache pointed at a directory of its own. The greeter
+/// renders the default wallpaper and theme (it cannot know the user
+/// before login) and reads only image paths — the one thing it writes
+/// is fontconfig's cache, and the greetd account's home is not a place
+/// the image guarantees is writable. Its own cache directory (created
+/// at boot by tmpfiles.d/kuma-greeter.conf, 0700 greetd) keeps the
+/// login screen from ever fighting SELinux over a home it should not
+/// own. Wallpaper, fonts and theme need nothing here: they read image
+/// paths.
+pub(crate) const GREETER_SESSION: &str = r#"#!/usr/bin/env bash
+export XDG_CACHE_HOME=/var/cache/kuma-greeter
+exec niri -c /usr/share/kumaos/greeter-niri.kdl -- /usr/bin/kuma-greeter
+"#;
+
+/// A broken greeter cannot strand a boot: if kuma-greeter dies, greetd
+/// exits with it, and this drop-in brings the unit back in two seconds.
+/// TTY logins (getty) remain the always-there escape hatch regardless.
+pub(crate) const GREETD_RESTART_DROPIN: &str = r#"# The greeter is the boot: without it a broken login screen strands a
+# machine nobody can log into. getty remains available on the VTs.
+[Service]
+Restart=on-failure
+RestartSec=2
+"#;
+
+/// The greeter's cache directory, created at boot before greetd runs
+/// (sysv order: tmpfiles-setup precedes greetd in graphical.target).
+/// See GREETER_SESSION for why the greeter cannot write a default
+/// cache location.
+pub(crate) const GREETER_TMPFILES: &str =
+    "d /var/cache/kuma-greeter 0700 greetd greetd -\n";
 
 /// What starts a session, and where each greeter reads it from.
 ///
@@ -2890,6 +2953,17 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     let fastfetch = e.stage("fastfetch-config.jsonc", FASTFETCH_CONFIG);
     let fastfetch_logo = e.stage("fastfetch-logo.txt", FASTFETCH_LOGO);
     let wallpaper = e.stage("kuma-wallpaper.jpg", WALLPAPER);
+    // The graphical greeter and everything it reads: the binary is
+    // kumaUI's second binary from the same build as the shell, the
+    // compositor config and the session wrapper are constants above,
+    // the drop-in keeps a crashed greeter from stranding a boot, and
+    // the tmpfiles entry creates its cache directory. See each const
+    // for its why.
+    let greeter_bin = e.supplied("kuma-greeter");
+    let greeter_kdl = e.stage("greeter-niri.kdl", GREETER_NIRI_KDL);
+    let greeter_session = e.stage("kuma-greeter-session", GREETER_SESSION);
+    let greetd_restart = e.stage("greetd-restart.conf", GREETD_RESTART_DROPIN);
+    let greeter_tmpfiles = e.stage("kuma-greeter-tmpfiles.conf", GREETER_TMPFILES);
 
     e.raw("\n");
     // niri's weak deps, which ride in past the package list unless
@@ -2909,6 +2983,14 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     // package put the directory where the four names point.
     e.raw("RUN test -d /usr/share/themes/adw-gtk3-dark\n");
     e.copy(&greetd, "/etc/greetd/config.toml");
+    e.copy(&greetd_restart, "/usr/lib/systemd/system/greetd.service.d/10-kuma-restart.conf");
+    e.copy(&greeter_tmpfiles, "/usr/lib/tmpfiles.d/kuma-greeter.conf");
+    e.copy(&greeter_kdl, "/usr/share/kumaos/greeter-niri.kdl");
+    // The greeter compositor's config is validated at build time like
+    // the session config below: a kdl that stopped parsing ships as a
+    // boot nobody can log in from, so the failure is the build's.
+    e.raw("RUN niri validate --config /usr/share/kumaos/greeter-niri.kdl\n");
+    e.copy_exec(&greeter_session, "/usr/libexec/kuma-greeter-session");
     e.copy(&kargs, "/usr/lib/bootc/kargs.d/10-kuma-desktop.toml");
     e.copy(&niri_extras, "/usr/lib/kuma/niri-extras.kdl");
     e.copy(&wallpaper, "/usr/share/backgrounds/kuma/kuma-wallpaper.jpg");
@@ -2920,6 +3002,10 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     // carried.
     let shell_bin = e.supplied("kuma-shell");
     e.copy_exec(&shell_bin, "/usr/bin/kuma-shell");
+    // The greeter rides the same road: kumaUI's build produces both
+    // binaries, and an image that ships one without the other ships a
+    // greeter config pointing at a binary that is not there.
+    e.copy_exec(&greeter_bin, "/usr/bin/kuma-greeter");
     e.copy(&kitty, "/etc/xdg/kitty/kitty.conf");
     // kitty skips settings it doesn't recognise and starts anyway, so a
     // renamed key ships a silently unthemed terminal — which is exactly

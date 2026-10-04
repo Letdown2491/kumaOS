@@ -44,7 +44,7 @@ else.
 
 | | |
 |---|---|
-| Session | `niri`, `xwayland-satellite`, `greetd`, `tuigreet` |
+| Session | `niri`, `xwayland-satellite`, `greetd`, `kuma-greeter` (tuigreet kept as the comment-swapped fallback) |
 | Shell | `kuma-shell` (bar, notifications, wallpaper, idle, lock, control centre, Nostr Signer) |
 | Terminal and files | `kitty`, `thunar` (+ archive plugin), `file-roller`, `gvfs`, `udiskie`, `7zip`, `unar` |
 | Portals | `xdg-desktop-portal-gtk`, `xdg-desktop-portal-gnome` |

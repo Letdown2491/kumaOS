@@ -171,6 +171,18 @@ pub fn write_context(
                 kuma_binary.display()
             )
         })?;
+        // The greeter is the same build's second binary, and the
+        // image's greetd config points at it: an image whose context
+        // carried the shell but not the greeter would COPY a config
+        // naming a binary that is not there.
+        let greeter_sibling = parent.join("kuma-greeter");
+        std::fs::copy(&greeter_sibling, dir.join("kuma-greeter")).with_context(|| {
+            format!(
+                "staging kuma-greeter: it is not beside the running kuma ({}); a \
+                 desktop image needs the release's binaries together",
+                kuma_binary.display()
+            )
+        })?;
     }
     if config.nostr.enable {
         let mut names = vec!["kuma-nostrd", "kuma-nostr"];
@@ -229,6 +241,7 @@ mod tests {
         // The shell and the nostr siblings are as fake as the stub, and
         // as stable.
         std::fs::write(bin_home.path().join("kuma-shell"), "not really kuma-shell\n").unwrap();
+        std::fs::write(bin_home.path().join("kuma-greeter"), "not really kuma-greeter\n").unwrap();
         if cfg.nostr.enable {
             let mut names = vec!["kuma-nostrd", "kuma-nostr"];
             if cfg.nostr.relay.enable {

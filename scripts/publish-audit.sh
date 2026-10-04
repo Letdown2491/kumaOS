@@ -121,11 +121,15 @@ if [ -f "$mnt/usr/bin/kuma" ]; then
     # failed condition, and a binary full of paths prints "embeds no
     # build paths". Reading everything is what makes the pass mean
     # something; there is no `2>/dev/null` either, for the same reason.
-    for bin in kuma kuma-shell; do
+    # kuma-shell and kuma-greeter ride into the image beside kuma
+    # (COPY --chmod=755 kuma-shell /usr/bin/kuma-shell and the greeter
+    # the same), so the leak applies to them the same. An image without
+    # them skips the check: nothing shipped, nothing to name.
+    for bin in kuma kuma-shell kuma-greeter; do
         # kuma-shell rides into the image beside kuma (COPY --chmod=755
-        # kuma-shell /usr/bin/kuma-shell), so the leak applies to it the
-        # same. An image without it skips the check: nothing shipped,
-        # nothing to name.
+        # kuma-shell /usr/bin/kuma-shell), so the leak applies to it and
+        # the greeter the same. An image without them skips the check:
+        # nothing shipped, nothing to name.
         [ -f "$mnt/usr/bin/$bin" ] || continue
         if paths=$(grep -aoE '/(var/)?home/[a-z_][a-z0-9_-]*/' "$mnt/usr/bin/$bin" |
             grep -v linuxbrew | sort -u) && [ -n "$paths" ]; then

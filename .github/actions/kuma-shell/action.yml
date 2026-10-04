@@ -1,7 +1,7 @@
 name: kuma-shell
 description: >-
-  Build kuma-shell from the kumaui tree at a pinned commit and stage it
-  beside a kuma binary.
+  Build kuma-shell (and its sibling bin kuma-greeter) from the kumaui
+  tree at a pinned commit and stage them beside a kuma binary.
 
 # `kuma build` composes a desktop image only when kuma-shell sits beside
 # the kuma binary it runs: write_context copies the sibling into the build
@@ -33,7 +33,7 @@ inputs:
     description: >-
       kumaui commit to build the shell from.
     required: false
-    default: a282459ad9d0498cc86797328668f78b0aa72c61
+    default: 03a2d83d7021b076941a2331867d2c4088ac232d
 
 runs:
   using: composite
@@ -97,14 +97,20 @@ runs:
         # caller's stable: RUSTUP_TOOLCHAIN is unset so rustup reads the
         # tree's file and installs what it names.
         unset RUSTUP_TOOLCHAIN
-        # Release, always: this binary runs as the guest's session and
-        # ships in published images, and a debug gpui build is a memory
-        # hog no session should be handed. There is no debug shell to
-        # stage, here or anywhere.
+        # Release, always: these binaries run as the guest's session and
+        # greeter and ship in published images, and a debug gpui build is
+        # a memory hog no session should be handed. There is no debug
+        # shell to stage, here or anywhere.
         cd "$GITHUB_WORKSPACE/kumaui"
+        # One package, two binaries: kuma-greeter is kuma-shell's
+        # sibling bin (src/bin/kuma-greeter.rs), and the image's greetd
+        # config points at both roads — the shell as the session, the
+        # greeter behind niri on VT1.
         cargo build --locked --release -p kuma-shell
         # Nothing on a runner can run a GUI binary, so "it works" here can
-        # only mean it exists and is executable where the next step looks.
+        # only mean both exist and are executable where the next step looks.
         [ -x "target/release/kuma-shell" ]
+        [ -x "target/release/kuma-greeter" ]
         mkdir -p "$GITHUB_WORKSPACE/${KUMA_DIR%/}"
-        cp target/release/kuma-shell "$GITHUB_WORKSPACE/${KUMA_DIR%/}/kuma-shell"
+        cp target/release/kuma-shell target/release/kuma-greeter \
+           "$GITHUB_WORKSPACE/${KUMA_DIR%/}/"

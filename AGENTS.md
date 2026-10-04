@@ -52,9 +52,10 @@ by hand for the verification pass, and put the service back after. Two
 shells cannot share the layer surfaces or the logind lock listener, so
 a quiet moment is a requirement, not a preference.
 
-An image build needs the release binary beside the running kuma in the
-build context (`kuma-shell`, with `kuma-nostrd`/`kuma-nostr` when the
-nostr layer is enabled) — the same road every release ships.
+An image build needs the release binaries beside the running kuma in
+the build context (`kuma-shell` and `kuma-greeter`, with
+`kuma-nostrd`/`kuma-nostr` when the nostr layer is enabled) — the same
+road every release ships.
 
 ## The gpui host API's loaded facts (each learned the hard way)
 
