@@ -1954,19 +1954,11 @@ fn shell_idle_broken() -> Option<Option<String>> {
     // A running unit's MainPID is its process; "0" (or empty) is
     // systemd's answer for none — leave the read unscoped rather than
     // asking the journal for a process that does not exist.
-    let mut args: Vec<String> = [
-        "journalctl",
-        "--user",
-        "-b",
-        "-u",
-        "kuma-shell.service",
-        "--no-pager",
-        "-o",
-        "cat",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect();
+    let mut args: Vec<String> =
+        ["journalctl", "--user", "-b", "-u", "kuma-shell.service", "--no-pager", "-o", "cat"]
+            .into_iter()
+            .map(String::from)
+            .collect();
     if !pid.is_empty() && pid != "0" {
         args.push(format!("_PID={pid}"));
     }
