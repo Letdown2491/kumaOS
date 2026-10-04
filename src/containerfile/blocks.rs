@@ -519,19 +519,20 @@ hotkey-overlay {
 pub(crate) const GREETER_SESSION: &str = r#"#!/usr/bin/env bash
 export XDG_CACHE_HOME=/var/lib/greetd/cache
 
-# The greeter chain's stderr (niri's protocol errors, kuma-greeter's
-# own log lines) goes to VT1 and dies with the session: the journal
-# never sees why a login screen failed. Both processes append to this
-# log instead. It lives under /var/lib/greetd — xdm_var_lib_t, the
-# type xdm_t owns — because /var/log is var_log_t and an xdm_t append
-# there fails the redirect outright: the file stays empty and niri
-# never starts (measured: empty log, death inside a second).
-# RUST_LOG=debug is a diagnosis aid for the smoke failure ("greeter
-# exited without creating a session"); drop to info once read.
-LOG=/var/lib/greetd/cache/greeter.log
+# The greeter chain's stderr — bash's own errors, niri's protocol
+# errors, kuma-greeter's log lines — goes to VT1 and dies with the
+# session, so the journal never sees why a login screen failed. One
+# redirect at the top retargets the whole chain to the journal via
+# logger: the journal is what the smoke's failure dump reads, it
+# survives boots with timestamps, and no file permission can mute it
+# (a log FILE can: /var/log is var_log_t, which xdm_t cannot write,
+# and a 0700 greetd dir cannot be read back by the smoke's ssh user —
+# both measured, Oct 04). RUST_LOG=debug stays until the greeter
+# smoke passes; drop it to info after.
 export RUST_LOG=debug
+exec 2> >(exec logger -t kuma-greeter)
 
-niri -c /usr/share/kumaos/greeter-niri.kdl >>"$LOG" 2>&1 &
+niri -c /usr/share/kumaos/greeter-niri.kdl &
 niri_pid=$!
 cleanup() { kill "$niri_pid" 2>/dev/null; }
 trap cleanup EXIT
@@ -547,7 +548,7 @@ for _ in $(seq 1 100); do
 done
 [ -n "$sock" ] || exit 1
 
-WAYLAND_DISPLAY=${sock##*/} /usr/bin/kuma-greeter >>"$LOG" 2>&1
+WAYLAND_DISPLAY=${sock##*/} /usr/bin/kuma-greeter
 rc=$?
 # the greeter only exits on success or crash: either way hand the
 # session back to greetd immediately, don't make it wait out its
@@ -571,9 +572,7 @@ RestartSec=2
 /// The greeter's cache directory, created at boot before greetd runs
 /// (sysv order: tmpfiles-setup precedes greetd in graphical.target).
 /// See GREETER_SESSION for why the greeter cannot write a default
-/// cache location. The greeter's log file lives under this directory
-/// too (see GREETER_SESSION): xdm_var_lib_t is the one type xdm_t can
-/// write, so the log rides the directory that already ships.
+/// cache location.
 pub(crate) const GREETER_TMPFILES: &str = "d /var/lib/greetd/cache 0700 greetd greetd -\n";
 
 /// What starts a session, and where each greeter reads it from.

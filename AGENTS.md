@@ -109,9 +109,12 @@ road every release ships.
 - The greeter chain's stderr (niri's protocol errors, kuma-greeter's
   log lines) goes to VT1 and dies with the greetd session: the
   journal never sees why a login screen failed, and "greeter exited
-  without creating a session" is greetd's whole testimony. The chain
-  appends to `/var/log/kuma-greeter.log` (tmpfiles-owned, 0600
-  greetd) — that file is the reader, not `journalctl`.
+  without creating a session" is greetd's whole testimony. The
+  wrapper retargets the chain to the journal with `exec 2> >(logger
+  -t kuma-greeter)` — the journal is what the failure dump reads. A
+  log FILE cannot work there: /var/log is var_log_t, which xdm_t
+  cannot write, and the 0700 greetd cache dir cannot be read back by
+  the smoke's ssh user (both measured, Oct 04).
 - The audit gate reads the last 50 commit messages as well as the
   tree: a fix that quotes what it scrubbed puts the name back into
   history where no later commit can reach — rewriting costs a
