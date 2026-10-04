@@ -1,6 +1,6 @@
 [package]
 name = "kuma"
-version = "44.4.0"
+version = "44.5.0"
 edition = "2021"
 # Set by sha-crypt 0.6, the highest floor anything here asks for. Without
 # it, an older toolchain fails somewhere inside a dependency instead of
