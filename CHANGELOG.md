@@ -23,6 +23,14 @@
   "Nothing to reclaim" — both true, together a lie. Clean now says
   which container holds which image, so reclaiming it is one `podman
   rm` away.
+- **The shell logs where its startup milliseconds go.** The startup
+  path now logs each boot phase — entering gpui, app closure, session
+  connected, settings loaded, surfaces up — with elapsed
+  milliseconds, so a slow login can be priced from the journal
+  (`journalctl --user -u kuma-shell -b | grep 'boot:'`) instead of
+  guessed at. First warm login on the record prices the whole
+  shell-side path at 16 ms: the blank-second cost lives in the
+  handoff chain, not the shell.
 
 Entries land with the change they describe; the next tag takes this section
 as its release notes. Say what changed and what a reader has to do
