@@ -383,7 +383,10 @@ jobs:
         if: env.ATTACH_ISO == 'true' && steps.what.outputs.publish == 'true'
         env:
           QEMU_VGA: virtio-vga
-          QEMU_DISPLAY: none
+          # vnc, not none: a displayless guest has no connected
+          # connector, so niri has no output and the greeter cannot
+          # map its surface. See install-boot/action.yml.
+          QEMU_DISPLAY: vnc=127.0.0.1:59
         run: |
           set -euo pipefail
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \

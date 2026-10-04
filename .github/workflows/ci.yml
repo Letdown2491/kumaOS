@@ -546,7 +546,11 @@ jobs:
       - name: smoke (iso)
         env:
           QEMU_VGA: virtio-vga
-          QEMU_DISPLAY: none
+          # vnc, not none: a displayless guest has no connected
+          # connector, so niri has no output and the greeter cannot
+          # map its surface. See install-boot/action.yml for the
+          # full account (measured 2026-10-04).
+          QEMU_DISPLAY: vnc=127.0.0.1:59
         run: ./scripts/smoke.sh --iso --keep niri
 
       - name: what the live session said

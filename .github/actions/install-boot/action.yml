@@ -167,7 +167,15 @@ runs:
       shell: bash
       env:
         QEMU_VGA: virtio-vga
-        QEMU_DISPLAY: none
+        # vnc, not none: with no display frontend the guest's virtio-gpu
+        # reports every connector disconnected, niri comes up with zero
+        # outputs, and the greeter's layer surface never maps — the app
+        # quits cleanly (rc=0) and greetd reads "greeter exited without
+        # creating a session" (measured 2026-10-04). A VNC server nobody
+        # connects to gives the connector a scanout, needs no host GPU,
+        # and no DRM node the way egl-headless does. Port 59 (5959) to
+        # stay clear of anything a runner already holds.
+        QEMU_DISPLAY: vnc=127.0.0.1:59
         SMOKE_ARGS: ${{ inputs.smoke_args }}
       run: ./scripts/smoke.sh $SMOKE_ARGS
 

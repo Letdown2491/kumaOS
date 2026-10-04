@@ -104,8 +104,17 @@ road every release ships.
   probe that needs a live process asks the runner's timing unless
   the process is guaranteed alive; and a fix's report that claims
   more than its diff gets caught by the gate that runs the diff.
-- `egl-headless` wants a host DRM node a runner lacks. The GPU-less
-  console combo is `virtio-vga` plus `none`.
+- `egl-headless` wants a host DRM node a runner lacks. But the
+  "displayless" `QEMU_DISPLAY: none` is worse in a subtler way: with
+  no display frontend the guest's virtio-gpu reports every connector
+  DISCONNECTED, so niri comes up with zero outputs and any
+  layer-shell client (the greeter) cannot map its window — gpui
+  quits when its last window closes, rc=0, and greetd reads "greeter
+  exited without creating a session". The greeter was never buggy;
+  the VM had no screen. The combo is `virtio-vga` plus
+  `vnc=127.0.0.1:59`: a VNC server nobody connects to gives the
+  connector a scanout, needs no host GPU and no DRM node (measured,
+  Oct 04).
 - The greeter chain's stderr (niri's protocol errors, kuma-greeter's
   log lines) goes to VT1 and dies with the greetd session: the
   journal never sees why a login screen failed, and "greeter exited
