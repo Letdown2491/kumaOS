@@ -31,6 +31,17 @@
   guessed at. First warm login on the record prices the whole
   shell-side path at 16 ms: the blank-second cost lives in the
   handoff chain, not the shell.
+- **The doctor's idle check asks the running shell, not the boot.**
+  The check read the whole boot's journal for an idle-watcher
+  failure, and success is silent — so a shell that exited mid-boot
+  (a logout teardown, a crash `Restart=always` recovered) left its
+  watcher's death on record, and every later check that boot graded
+  the live shell by its predecessor's corpse. Found on motherbox the
+  same day the boot-phase logs landed: a logout/login verification
+  run failed the idle lock with a broken pipe from the pre-logout
+  instance. The journal read is scoped to the unit's main PID now;
+  nothing a reader does differently — a failure it reports is the
+  running shell's own.
 
 Entries land with the change they describe; the next tag takes this section
 as its release notes. Say what changed and what a reader has to do

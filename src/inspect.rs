@@ -1924,13 +1924,37 @@ fn idle_watcher_failure(log: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The idle watcher's failure line, if this boot's journal carries one.
+/// The idle watcher's failure line, if the running shell's journal
+/// carries one.
 ///
 /// Outer `None` — the journal could not be read, which is not a
 /// finding. Inner `Some(line)` — the watcher logged a failure. Inner
 /// `None` — the journal is readable and says nothing is wrong.
+///
+/// The read is scoped to the unit's main PID, not to the boot: a
+/// shell that exited mid-boot — a logout teardown, a crash that
+/// `Restart=always` recovered — logged its watcher's death, and the
+/// boot's journal keeps that line forever after. The "shell" check
+/// just graded *this* process active, so *this* process is the
+/// witness; a dead instance cannot testify about the live one. A unit
+/// that names no PID falls back to the whole boot, where the older,
+/// conservative reading applies.
 fn shell_idle_broken() -> Option<Option<String>> {
-    let log = host_output_any(&[
+    let pid = host_output_any(&[
+        "systemctl",
+        "--user",
+        "show",
+        "kuma-shell.service",
+        "-p",
+        "MainPID",
+        "--value",
+    ])
+    .ok()?;
+    let pid = pid.trim();
+    // A running unit's MainPID is its process; "0" (or empty) is
+    // systemd's answer for none — leave the read unscoped rather than
+    // asking the journal for a process that does not exist.
+    let mut args: Vec<String> = [
         "journalctl",
         "--user",
         "-b",
@@ -1939,8 +1963,14 @@ fn shell_idle_broken() -> Option<Option<String>> {
         "--no-pager",
         "-o",
         "cat",
-    ])
-    .ok()?;
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    if !pid.is_empty() && pid != "0" {
+        args.push(format!("_PID={pid}"));
+    }
+    let log = host_output_any(&args).ok()?;
     Some(idle_watcher_failure(&log))
 }
 
