@@ -646,6 +646,10 @@ jobs:
             exit 1
           fi
           if grep -rIlqE "$NEEDLE" --exclude-dir=.git . ; then
+            # the match names itself: a red run that says only "the
+            # builder is named" sent us hunting a regex nobody could
+            # read. The file list is not secret — the needle is.
+            grep -rIlE "$NEEDLE" --exclude-dir=.git . | sed 's/^/  /' >&2
             echo "::error::a tracked file names the builder"
             exit 1
           fi
