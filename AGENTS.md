@@ -85,6 +85,13 @@ road every release ships.
 
 ## The vm smoke's loaded facts (44.4.0)
 
+- Auditing "does the distro have X" must grep `src/containerfile/blocks.rs`
+  — the package lists AND the session niri KDL live there, so keybinds
+  (screenshot, recording, media) are invisible to a search of the shell's
+  source tree. An audit that missed them filed a screenshot issue for a
+  feature that shipped (Mod+Print: grim | slurp | swappy, blocks.rs ~2418;
+  closed within the hour).
+
 - A `-u` unit filter misses the "Started" line: `journalctl -u` filters
   by `_SYSTEMD_UNIT`, and a start line belongs to the manager that
   wrote it, not the unit it names. The user manager forwards to the
