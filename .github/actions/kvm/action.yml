@@ -46,14 +46,16 @@ runs:
         fi
         if ! ls /dev/dri/renderD* >/dev/null 2>&1; then
             echo "   .. no render node and no vgem module; building vgem out of tree"
-            sudo apt-get install -y -qq "linux-headers-$(uname -r)" build-essential curl
+            sudo apt-get install -y -qq "linux-headers-$(uname -r)" build-essential
             vgem_dir=/tmp/vgem-build
             mkdir -p "$vgem_dir"
-            base="https://raw.githubusercontent.com/torvalds/linux/v6.17/drivers/gpu/drm/vgem"
-            for f in vgem_drv.c vgem_drv.h vgem_fence.c; do
-                curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
-                    "$base/$f" -o "$vgem_dir/$f" || echo "vgem source unavailable; continuing without a render node"
-            done
+            # The sources are vendored in the repo (vgem/ next to this
+            # action, torvalds/linux v6.17 verbatim): the fetch used to
+            # be anonymous curl against raw.githubusercontent.com, and
+            # GitHub rate-limits that (HTTP 429) from Actions egress —
+            # the 2026-10-05 iso lap died on it. A repo-local copy has
+            # no network to lose.
+            cp "${{ github.action_path }}/vgem/"*.{c,h} "$vgem_dir/"
             if [ -f "$vgem_dir/vgem_drv.c" ]; then
                 printf 'vgem-y := vgem_drv.o vgem_fence.o\nobj-m += vgem.o\n' > "$vgem_dir/Makefile"
                 make -C "/lib/modules/$(uname -r)/build" M="$vgem_dir" modules -j4 -s \
