@@ -75,7 +75,7 @@
 # has no disk to inspect and its account has no password for ssh to use.
 #
 # Env: KUMA (default target/debug/kuma), QEMU_DISPLAY (default
-#      egl-headless,gl=on), QEMU_VGA (default virtio-gpu-gl).
+#      egl-headless), QEMU_VGA (default virtio-vga-gl).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -86,35 +86,32 @@ KUMA=${KUMA:-target/debug/kuma}
 # then finds no GBM allocator on a 3D-less virtio-gpu — and a compositor
 # with zero outputs closes the greeter's layer surface the moment it asks
 # (measured 2026-10-05 in the VM: greeter exits rc=0 within a second,
-# greetd reads "greeter exited without creating a session"). virtio-gpu-gl
-# hands the guest virgl, whose guest driver mesa can allocate through on
-# llvmpipe alone: LIBGL_ALWAYS_SOFTWARE keeps host GL out of a real GPU,
-# where a bad guest submission could take the host session down.
+# greetd reads "greeter exited without creating a session"). The guest's
+# GL is virgl's: virtio-vga-gl hands the guest a 3D device, whose guest
+# driver mesa allocates through on llvmpipe alone — no host GPU needed.
 #
-# The display backend is gtk,gl=on against one Xvfb this script starts
-# itself, not egl-headless: egl-headless builds its GL context through a
-# host DRM render node ("egl: no drm render node available" measured on a
-# runner and on a DRM-less local mount namespace), and a CI runner has no
-# GPU. Xvfb serves GLX on llvmpipe with no DRM node at all.
+# The display backend is plain egl-headless — no gl=on. This is the
+# configuration the runner's full battery last went green with
+# (db1c650, 2026-10-03: image, boot, install, iso, dead-disk, and
+# hibernate all passed on a hosted runner), and the distinction is not
+# cosmetic: with gl=on the DISPLAY builds its GL context through a host
+# DRM render node and dies without one ("egl: no drm render node
+# available", measured on a runner), while without it the display is a
+# plain scanout surface and only the DEVICE touches EGL — lazily, on
+# the guest's first virgl submit, through a path that demonstrably
+# works nodeless. The runner cannot be given a render node: its azure
+# kernel's modules-extra package carries no vgem (measured 2026-10-05:
+# the package installs, modprobe vgem still fails).
 #
-# The display backend is egl-headless,gl=on — headless on purpose. The
-# alternative this script shipped for one day (gtk,gl=on against an Xvfb
-# the script started) is a fragile stack on a GPU-less host, measured
-# 2026-10-05 three ways: qemu died at the guest's first mode-set with
-# "eglMakeCurrent failed: EGL_BAD_ACCESS" followed by an epoxy assert
-# (boot stage, twice locally and once on the runner), and when the X
-# server was broken rather than flaky, qemu refused to start outright
-# ("OpenGL is not supported by display backend 'gtk'"). egl-headless has
-# no X connection to lose and no GTK thread racing for the context.
-#
-# egl-headless builds its GL context through a host DRM render node, and
-# a CI runner has no GPU — "no drm render node available" (measured on a
-# runner and on a DRM-less local mount namespace). The node is vgem's:
-# a virtual GEM allocator, no GPU needed, one modprobe away. With only a
-# vgem node plus LIBGL_ALWAYS_SOFTWARE, the same boot that killed qemu
-# three times ran six minutes and brought the greeter up (measured).
-QEMU_DISPLAY=${QEMU_DISPLAY:-egl-headless,gl=on}
-QEMU_VGA=${QEMU_VGA:-virtio-gpu-gl}
+# The two display backends this script shipped between those points
+# both died on a GPU-less host and are recorded to keep them dead:
+# gtk,gl=on against an Xvfb the script started — qemu died at the
+# guest's first mode-set with "eglMakeCurrent failed: EGL_BAD_ACCESS"
+# followed by an epoxy assert (boot stage, twice locally and once on
+# the runner) — and egl-headless,gl=on on a vgem node, which is green
+# locally and impossible on the runner for the reason above.
+QEMU_DISPLAY=${QEMU_DISPLAY:-egl-headless}
+QEMU_VGA=${QEMU_VGA:-virtio-vga-gl}
 
 # The runner has no GPU: without LIBGL_ALWAYS_SOFTWARE, mesa's EGL refuses
 # the software path and qemu dies at its first boot ("OpenGL is not
@@ -124,9 +121,12 @@ QEMU_VGA=${QEMU_VGA:-virtio-gpu-gl}
 # first boot while iso, which had the variable inline, ran 21 minutes).
 export LIBGL_ALWAYS_SOFTWARE=1
 
-# egl-headless allocates through a DRM render node; a GPU-less machine
-# has none until vgem provides one. On a host with a real GPU this is a
-# no-op (the node exists; vgem is neither needed nor loaded).
+# Only a display that asks for GL needs a render node (the virgl device's
+# own EGL path does not). A GPU-less machine has none until vgem provides
+# one; on a host with a real GPU this is a no-op (the node exists; vgem
+# is neither needed nor loaded). The runner's kernels cannot load vgem,
+# so this must never fire for the default display — and does not: the
+# case below only calls it when QEMU_DISPLAY itself carries gl=on.
 ensure_render_node() {
     ls /dev/dri/renderD* >/dev/null 2>&1 && return 0
     echo "   .. no render node; loading vgem"
@@ -3454,9 +3454,9 @@ for file in examples/*.toml; do
     port=$((port + 1))
     example_file=$file
 
-    # The GL stack's one prerequisite: a render node for egl-headless to
-    # allocate through (a no-op wherever a GPU already provided one).
-    ensure_render_node
+    # Only a display that asks for GL needs a render node; the default
+    # (and the runner) must never depend on one.
+    case "$QEMU_DISPLAY" in *gl=on*) ensure_render_node ;; esac
     # The boot stage builds from the example plus a [user] block, not from
     # the example as committed.
     #
