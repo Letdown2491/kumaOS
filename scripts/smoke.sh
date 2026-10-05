@@ -3203,7 +3203,10 @@ smoke_boot() {
     local ssh_opts=(-p "$port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
                     -o ConnectTimeout=5 -o LogLevel=ERROR -o BatchMode=yes)
     # `kuma vm` writes this only when the host had no key of its own.
-    [ -f "$dir/ssh-key" ] && ssh_opts+=(-i "$dir/ssh-key")
+    # A kept key may predate the 0600 rule: ssh refuses a world-readable
+    # private key outright ("bad permissions", which BatchMode then
+    # swallows), so heal the mode here rather than trust whoever wrote it.
+    [ -f "$dir/ssh-key" ] && chmod 600 "$dir/ssh-key" && ssh_opts+=(-i "$dir/ssh-key")
     ssh_opts+=(kuma@127.0.0.1)
     # shellcheck disable=SC2029  # client-side expansion is the point: every
     # caller builds the command here and wants the guest to run it literally.

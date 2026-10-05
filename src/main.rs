@@ -4104,6 +4104,16 @@ fn vm_ssh_key(output: &Path) -> Option<String> {
         ])
         .ok()?;
     }
+    // The private half is only ever meant for the caller of this
+    // command, whoever that is: a key that ships world-readable makes
+    // ssh refuse it outright — "bad permissions" — and the VM
+    // unopenable over its own key. Heal rather than assume, because
+    // the key may predate this run (a reused VM directory) and
+    // whatever wrote it may not have agreed on the mode.
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(&private).ok()?.permissions();
+    perms.set_mode(0o600);
+    std::fs::set_permissions(&private, perms).ok()?;
     std::fs::read_to_string(&public).ok()
 }
 
