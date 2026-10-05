@@ -75,7 +75,7 @@
 # has no disk to inspect and its account has no password for ssh to use.
 #
 # Env: KUMA (default target/debug/kuma), QEMU_DISPLAY (default gtk,gl=on),
-#      QEMU_VGA (default virtio-gpu-gl), QEMU_XVFB (default "xvfb-run -a").
+#      QEMU_VGA (default virtio-gpu-gl), QEMU_XVFB_NUM (default 77).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -91,22 +91,39 @@ KUMA=${KUMA:-target/debug/kuma}
 # llvmpipe alone: LIBGL_ALWAYS_SOFTWARE keeps host GL out of a real GPU,
 # where a bad guest submission could take the host session down.
 #
-# The display backend is Xvfb, not egl-headless: both give qemu a GL
-# context, but egl-headless builds its context through a host DRM render
-# node ("egl: no drm render node available" measured on a runner and on a
-# DRM-less local mount namespace), and a CI runner has no GPU. Xvfb serves
-# GLX on llvmpipe with no DRM node at all.
+# The display backend is gtk,gl=on against one Xvfb this script starts
+# itself, not egl-headless: egl-headless builds its GL context through a
+# host DRM render node ("egl: no drm render node available" measured on a
+# runner and on a DRM-less local mount namespace), and a CI runner has no
+# GPU. Xvfb serves GLX on llvmpipe with no DRM node at all.
+#
+# Xvfb is started once for the whole run, on purpose: the alternative
+# (xvfb-run around each qemu) puts a shell between this script and qemu,
+# so $! names the wrapper and every `kill $qemu` below orphans the VM —
+# the cleanup traps, the greenboot reboot probes and the port reuse all
+# assume qemu is the direct child (xvfb-run runs its command as a child,
+# not exec; measured against the script's own kill contract).
 QEMU_DISPLAY=${QEMU_DISPLAY:-gtk,gl=on}
 QEMU_VGA=${QEMU_VGA:-virtio-gpu-gl}
-# Every qemu below runs under xvfb-run so the default display backend has
-# an X server to draw into. Harmless for a QEMU_DISPLAY override that does
-# not want GL; xvfb-run comes with the xorg-x11-server-Xvfb (dnf) or xvfb
-# (apt) package.
-QEMU_XVFB=${QEMU_XVFB:-xvfb-run -a}
-command -v ${QEMU_XVFB%% *} >/dev/null || {
-    echo "smoke: $QEMU_XVFB is missing (dnf install xorg-x11-server-Xvfb / apt-get install xvfb)" >&2
-    exit 1
+QEMU_XVFB_NUM=${QEMU_XVFB_NUM:-77}
+start_xvfb() {
+    # Only a GL display needs X; a caller's QEMU_DISPLAY override does not.
+    [[ "$QEMU_DISPLAY" != gtk,gl=on ]] && return 0
+    command -v Xvfb >/dev/null || {
+        echo "smoke: Xvfb is missing (dnf install xorg-x11-server-Xvfb / apt-get install xvfb)" >&2
+        exit 1
+    }
+    Xvfb ":$QEMU_XVFB_NUM" -screen 0 1280x800x24 >/dev/null 2>&1 &
+    xvfb_pid=$!
+    export DISPLAY=":$QEMU_XVFB_NUM"
+    # DISPLAY is qemu's only window in; without it gtk aborts before the
+    # console socket ever opens and the stage reads as a qemu death.
+    [[ -S /tmp/.X11-unix/X$QEMU_XVFB_NUM ]] || { sleep 2; [[ -S /tmp/.X11-unix/X$QEMU_XVFB_NUM ]] || {
+        echo "smoke: Xvfb did not come up on :$QEMU_XVFB_NUM" >&2
+        exit 1
+    }; }
 }
+stop_xvfb() { [[ -n "${xvfb_pid:-}" ]] && kill "$xvfb_pid" 2>/dev/null; }
 BOOT=0
 ISO=0
 INSTALL=0
@@ -975,7 +992,7 @@ smoke_published() {
             globals=(-global "driver=cfi.pflash01,property=secure,value=on"
                      -global "ICH9-LPC.disable_s3=1")
         fi
-        $QEMU_XVFB qemu-system-x86_64 \
+        qemu-system-x86_64 \
             -enable-kvm -cpu host -smp 4 -m 8192 \
             "${machine[@]}" "${globals[@]}" \
             -drive "if=pflash,format=raw,readonly=on,file=$code" \
@@ -2806,7 +2823,7 @@ dead_disk_run() {
         echo "   .. Secure Boot firmware, Microsoft's keys enrolled: $sb_code"
     fi || bad "cannot stage the OVMF vars"
 
-    $QEMU_XVFB qemu-system-x86_64 \
+    qemu-system-x86_64 \
         -enable-kvm -cpu host -smp 4 -m 8192 \
         -machine q35 \
         -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
@@ -2997,7 +3014,7 @@ smoke_iso() {
     ovmf_vars=${ovmf##* }
     cp "$ovmf_vars" "$dir/vars.fd"
 
-    env LIBGL_ALWAYS_SOFTWARE=1 $QEMU_XVFB qemu-system-x86_64 \
+    env LIBGL_ALWAYS_SOFTWARE=1 qemu-system-x86_64 \
         -enable-kvm -cpu host -smp 4 -m 8192 \
         -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
         -drive "if=pflash,format=raw,file=$dir/vars.fd" \
@@ -3118,7 +3135,7 @@ smoke_boot() {
     ovmf_vars=${ovmf##* }
     cp "$ovmf_vars" "$dir/OVMF_VARS.fd" || bad "cannot stage the OVMF vars"
 
-    env LIBGL_ALWAYS_SOFTWARE=1 $QEMU_XVFB qemu-system-x86_64 \
+    env LIBGL_ALWAYS_SOFTWARE=1 qemu-system-x86_64 \
         -enable-kvm -cpu host -smp 4 -m 8192 \
         -machine q35 \
         -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
@@ -3387,6 +3404,9 @@ for file in examples/*.toml; do
     port=$((port + 1))
     example_file=$file
 
+    # One Xvfb for the whole run, before any stage can ask qemu for a GL
+    # display; stop_xvfb rides the summary's exit below.
+    start_xvfb
     # The boot stage builds from the example plus a [user] block, not from
     # the example as committed.
     #
@@ -3460,6 +3480,7 @@ EOF
 done
 
 note "summary"
+stop_xvfb
 [ ${#PASS[@]} -gt 0 ] && printf '   pass: %s\n' "${PASS[*]}"
 show_warnings
 if [ ${#FAIL[@]} -gt 0 ]; then
