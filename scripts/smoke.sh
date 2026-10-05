@@ -3141,6 +3141,32 @@ smoke_boot() {
         || bad "disk build failed"
     ok "disk built"
 
+    # The same serial console the install and dead-disk stages add to
+    # their raws, and for the same reason: without a console karg a
+    # boot that never arrives produces no evidence. Under egl-headless
+    # it never arrived at all — the GRUB menu drew on the serial and
+    # the countdown never ran for the whole deadline, while the
+    # identical disk with the karg boots to ssh in about a minute
+    # (found 2026-10-05, reproduced on demand both ways). A QCOW2
+    # cannot ride losetup, so the entries are patched through qemu-nbd.
+    sudo qemu-nbd -d /dev/nbd0 >/dev/null 2>&1 || true
+    sudo modprobe nbd max_part=8 2>/dev/null || true
+    if sudo qemu-nbd -c /dev/nbd0 "$disk"; then
+        sleep 1
+        local kboot="$dir/bootmnt"
+        mkdir -p "$kboot"
+        if sudo mount /dev/nbd0p2 "$kboot" 2>/dev/null; then
+            sudo sed -i 's/^options .*/& console=ttyS0/' "$kboot"/loader/entries/*.conf 2>/dev/null || true
+            sudo umount "$kboot"
+        else
+            bad "cannot mount $disk's second partition to add the console karg"
+        fi
+        sudo qemu-nbd -d /dev/nbd0 >/dev/null
+        ok "serial console on the boot entries"
+    else
+        bad "cannot attach $disk over nbd to add the console karg (is the nbd module available?)"
+    fi
+
     # UEFI, because the disk is a kuma install: bootc images are
     # UEFI-only, and a plain qemu invocation boots SeaBIOS, which sat
     # there silent for 420s while the disk was fine. The published stage

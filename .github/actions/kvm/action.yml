@@ -19,9 +19,14 @@ runs:
         # lose — the gtk-on-Xvfb pairing killed qemu three ways, measured
         # 2026-10-05). libegl1/libgl1 stay: egl-headless renders through
         # mesa's software path, and the runner image carries neither lib.
-        sudo apt-get install -y -qq qemu-system-x86 cryptsetup-bin ovmf \
-            libegl1 libgl1 \
+        # qemu-utils: qemu-nbd, which the boot stage uses to add the
+        # console karg its QCOW2 needs. linux-modules-extra: the nbd and
+        # vgem modules both live there, and the runner's azure kernel
+        # ships without it (uname -r names the running flavor exactly).
+        sudo apt-get install -y -qq qemu-system-x86 qemu-utils cryptsetup-bin ovmf \
+            libegl1 libgl1 "linux-modules-extra-$(uname -r)" \
             ${{ inputs.sshpass == 'true' && 'sshpass' || '' }}
+        sudo modprobe nbd max_part=8 || true
 
         # /dev/kvm is present on a hosted runner and the CPU exposes svm;
         # the runner user is simply not in the kvm group, and that is the
