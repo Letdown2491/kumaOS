@@ -74,8 +74,8 @@
 # It talks to the guest over the serial console because installer media
 # has no disk to inspect and its account has no password for ssh to use.
 #
-# Env: KUMA (default target/debug/kuma), QEMU_DISPLAY (default gtk,gl=on),
-#      QEMU_VGA (default virtio-gpu-gl), QEMU_XVFB_NUM (default 77).
+# Env: KUMA (default target/debug/kuma), QEMU_DISPLAY (default
+#      egl-headless,gl=on), QEMU_VGA (default virtio-gpu-gl).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -97,15 +97,24 @@ KUMA=${KUMA:-target/debug/kuma}
 # runner and on a DRM-less local mount namespace), and a CI runner has no
 # GPU. Xvfb serves GLX on llvmpipe with no DRM node at all.
 #
-# Xvfb is started once for the whole run, on purpose: the alternative
-# (xvfb-run around each qemu) puts a shell between this script and qemu,
-# so $! names the wrapper and every `kill $qemu` below orphans the VM —
-# the cleanup traps, the greenboot reboot probes and the port reuse all
-# assume qemu is the direct child (xvfb-run runs its command as a child,
-# not exec; measured against the script's own kill contract).
-QEMU_DISPLAY=${QEMU_DISPLAY:-gtk,gl=on}
+# The display backend is egl-headless,gl=on — headless on purpose. The
+# alternative this script shipped for one day (gtk,gl=on against an Xvfb
+# the script started) is a fragile stack on a GPU-less host, measured
+# 2026-10-05 three ways: qemu died at the guest's first mode-set with
+# "eglMakeCurrent failed: EGL_BAD_ACCESS" followed by an epoxy assert
+# (boot stage, twice locally and once on the runner), and when the X
+# server was broken rather than flaky, qemu refused to start outright
+# ("OpenGL is not supported by display backend 'gtk'"). egl-headless has
+# no X connection to lose and no GTK thread racing for the context.
+#
+# egl-headless builds its GL context through a host DRM render node, and
+# a CI runner has no GPU — "no drm render node available" (measured on a
+# runner and on a DRM-less local mount namespace). The node is vgem's:
+# a virtual GEM allocator, no GPU needed, one modprobe away. With only a
+# vgem node plus LIBGL_ALWAYS_SOFTWARE, the same boot that killed qemu
+# three times ran six minutes and brought the greeter up (measured).
+QEMU_DISPLAY=${QEMU_DISPLAY:-egl-headless,gl=on}
 QEMU_VGA=${QEMU_VGA:-virtio-gpu-gl}
-QEMU_XVFB_NUM=${QEMU_XVFB_NUM:-77}
 
 # The runner has no GPU: without LIBGL_ALWAYS_SOFTWARE, mesa's EGL refuses
 # the software path and qemu dies at its first boot ("OpenGL is not
@@ -113,40 +122,22 @@ QEMU_XVFB_NUM=${QEMU_XVFB_NUM:-77}
 # per-site prefixes are exactly how one of four qemu sites ends up without
 # it (measured Oct 05 — install and dead-disk died instantly at their
 # first boot while iso, which had the variable inline, ran 21 minutes).
-#
-# LP_NUM_THREADS goes with it: llvmpipe's threaded context races qemu's
-# gtk display for MakeCurrent and loses — EGL_BAD_ACCESS, then an epoxy
-# assert kills qemu at the guest's first mode-set (measured twice on the
-# boot stage, local and runner). The same boot with zero llvmpipe threads
-# took the failure count from eighteen warnings to none.
 export LIBGL_ALWAYS_SOFTWARE=1
-export LP_NUM_THREADS=0
-start_xvfb() {
-    # Only a GL display needs X; a caller's QEMU_DISPLAY override does not.
-    [[ "$QEMU_DISPLAY" != gtk,gl=on ]] && return 0
-    command -v Xvfb >/dev/null || {
-        echo "smoke: Xvfb is missing (dnf install xorg-x11-server-Xvfb / apt-get install xvfb)" >&2
+
+# egl-headless allocates through a DRM render node; a GPU-less machine
+# has none until vgem provides one. On a host with a real GPU this is a
+# no-op (the node exists; vgem is neither needed nor loaded).
+ensure_render_node() {
+    ls /dev/dri/renderD* >/dev/null 2>&1 && return 0
+    echo "   .. no render node; loading vgem"
+    sudo modprobe vgem 2>/dev/null || true
+    ls /dev/dri/renderD* >/dev/null 2>&1 || {
+        echo "smoke: no DRM render node and vgem would not provide one" >&2
+        echo "smoke: (the kernel needs vgem: modprobe vgem, or install the modules-extra package)" >&2
         exit 1
     }
-    Xvfb ":$QEMU_XVFB_NUM" -screen 0 1280x800x24 >/dev/null 2>&1 &
-    xvfb_pid=$!
-    export DISPLAY=":$QEMU_XVFB_NUM"
-    # DISPLAY is qemu's only window in; without it gtk aborts before the
-    # console socket ever opens and the stage reads as a qemu death.
-    [[ -S /tmp/.X11-unix/X$QEMU_XVFB_NUM ]] || { sleep 2; [[ -S /tmp/.X11-unix/X$QEMU_XVFB_NUM ]] || {
-        echo "smoke: Xvfb did not come up on :$QEMU_XVFB_NUM" >&2
-        exit 1
-    }; }
 }
-# Never a fatal step. Under `set -euo pipefail` a function whose body is
-# a bare `[[ ]] && cmd` returns 1 when the test fails (pid empty, Xvfb
-# already reaped) — and the caller at the summary would kill the whole
-# run after every assertion had passed (measured: image job, all oks,
-# dead at "== summary", exit 1, no FAIL line).
-stop_xvfb() {
-    [[ -n "${xvfb_pid:-}" ]] && kill "$xvfb_pid" 2>/dev/null
-    return 0
-}
+
 BOOT=0
 ISO=0
 INSTALL=0
@@ -3427,9 +3418,9 @@ for file in examples/*.toml; do
     port=$((port + 1))
     example_file=$file
 
-    # One Xvfb for the whole run, before any stage can ask qemu for a GL
-    # display; stop_xvfb rides the summary's exit below.
-    start_xvfb
+    # The GL stack's one prerequisite: a render node for egl-headless to
+    # allocate through (a no-op wherever a GPU already provided one).
+    ensure_render_node
     # The boot stage builds from the example plus a [user] block, not from
     # the example as committed.
     #
@@ -3503,7 +3494,6 @@ EOF
 done
 
 note "summary"
-stop_xvfb
 [ ${#PASS[@]} -gt 0 ] && printf '   pass: %s\n' "${PASS[*]}"
 show_warnings
 if [ ${#FAIL[@]} -gt 0 ]; then
