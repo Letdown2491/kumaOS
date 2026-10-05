@@ -527,8 +527,7 @@ export XDG_CACHE_HOME=/var/lib/greetd/cache
 # survives boots with timestamps, and no file permission can mute it
 # (a log FILE can: /var/log is var_log_t, which xdm_t cannot write,
 # and a 0700 greetd dir cannot be read back by the smoke's ssh user —
-# both measured, Oct 04). RUST_LOG=debug stays until the greeter
-# smoke passes; drop it to info after.
+# both measured, Oct 04).
 export RUST_LOG=info
 # bash dies on SIGPIPE when a builtin writes a broken pipe: if the
 # logger reader of this redirect ever stalls or dies, the wrapper's
@@ -572,11 +571,13 @@ if [ -z "$sock" ]; then
 fi
 echo >&2 "wrapper: wayland socket up after $((SECONDS - started))s"
 
-# the greeter runs at trace: its own account of WHY the loop ends is
-# the evidence a silent rc=0 quit withholds, and the per-command
-# override keeps niri (which shares the exported RUST_LOG) at info so
-# naga's compile does not flood the journal
-RUST_LOG=trace WAYLAND_DISPLAY=${sock##*/} /usr/bin/kuma-greeter
+# the greeter runs at info: trace was tried (Oct 04) chasing the silent
+# rc=0 quit and proven counterproductive — its naga TRACE flood trips
+# journald's 10000/30s burst and silently drops every later tagged line,
+# wrapper markers included. The INFO-level run is the trustworthy one,
+# and the quit turned out to be the smoke's display config, not the
+# greeter (virtio-gpu-gl, measured Oct 05).
+RUST_LOG=info WAYLAND_DISPLAY=${sock##*/} /usr/bin/kuma-greeter
 rc=$?
 echo >&2 "wrapper: greeter exited rc=$rc after $((SECONDS - started))s"
 # the greeter only exits on success or crash: either way hand the

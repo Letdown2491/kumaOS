@@ -15,7 +15,7 @@ runs:
     - shell: bash
       run: |
         sudo apt-get update -qq
-        sudo apt-get install -y -qq qemu-system-x86 cryptsetup-bin ovmf \
+        sudo apt-get install -y -qq qemu-system-x86 cryptsetup-bin ovmf xvfb \
             ${{ inputs.sshpass == 'true' && 'sshpass' || '' }}
 
         # /dev/kvm is present on a hosted runner and the CPU exposes svm;

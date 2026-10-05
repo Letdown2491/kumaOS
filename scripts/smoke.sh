@@ -74,26 +74,39 @@
 # It talks to the guest over the serial console because installer media
 # has no disk to inspect and its account has no password for ssh to use.
 #
-# Env: KUMA (default target/debug/kuma), QEMU_DISPLAY (default egl-headless),
-#      QEMU_VGA (default virtio-vga-gl).
+# Env: KUMA (default target/debug/kuma), QEMU_DISPLAY (default gtk,gl=on),
+#      QEMU_VGA (default virtio-gpu-gl), QEMU_XVFB (default "xvfb-run -a").
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 KUMA=${KUMA:-target/debug/kuma}
-# Headless but GL-capable: a compositor needs a DRM device with a working
-# GBM allocator, so -display none is not enough for a desktop image.
-# LIBGL_ALWAYS_SOFTWARE keeps guest GL work on llvmpipe, out of the host's
-# GPU driver, where a bad guest submission could otherwise take the host
-# session down with it.
+# Headless and GL-capable: niri's DRM backend refuses a device it cannot
+# allocate through — it skips software EGL renderers for the renderer and
+# then finds no GBM allocator on a 3D-less virtio-gpu — and a compositor
+# with zero outputs closes the greeter's layer surface the moment it asks
+# (measured 2026-10-05 in the VM: greeter exits rc=0 within a second,
+# greetd reads "greeter exited without creating a session"). virtio-gpu-gl
+# hands the guest virgl, whose guest driver mesa can allocate through on
+# llvmpipe alone: LIBGL_ALWAYS_SOFTWARE keeps host GL out of a real GPU,
+# where a bad guest submission could take the host session down.
 #
-# The device is a variable for one reason: egl-headless needs a DRM render
-# node on the HOST, and a CI runner has no GPU. virtio-vga without -gl
-# still gives the guest a virtio-gpu DRM device, so the question a machine
-# without a host GPU has to answer is whether the guest can allocate
-# through it on llvmpipe alone.
-QEMU_DISPLAY=${QEMU_DISPLAY:-egl-headless}
-QEMU_VGA=${QEMU_VGA:-virtio-vga-gl}
+# The display backend is Xvfb, not egl-headless: both give qemu a GL
+# context, but egl-headless builds its context through a host DRM render
+# node ("egl: no drm render node available" measured on a runner and on a
+# DRM-less local mount namespace), and a CI runner has no GPU. Xvfb serves
+# GLX on llvmpipe with no DRM node at all.
+QEMU_DISPLAY=${QEMU_DISPLAY:-gtk,gl=on}
+QEMU_VGA=${QEMU_VGA:-virtio-gpu-gl}
+# Every qemu below runs under xvfb-run so the default display backend has
+# an X server to draw into. Harmless for a QEMU_DISPLAY override that does
+# not want GL; xvfb-run comes with the xorg-x11-server-Xvfb (dnf) or xvfb
+# (apt) package.
+QEMU_XVFB=${QEMU_XVFB:-xvfb-run -a}
+command -v ${QEMU_XVFB%% *} >/dev/null || {
+    echo "smoke: $QEMU_XVFB is missing (dnf install xorg-x11-server-Xvfb / apt-get install xvfb)" >&2
+    exit 1
+}
 BOOT=0
 ISO=0
 INSTALL=0
@@ -962,7 +975,7 @@ smoke_published() {
             globals=(-global "driver=cfi.pflash01,property=secure,value=on"
                      -global "ICH9-LPC.disable_s3=1")
         fi
-        qemu-system-x86_64 \
+        $QEMU_XVFB qemu-system-x86_64 \
             -enable-kvm -cpu host -smp 4 -m 8192 \
             "${machine[@]}" "${globals[@]}" \
             -drive "if=pflash,format=raw,readonly=on,file=$code" \
@@ -2793,7 +2806,7 @@ dead_disk_run() {
         echo "   .. Secure Boot firmware, Microsoft's keys enrolled: $sb_code"
     fi || bad "cannot stage the OVMF vars"
 
-    qemu-system-x86_64 \
+    $QEMU_XVFB qemu-system-x86_64 \
         -enable-kvm -cpu host -smp 4 -m 8192 \
         -machine q35 \
         -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
@@ -2984,7 +2997,7 @@ smoke_iso() {
     ovmf_vars=${ovmf##* }
     cp "$ovmf_vars" "$dir/vars.fd"
 
-    env LIBGL_ALWAYS_SOFTWARE=1 qemu-system-x86_64 \
+    env LIBGL_ALWAYS_SOFTWARE=1 $QEMU_XVFB qemu-system-x86_64 \
         -enable-kvm -cpu host -smp 4 -m 8192 \
         -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
         -drive "if=pflash,format=raw,file=$dir/vars.fd" \
@@ -3105,7 +3118,7 @@ smoke_boot() {
     ovmf_vars=${ovmf##* }
     cp "$ovmf_vars" "$dir/OVMF_VARS.fd" || bad "cannot stage the OVMF vars"
 
-    env LIBGL_ALWAYS_SOFTWARE=1 qemu-system-x86_64 \
+    env LIBGL_ALWAYS_SOFTWARE=1 $QEMU_XVFB qemu-system-x86_64 \
         -enable-kvm -cpu host -smp 4 -m 8192 \
         -machine q35 \
         -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \

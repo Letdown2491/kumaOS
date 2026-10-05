@@ -276,12 +276,16 @@ jobs:
   # runner user simply is not in the kvm group. A guest kernel boots under
   # the result.
   #
-  # What genuinely does not work here is `-display egl-headless`, which
-  # needs a DRM render node on the HOST, and a runner has no GPU. Plain
-  # virtio-vga still gives the guest a virtio-gpu DRM device, and a niri
-  # image brings up its greeter through it on llvmpipe alone, so the
-  # greeter assertion still measures kuma rather than qemu. That is what
-  # QEMU_VGA and QEMU_DISPLAY select.
+  # What genuinely does not work here is any qemu GL setup without a host
+  # DRM node: `-display egl-headless` builds its GL context through one
+  # ("egl: no drm render node available", measured on a runner and on a
+  # DRM-less local mount namespace). And the guest needs GL that mesa can
+  # allocate through — a 3D-less virtio-gpu leaves niri with a renderer it
+  # cannot create and zero outputs, and the greeter's layer surface is
+  # closed before it maps (greeter exits rc=0 in a second, measured
+  # 2026-10-05 in the VM). virtio-gpu-gl hands the guest virgl, and
+  # Xvfb-backed `gtk,gl=on` gives qemu a GL context on llvmpipe alone.
+  # That is what QEMU_VGA and QEMU_DISPLAY in smoke.sh select.
   #
   # Not on pull requests: this is the slow tier and a PR is gated by
   # everything cheap. Not on tags, for the same reason the image job skips
@@ -544,13 +548,6 @@ jobs:
           df -h / | tail -1
 
       - name: smoke (iso)
-        env:
-          QEMU_VGA: virtio-vga
-          # vnc, not none: a displayless guest has no connected
-          # connector, so niri has no output and the greeter cannot
-          # map its surface. See install-boot/action.yml for the
-          # full account (measured 2026-10-04).
-          QEMU_DISPLAY: vnc=127.0.0.1:59
         run: ./scripts/smoke.sh --iso --keep niri
 
       - name: what the live session said
