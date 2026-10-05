@@ -2,7 +2,21 @@
 
 ## Unreleased
 
-## v44.5.0 (2026-10-04)
+## v44.5.0 (2026-10-05)
+
+- **The image carries its OCI version, and bootloader-update stops
+  failing on every boot.** bootc's install writes the installed
+  image's OCI version into `/sysroot/.bootc-aleph.json`, and bootupd's
+  reader requires it as a plain string — a null fails
+  `bootloader-update.service` on every boot. Nothing in kuma's
+  pipeline supplied one, so every image kuma has ever built installed
+  with `"version": null` and the failed unit, invisible until the boot
+  tier started grading failed units and blamed for a week on the
+  Fedora float. The image now stamps
+  `org.opencontainers.image.version` (the number alone, like
+  os-release's), so installs record it and the unit stays clean.
+  Existing machines: the failed unit clears on the next image
+  install that carries the label.
 
 - **The desktop appears ~5 seconds sooner after logging in.** greetd
   gives the greeter session 5 seconds to exit on its own after a
@@ -74,6 +88,14 @@ differently. Why it changed belongs in the commit that made it.
   reads the same file: it reports the machine's actual timeouts rather
   than the defaults, and a deliberately disabled lock (`lock_timeout =
   0`) is graded as a choice rather than a failure.
+- **The login handoff reads as a fade.** The gap between the greeter
+  quitting and the shell's surfaces appearing was a void with niri's
+  hotkey-overlay noise over it. The image's generated niri config now
+  skips the overlay at startup and sedes the wallpaper into the
+  layout background, so the handoff shows the wallpaper instead. Both
+  tweaks are seeded into niri's default config behind grep-guarded
+  anchors, so a niri update that moves them fails the build rather
+  than silently dropping them.
 
 ## v44.4.0 (2026-10-04)
 
