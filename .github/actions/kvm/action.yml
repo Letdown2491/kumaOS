@@ -26,7 +26,44 @@ runs:
         sudo apt-get install -y -qq qemu-system-x86 qemu-utils cryptsetup-bin ovmf \
             libegl1 libgl1 "linux-modules-extra-$(uname -r)" \
             ${{ inputs.sshpass == 'true' && 'sshpass' || '' }}
+        # qemu-nbd needs the nbd module: the boot stage adds the console
+        # karg to its disk through it. In modules-extra, which the 6.17
+        # azure runner image ships without installing.
         sudo modprobe nbd max_part=8 || true
+
+        # The guest's GL is virgl's, and virgl builds its host context
+        # through a DRM render node. A runner has no GPU; vgem is the
+        # no-hardware node provider. The 20261004 runner image (kernel
+        # 6.17.0-1022-azure) dropped vgem from modules-extra — the Oct-3
+        # image had a working node and every lap after the update died
+        # at qemu's first line ("egl: no drm render node available") —
+        # so when the module will not load, build it out of tree
+        # against the running kernel's headers: vgem is one file, the
+        # build takes seconds, and loading it needs no reboot. The same
+        # trick WSL uses for the same reason.
+        if ! ls /dev/dri/renderD* >/dev/null 2>&1; then
+            sudo modprobe vgem 2>/dev/null || true
+        fi
+        if ! ls /dev/dri/renderD* >/dev/null 2>&1; then
+            echo "   .. no render node and no vgem module; building vgem out of tree"
+            sudo apt-get install -y -qq "linux-headers-$(uname -r)" build-essential curl
+            vgem_dir=/tmp/vgem-build
+            mkdir -p "$vgem_dir"
+            base="https://raw.githubusercontent.com/torvalds/linux/v6.17/drivers/gpu/drm/vgem"
+            for f in vgem_drv.c vgem_drv.h vgem_fence.c; do
+                curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+                    "$base/$f" -o "$vgem_dir/$f" || echo "vgem source unavailable; continuing without a render node"
+            done
+            if [ -f "$vgem_dir/vgem_drv.c" ]; then
+                printf 'vgem-y := vgem_drv.o vgem_fence.o\nobj-m += vgem.o\n' > "$vgem_dir/Makefile"
+                make -C "/lib/modules/$(uname -r)/build" M="$vgem_dir" modules -j4 -s \
+                    && sudo insmod "$vgem_dir/vgem.ko" \
+                    && echo "   .. vgem built and loaded"
+            fi
+        fi
+        # Loud here rather than as a confusing qemu death minutes later.
+        ls /dev/dri/renderD* >/dev/null 2>&1 \
+            || { echo "no DRM render node: the guest's GL (virgl) cannot initialize"; exit 1; }
 
         # /dev/kvm is present on a hosted runner and the CPU exposes svm;
         # the runner user is simply not in the kvm group, and that is the
