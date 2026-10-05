@@ -718,12 +718,12 @@ smoke_install() {
 # reaching here. That is the one implicit thing about it, and the reason
 # it takes qemu and the log rather than reading them from scope too.
 await_healthy_boot() {
-    local qemu=$1 log=$2 reached=$3 healthy=$4 when=${5:-}
+    local qemu=$1 log=$2 reached=$3 healthy=$4 when=${5:-} ssh_deadline=${6:-420}
 
-    local deadline=$((SECONDS + 420))
+    local deadline=$((SECONDS + ssh_deadline))
     until guest true; do
         kill -0 "$qemu" 2>/dev/null || bad "qemu died${when}; console at $log"
-        [ $SECONDS -lt $deadline ] || bad "no ssh within 420s${when}; console at $log"
+        [ $SECONDS -lt $deadline ] || bad "no ssh within ${ssh_deadline}s${when}; console at $log"
         sleep 5
     done
     ok "$reached"
@@ -1125,9 +1125,14 @@ smoke_published() {
     }
 
     echo "   .. waiting for ssh on $port"
+    # 1800, not 420: this is a first boot, and the first boot recomposes
+    # kuma's composed base before sshd ever starts - 553 packages, measured
+    # at roughly a quarter hour on this host and slower on a runner's
+    # disk. The 420s deadline predates the composed base (e1d943c) and
+    # cannot see sshd through the deploy.
     await_healthy_boot "$qemu" "$log" \
         "installed machine booted and is reachable" \
-        "greenboot says this boot is healthy"
+        "greenboot says this boot is healthy" "" 1800
 
     # Reaching ssh at all proves the root was unlocked, but not that the
     # passphrase did it: a machine that never encrypted anything also
@@ -2522,7 +2527,7 @@ smoke_published() {
         await_healthy_boot "$qemu" "$log" \
             "the upgraded machine came back" \
             "the upgraded machine boots and greenboot says it is healthy" \
-            " after the upgrade"
+            " after the upgrade" 1800
 
         after=$(booted_digest)
         [ -n "$after" ] || bad "could not read the booted digest after upgrading"
@@ -3179,9 +3184,11 @@ smoke_boot() {
     guest() { ssh "${ssh_opts[@]}" "$@" 2>/dev/null; }
 
     echo "   .. waiting for ssh on $port"
+    # 1800: a first boot here too - the qcow2 kuma vm builds recomposes
+    # the composed base before sshd starts (see the 1128 note).
     await_healthy_boot "$qemu" "$log" \
         "booted and reachable" \
-        "greenboot says this boot is healthy"
+        "greenboot says this boot is healthy" "" 1800
 
     # systemd-remount-fs fails on a machine whose fstab still declares the
     # root Anaconda wrote, because composefs cannot remount it. Excused by
