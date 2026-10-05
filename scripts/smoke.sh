@@ -106,6 +106,21 @@ KUMA=${KUMA:-target/debug/kuma}
 QEMU_DISPLAY=${QEMU_DISPLAY:-gtk,gl=on}
 QEMU_VGA=${QEMU_VGA:-virtio-gpu-gl}
 QEMU_XVFB_NUM=${QEMU_XVFB_NUM:-77}
+
+# The runner has no GPU: without LIBGL_ALWAYS_SOFTWARE, mesa's EGL refuses
+# the software path and qemu dies at its first boot ("OpenGL is not
+# supported by the display"). This is exported once here, not per-site:
+# per-site prefixes are exactly how one of four qemu sites ends up without
+# it (measured Oct 05 — install and dead-disk died instantly at their
+# first boot while iso, which had the variable inline, ran 21 minutes).
+#
+# LP_NUM_THREADS goes with it: llvmpipe's threaded context races qemu's
+# gtk display for MakeCurrent and loses — EGL_BAD_ACCESS, then an epoxy
+# assert kills qemu at the guest's first mode-set (measured twice on the
+# boot stage, local and runner). The same boot with zero llvmpipe threads
+# took the failure count from eighteen warnings to none.
+export LIBGL_ALWAYS_SOFTWARE=1
+export LP_NUM_THREADS=0
 start_xvfb() {
     # Only a GL display needs X; a caller's QEMU_DISPLAY override does not.
     [[ "$QEMU_DISPLAY" != gtk,gl=on ]] && return 0
@@ -123,7 +138,15 @@ start_xvfb() {
         exit 1
     }; }
 }
-stop_xvfb() { [[ -n "${xvfb_pid:-}" ]] && kill "$xvfb_pid" 2>/dev/null; }
+# Never a fatal step. Under `set -euo pipefail` a function whose body is
+# a bare `[[ ]] && cmd` returns 1 when the test fails (pid empty, Xvfb
+# already reaped) — and the caller at the summary would kill the whole
+# run after every assertion had passed (measured: image job, all oks,
+# dead at "== summary", exit 1, no FAIL line).
+stop_xvfb() {
+    [[ -n "${xvfb_pid:-}" ]] && kill "$xvfb_pid" 2>/dev/null
+    return 0
+}
 BOOT=0
 ISO=0
 INSTALL=0
@@ -3014,7 +3037,7 @@ smoke_iso() {
     ovmf_vars=${ovmf##* }
     cp "$ovmf_vars" "$dir/vars.fd"
 
-    env LIBGL_ALWAYS_SOFTWARE=1 qemu-system-x86_64 \
+    qemu-system-x86_64 \
         -enable-kvm -cpu host -smp 4 -m 8192 \
         -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
         -drive "if=pflash,format=raw,file=$dir/vars.fd" \
@@ -3135,7 +3158,7 @@ smoke_boot() {
     ovmf_vars=${ovmf##* }
     cp "$ovmf_vars" "$dir/OVMF_VARS.fd" || bad "cannot stage the OVMF vars"
 
-    env LIBGL_ALWAYS_SOFTWARE=1 qemu-system-x86_64 \
+    qemu-system-x86_64 \
         -enable-kvm -cpu host -smp 4 -m 8192 \
         -machine q35 \
         -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
