@@ -61,9 +61,28 @@ runs:
                     && echo "   .. vgem built and loaded"
             fi
         fi
-        # Loud here rather than as a confusing qemu death minutes later.
-        ls /dev/dri/renderD* >/dev/null 2>&1 \
-            || { echo "no DRM render node: the guest's GL (virgl) cannot initialize"; exit 1; }
+        # A freshly insmod'd node ships 0600 root:root — devtmpfs's
+        # default, and the runner's udev rules do not widen it — while
+        # the smoke's qemu runs as this user, not root. An unopenable
+        # node is indistinguishable from no node to qemu's scan: it
+        # silently skips the EACCES and reports "no drm render node
+        # available" (measured: reproduced locally, byte-identical, on
+        # 2026-10-05). The /dev/kvm rule below is the same lesson.
+        sudo chmod 666 /dev/dri/renderD* 2>/dev/null || true
+        # The check is the qemu user's, not root's: ls sees a node root
+        # owns, open is what qemu needs.
+        node=""
+        for candidate in /dev/dri/renderD*; do
+            if [ -c "$candidate" ] && [ -r "$candidate" ] && [ -w "$candidate" ]; then
+                node=$candidate
+                break
+            fi
+        done
+        if [ -z "$node" ]; then
+            echo "no DRM render node the qemu user can open: the guest's GL (virgl) cannot initialize"
+            exit 1
+        fi
+        echo "   .. render node: $node"
 
         # /dev/kvm is present on a hosted runner and the CPU exposes svm;
         # the runner user is simply not in the kvm group, and that is the
