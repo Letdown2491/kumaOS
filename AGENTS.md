@@ -111,17 +111,37 @@ road every release ships.
   probe that needs a live process asks the runner's timing unless
   the process is guaranteed alive; and a fix's report that claims
   more than its diff gets caught by the gate that runs the diff.
-- `egl-headless` wants a host DRM node a runner lacks. But the
-  "displayless" `QEMU_DISPLAY: none` is worse in a subtler way: with
+- `egl-headless` wants a host DRM node a runner lacks — even with
+  `LIBGL_ALWAYS_SOFTWARE=1`: qemu's GL helpers open a render node
+  before mesa's software path gets a word in ("egl: no drm render
+  node available", measured Oct 05 on a runner and on a local
+  mount namespace with /dev/dri bind-hidden). And the "displayless"
+  `QEMU_DISPLAY: none` is worse in a subtler way: with
   no display frontend the guest's virtio-gpu reports every connector
   DISCONNECTED, so niri comes up with zero outputs and any
   layer-shell client (the greeter) cannot map its window — gpui
   quits when its last window closes, rc=0, and greetd reads "greeter
   exited without creating a session". The greeter was never buggy;
-  the VM had no screen. The combo is `virtio-vga` plus
-  `vnc=127.0.0.1:59`: a VNC server nobody connects to gives the
-  connector a scanout, needs no host GPU and no DRM node (measured,
-  Oct 04).
+  the VM had no screen.
+- A connected connector is not enough, Oct 05: a 3D-less virtio-gpu
+  (dmesg `features: -virgl`) gives niri's DRM backend a device it
+  cannot allocate through — software EGL renderers are skipped for
+  the renderer, GBM finds no allocator — so niri still comes up with
+  zero outputs and the greeter dies the same clean rc=0 a second
+  after start. The guest needs virgl: `virtio-gpu-gl`. Its guest
+  driver allocates through llvmpipe alone, no host GPU. The
+  end-to-end repro took one evening locally: same disk, same binary,
+  greeter died in 1s on virtio-vga and ran indefinitely on
+  virtio-gpu-gl.
+- The runner image has no libEGL: any GL display makes qemu abort at
+  its first line ("Couldn't open libEGL.so.1", core dumped) and the
+  stage reads "qemu died". The kvm action installs libegl1 and
+  libgl1 for the same reason it installs ovmf. And `xvfb-run` is
+  the wrong way to head a GL display: it runs the command as a
+  child, not exec, so the script's `$!` names the wrapper shell and
+  every `kill $qemu` orphans the VM. One Xvfb per run, `DISPLAY`
+  exported, qemu the direct child — that is the contract the smoke's
+  traps and port reuse already assume.
 - The greeter chain's stderr (niri's protocol errors, kuma-greeter's
   log lines) goes to VT1 and dies with the greetd session: the
   journal never sees why a login screen failed, and "greeter exited
