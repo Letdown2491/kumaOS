@@ -140,8 +140,10 @@ road every release ships.
   the wrong way to head a GL display: it runs the command as a
   child, not exec, so the script's `$!` names the wrapper shell and
   every `kill $qemu` orphans the VM. One Xvfb per run, `DISPLAY`
-  exported, qemu the direct child — that is the contract the smoke's
-  traps and port reuse already assume.
+  exported, qemu the direct child — that was the contract until
+  egl-headless replaced the X server entirely (Oct 05, ab6e736; the
+  gtk-on-Xvfb pairing killed qemu three ways); the orphan-VM trap
+  stays recorded for the next host that heads a display.
 - The greeter chain's stderr (niri's protocol errors, kuma-greeter's
   log lines) goes to VT1 and dies with the greetd session: the
   journal never sees why a login screen failed, and "greeter exited
@@ -162,6 +164,39 @@ road every release ships.
   `r##"…"##` for anything that quotes. The staging goldens caught it
   only after rustfmt and the identity checks were already fixed —
   `cargo test` in the container is the gate that actually runs first.
+- The runner's ground moves under a green CI, Oct 05: the 20261004
+  image's kernel (6.17.0-1022-azure) dropped vgem from modules-extra,
+  and every VM lap after the image update died at qemu's first line
+  ("egl: no drm render node available") with no repo change to blame.
+  The guest's GL is virgl's, and virgl builds its host context through
+  a DRM render node a GPU-less runner does not have; the kvm action
+  builds vgem out of tree against the running kernel's headers when
+  the module will not load (the WSL trick: one file, seconds, no
+  reboot).
+- Existence is not accessibility, Oct 05: an insmod'd node ships 0600
+  root:root — devtmpfs's default, and the runner's udev rules do not
+  widen a faux-bus vgem — while the smoke's qemu runs as the runner
+  user. qemu's node scan silently skips the EACCES and reports "no
+  node", and the ls check passed, because ls opens nothing. The node
+  is chmod'd 666 like /dev/kvm, and the gate is the qemu user's own
+  access(2).
+- An anonymous curl against raw.githubusercontent.com is rate-limited
+  (HTTP 429) from Actions egress, Oct 05 — the iso lap died on the
+  third fetch, after the expensive apt steps had already run. Small
+  frozen upstream sources vendor into the repo (the vgem pair,
+  torvalds v6.17 verbatim, beside the action): a build step with no
+  network has no network to lose.
+- The release's live ISO step is the one qemu site no pre-tag run
+  exercises, Oct 05: ci's iso job rides the smoke defaults, and the
+  rolling channel's publish=false skips the ISO entirely, so display
+  pins older than a default change strand there until a release pays
+  for them — the vnc-era pair that bc4f4e1's virgl fix missed, caught
+  by reading the tag road, not by a run (8d823ad).
+- ssh refuses a world-readable private key outright, and BatchMode
+  swallows the refusal, Oct 05: the stage read "no ssh within 1800s"
+  while the guest sat at its login prompt, reachable and willing, for
+  half an hour. The key is 0600 at write and at the use site both, so
+  an artifact kept by an older binary still works.
 
 ## Agent skills
 
