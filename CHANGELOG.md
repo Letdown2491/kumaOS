@@ -4,31 +4,38 @@
 
 ## v44.6.0 (2026-10-09)
 
-- **Koguma, kuma's own file manager, ships in the image — installed,
-  not yet the default.** The third kumaui binary rides the same road
-  as the shell and the greeter: built at the pinned kumaui commit,
-  staged beside the kuma binary, baked in at `/usr/bin/kuma-files`,
-  with the desktop entry and icon shipped from the kumaui tree beside
-  it — so the launcher lists it under its own name, keywords and all.
-  Thunar stays the `inode/directory` default for now, deliberately:
-  the plan is for the field to ride Koguma as the daily file manager
-  for a release before a later one drops Thunar and swaps the default.
-  The smoke launches it in the guest through the session's own user
-  manager and holds it to its activation socket — a shipped app that
-  cannot launch is exactly the thing a smoke exists to catch.
+- **Koguma, kuma's own file manager, is the image's file manager —
+  default and only.** The third kumaui binary rides the same road as
+  the shell and the greeter: built at the pinned kumaui commit, staged
+  beside the kuma binary, baked in at `/usr/bin/kuma-files`, with the
+  desktop entry and icon shipped from the kumaui tree beside it — so
+  the launcher lists it under its own name, keywords and all, and the
+  mimeapps default hands it `inode/directory` outright. Thunar and its
+  archive plugin leave the set in the same release, and the XFCE tail
+  that rode in as their dependencies — exo, garcon, xfconf, tumbler,
+  the libxfce pair, the panel straggler, ~32 MB installed — leaves
+  with them. file-roller stays: it is Koguma's extract catch-all, the
+  end of the ladder tar, unzip and the single-file decompressors
+  cannot finish (7z/rar). The plan's original order — ship Koguma
+  installed-not-default, ride it for a release, drop Thunar after —
+  was collapsed by the owner's call, 2026-10-06: the ride runs on the
+  drop, on the dev machine, with no net. The smoke launches Koguma in
+  the guest through the session's own user manager and holds it to its
+  activation socket — a shipped app that cannot launch is exactly the
+  thing a smoke exists to catch, and a default that cannot launch is
+  a desktop with no file manager at all.
 
 - **Samba browsing arrives — and every gvfs mount gains a plain POSIX
   path.** `gvfs-smb` puts the samba backend in the image for the first
-  time: any gvfs consumer can browse `smb://`, Thunar included. And
-  `gvfs-fuse` puts the daemon that exposes every active gvfs mount as
-  plain files under `/run/user/$UID/gvfs` into the composed image at
-  last — a bare-metal install always pulled it in as a weak
-  dependency, the composed image did not, so gvfs mounts existed
-  without ever being reachable as files. Koguma — kuma's own file
-  manager, which this release ships in the image — browses every gvfs
-  mount, samba and MTP alike, through those paths alone, while Thunar
-  goes through GIO directly, which is why the gap could hide until
-  now.
+  time: any gvfs consumer can browse `smb://`. And `gvfs-fuse` puts
+  the daemon that exposes every active gvfs mount as plain files under
+  `/run/user/$UID/gvfs` into the composed image at last — a bare-metal
+  install always pulled it in as a weak dependency, the composed image
+  did not, so gvfs mounts existed without ever being reachable as
+  files. Koguma — the file manager this release makes the default —
+  browses every gvfs mount, samba and MTP alike, through those paths
+  alone; the image's GIO-native consumers never needed the FUSE
+  daemon, which is why the gap could hide until now.
 
 ## v44.5.0 (2026-10-05)
 

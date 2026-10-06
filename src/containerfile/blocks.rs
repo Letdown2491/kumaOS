@@ -70,7 +70,7 @@ pub(crate) const NIRI_PACKAGES: &[&str] = &[
     // GTK3 ignores the colour names a palette can set: overriding
     // theme_bg_color from the user stylesheet moves nothing, measured on
     // gtk3-3.24.52. adw-gtk3 is libadwaita's look ported back to GTK3 and
-    // it does read them, so thunar, pavucontrol, nm-connection-editor and
+    // it does read them, so pavucontrol, nm-connection-editor and
     // blueman follow the same palette as the shell. In Fedora proper, 175
     // KiB, no new trust root.
     "adw-gtk3-theme",
@@ -90,19 +90,25 @@ pub(crate) const NIRI_PACKAGES: &[&str] = &[
     "nm-connection-editor",
     "bluez",
     "blueman",
-    "thunar",
-    "thunar-archive-plugin",
+    // The file manager is Koguma: kuma-files rides the sibling road
+    // beside the shell and the greeter, and MIMEAPPS hands it
+    // inode/directory outright. Thunar and its archive plugin left in
+    // the same release that made Koguma default — the owner's call,
+    // 2026-10-06: the ride runs on the drop, with no XFCE file manager
+    // behind it. file-roller stays: it is Koguma's extract catch-all,
+    // the end of the ladder tar, unzip and the single-file
+    // decompressors cannot finish (7z/rar).
     "file-roller",
     "gvfs",
     "gvfs-mtp",
     // gvfs-fuse: the daemon that exposes every gvfs mount as plain POSIX
     // paths under /run/user/$UID/gvfs. Koguma browses samba and MTP
     // alike through those paths — it reads $XDG_RUNTIME_DIR/gvfs directly
-    // — while Thunar goes through GIO, which is why the image never missed
-    // the daemon: a bare-metal install pulled it in as a weak dep, the
-    // composed image does not. gvfs-smb: the samba backend, and with it
-    // samba browsing exists in the image at all, for any gvfs consumer,
-    // Thunar included.
+    // — and it is load-bearing for Koguma alone: a bare-metal install
+    // pulled the daemon in as a weak dep, the composed image did not,
+    // and gvfs mounts existed without ever being reachable as files.
+    // gvfs-smb: the samba backend, and with it samba browsing exists in
+    // the image at all, for any gvfs consumer.
     "gvfs-fuse",
     "gvfs-smb",
     "wf-recorder",
@@ -138,8 +144,9 @@ pub(crate) const NIRI_PACKAGES: &[&str] = &[
     // drops niri's stock playerctl binds; kuma re-adds them, and nothing
     // else pulls playerctl in now that waybar has left the set
     "playerctl",
-    // plug-in automount: thunar only mounts on click, and thunar-volman
-    // needs the thunar daemon plus xfconf toggles to do its job
+    // automount: the file manager does not own it — udiskie mounts
+    // removable media on click and at login, through gvfs, with no
+    // per-desktop daemon behind it
     "udiskie",
     // file-roller alone can't open 7z/rar downloads
     "7zip",
@@ -2432,8 +2439,8 @@ pub(crate) const NIRI_MEDIA_BINDS: &str = r#"    XF86AudioRaiseVolume allow-when
 "#;
 
 /// System-wide default apps: without associations, opening a PDF or a
-/// link from Thunar is app-picker roulette. Flatpak-exported desktop
-/// ids for the declared apps, native ids for the in-image tools.
+/// link from the file manager is app-picker roulette. Flatpak-exported
+/// desktop ids for the declared apps, native ids for the in-image tools.
 ///
 /// A `.desktop` file's MimeType= line says an app *can* open a type;
 /// this list says which one *wins*. So the entries worth having are the
@@ -2441,8 +2448,8 @@ pub(crate) const NIRI_MEDIA_BINDS: &str = r#"    XF86AudioRaiseVolume allow-when
 /// Firefox is why most of this list exists: it claims application/pdf,
 /// six image types, and four audio/video types, every one of which it
 /// would otherwise be free to take from Papers, Loupe, or Celluloid.
-/// The in-image contest is inode/directory, which kitty-open.desktop
-/// claims alongside thunar.
+/// The in-image contest is inode/directory: kitty-open.desktop claims
+/// it alongside Koguma, and the entry below says Koguma wins.
 ///
 /// text/plain has no entry on purpose: nothing in the image claims it,
 /// so a declared editor wins unopposed, and an entry would only pin an
@@ -2452,7 +2459,7 @@ x-scheme-handler/http=org.mozilla.firefox.desktop
 x-scheme-handler/https=org.mozilla.firefox.desktop
 text/html=org.mozilla.firefox.desktop
 application/pdf=org.gnome.Papers.desktop
-inode/directory=thunar.desktop
+inode/directory=kuma-files.desktop
 image/png=org.gnome.Loupe.desktop
 image/jpeg=org.gnome.Loupe.desktop
 image/webp=org.gnome.Loupe.desktop
@@ -3111,12 +3118,10 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     // greeter config pointing at a binary that is not there.
     e.copy_exec(&greeter_bin, "/usr/bin/kuma-greeter");
     // Koguma, the file manager: the third kumaui binary and the first
-    // kumaui app the image offers the user. Installed, not default —
-    // the ship release's whole point is a file manager beside Thunar
-    // for the field to ride, and the mimeapps pin below still hands
-    // inode/directory to thunar.desktop, so the swap is a decision a
-    // later release makes after the ride, not a default this one
-    // moves. The desktop entry and the icon ride from the kumaui tree
+    // kumaui app the image offers the user — and the default: the
+    // mimeapps pin below hands inode/directory to kuma-files.desktop,
+    // Thunar having left the set in the same release. The desktop
+    // entry and the icon ride from the kumaui tree
     // beside the binary: the entry is the app's identity — the name
     // the launcher shows, the keywords it matches, the MimeType it
     // claims — and it ships from the tree that builds the app, not
@@ -3209,8 +3214,10 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     //
     // niri's own portals.conf prefers the GNOME backend for everything
     // it does not name, and that backend does not implement FileChooser:
-    // it delegates to org.gnome.Nautilus. kuma ships Thunar, so the name
-    // is not activatable and the request dies inside the backend. The
+    // it delegates to org.gnome.Nautilus. kuma has never shipped
+    // Nautilus — not when the file manager was Thunar, and not now it
+    // is Koguma — so the name is not activatable and the request dies
+    // inside the backend. The
     // only trace anywhere is "Delegated FileChooser call failed: The
     // name is not activatable" in the *user* journal, which is why this
     // survived two desktops and a bare-metal install unnoticed.

@@ -2841,8 +2841,9 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
     /// is only baked on the niri arm.
     #[test]
     fn the_baked_defaults_name_apps_the_examples_install() {
-        // shipped by NIRI_PACKAGES, never by a declaration
-        const IN_IMAGE: &[&str] = &["thunar", "org.gnome.FileRoller"];
+        // shipped by the image itself, never by a declaration:
+        // kuma-files rides the sibling road, file-roller NIRI_PACKAGES
+        const IN_IMAGE: &[&str] = &["kuma-files", "org.gnome.FileRoller"];
         let example =
             std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/niri.toml"))
                 .unwrap();
@@ -2913,7 +2914,7 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         assert!(!NIRI_MEDIA_BINDS.contains(r#"panel-toggle" "clipboard"#));
         assert!(!NIRI_MEDIA_BINDS.contains(r#"panel-toggle" "wallpaper"#));
         assert!(MIMEAPPS.contains("application/pdf=org.gnome.Papers.desktop"));
-        assert!(MIMEAPPS.contains("inode/directory=thunar.desktop"));
+        assert!(MIMEAPPS.contains("inode/directory=kuma-files.desktop"));
         let out = generate(&config("schema_version = 1\n[system]\ndesktop = \"niri\"\n"));
         assert!(out.contains("COPY mimeapps.list /etc/xdg/mimeapps.list"));
         assert!(out.contains("pam_gnome_keyring"));

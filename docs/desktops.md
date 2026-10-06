@@ -46,7 +46,7 @@ else.
 |---|---|
 | Session | `niri`, `xwayland-satellite`, `greetd`, `kuma-greeter` (tuigreet kept as the comment-swapped fallback) |
 | Shell | `kuma-shell` (bar, notifications, wallpaper, idle, lock, control centre, Nostr Signer) |
-| Terminal and files | `kitty`, `thunar` (+ archive plugin), `kuma-files` (Koguma, installed not default), `file-roller`, `gvfs` (+ fuse, mtp, smb), `udiskie`, `7zip`, `unar` |
+| Terminal and files | `kitty`, `kuma-files` (Koguma, the file manager), `file-roller`, `gvfs` (+ fuse, mtp, smb), `udiskie`, `7zip`, `unar` |
 | Portals | `xdg-desktop-portal-gtk`, `xdg-desktop-portal-gnome` |
 | Audio | `pipewire`, `pipewire-pulseaudio`, `wireplumber`, `pavucontrol` |
 | Graphics | `mesa-dri-drivers`, `mesa-vulkan-drivers`, `vulkan-loader` |
@@ -93,7 +93,7 @@ the desktop reads the same file you would edit.
 
 **The terminal follows the image's palette.** kitty's theme is a static
 palette in `/etc/xdg/kitty/kitty.conf` — chosen once, shipped with the image —
-so the terminal, thunar, pavucontrol and the rest agree with the shell the way
+so the terminal, pavucontrol and the rest agree with the shell the way
 they always did. The image ships `adw-gtk3-theme` for the GTK3 half: stock
 Adwaita GTK3 ignores the colour names a palette can set.
 
@@ -173,7 +173,7 @@ the desktop set.
 
 **You cannot subtract.** There is no `rpm_exclude` and no per-desktop opt-out,
 so a package in a desktop set is in your image. If you want a desktop without
-Thunar, the only route today is a fork.
+blueman, the only route today is a fork.
 
 That is a real limit rather than an oversight, and it is why the boundary above
 is drawn where it is: everything kuma cannot let you remove is something a
