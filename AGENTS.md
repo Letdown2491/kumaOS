@@ -28,6 +28,13 @@ tree's identity into the binary (`build.rs`): an uncommitted tree ships a
 that answers for code no commit describes. The tree that produced a
 running binary should always be a commit you can name.
 
+## Pushes wait for the user
+
+Commits are the agent's to make — the tree stays clean and every change
+is named by a commit — but `git push`, branch or tag, moves only on an
+explicit go: a tag is a release trigger and a branch push starts a
+35-minute battery, and neither is the agent's call to spend.
+
 ## The nostr layer's dev loop (44.4.0)
 
 The daemon on a kuma machine is deployed from the checkout: a user-level
