@@ -1284,14 +1284,31 @@ smoke_published() {
         # $0 and $1, so it listed $HOME, which on a fresh install is
         # empty. The check reported "found 0" on a machine carrying all
         # eight, and only the install stage could ever see it.
+        # Koguma's entry is excluded from the seam's count: the eight
+        # generated verbs are the seam's own contract, and Koguma's
+        # entry is a real app's, shipped from the kumaui tree — one
+        # glob catches both, and only the count here is entitled to be
+        # exactly eight.
         local seam_entries
-        seam_entries=$(guest 'ls /usr/share/applications/kuma-*.desktop 2>/dev/null | wc -l' || echo 0)
-        [ "$seam_entries" -eq 8 ] || bad "expected 8 kuma desktop entries, found $seam_entries"
+        seam_entries=$(guest 'ls /usr/share/applications/kuma-*.desktop 2>/dev/null | grep -v kuma-files | wc -l' || echo 0)
+        [ "$seam_entries" -eq 8 ] || bad "expected 8 seam entries, found $seam_entries"
         guest 'desktop-file-validate /usr/share/applications/kuma-*.desktop' \
             || bad "kuma's desktop entries do not validate on the booted machine"
         guest test -x /usr/libexec/kuma-launch \
             || bad "the entries' Exec is not executable on the booted machine"
         ok "the seam ships $seam_entries entries and they validate"
+
+        # Koguma, on its own: the entry beside the eight generated
+        # verbs, the Exec the entry names, and the icon it asks for —
+        # the same three questions the build asked, answered on the
+        # booted machine. The validate glob above already carries it.
+        guest 'test -f /usr/share/applications/kuma-files.desktop' \
+            || bad "Koguma ships no desktop entry on the booted machine"
+        guest 'command -v kuma-files >/dev/null' \
+            || bad "Koguma's entry names kuma-files, which is not in the image"
+        guest 'test -f /usr/share/icons/hicolor/256x256/apps/kuma-files.png' \
+            || bad "Koguma's icon did not land where the theme looks for it"
+        ok "Koguma ships installed, entry and icon and all"
 
         # The shell, asked the only way this stage can ask.
         #
@@ -1521,6 +1538,33 @@ smoke_published() {
                 sleep 5
             done
             ok "the shell owns org.freedesktop.Notifications"
+
+            # Koguma, launched the way a session would launch it: through
+            # the user manager, which niri-session has already imported
+            # the session's environment into — the same road autostart
+            # apps ride — so the app gets its display. Launched, not
+            # assumed present: this is the image's first user-facing
+            # kumaui app and the first regular-window GPUI program on
+            # this qemu road, and a shipped app that cannot launch is
+            # exactly the class of thing this smoke exists to catch. The
+            # activation socket is the app's own single-instance answer:
+            # the process is alive and it holds the port a second
+            # instance would take.
+            guest 'systemd-run --user --unit=kuma-files-smoke kuma-files' \
+                || bad "kuma-files would not launch from the session's user manager"
+            local koguma_deadline=$((SECONDS + 60))
+            until guest 'pgrep -x kuma-files >/dev/null && test -S "/run/user/$(id -u)/kuma-files.sock"'; do
+                [ $SECONDS -lt $koguma_deadline ] \
+                    || bad "kuma-files launched but never answered: no process or no activation socket"
+                sleep 5
+            done
+            ok "Koguma launched in the session and answered on its activation socket"
+            # Closed by its own unit, not pkill: the probe launched it
+            # through the user manager, so the user manager is also the
+            # one that can prove it comes back down.
+            guest 'systemctl --user stop kuma-files-smoke.service'
+            guest pgrep -x kuma-files >/dev/null \
+                && bad "kuma-files survived its own unit being stopped"
 
             # Lock before suspend: kuma-shell deliberately holds no logind
             # delay inhibitor — the shipped sleep guard's own prose says

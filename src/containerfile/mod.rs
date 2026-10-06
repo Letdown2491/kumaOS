@@ -183,6 +183,37 @@ pub fn write_context(
                 kuma_binary.display()
             )
         })?;
+        // Koguma is the same build's third binary and the first app
+        // among them: the image offers it to the user, so its desktop
+        // entry and its icon ride beside the binary — the entry is the
+        // app's identity (the name, the keywords, the MimeType it
+        // claims) and ships from the tree that builds the app, not
+        // regenerated here. The mimeapps pin keeps the entry honest
+        // about the ship: installed, not the default.
+        let files_sibling = parent.join("kuma-files");
+        std::fs::copy(&files_sibling, dir.join("kuma-files")).with_context(|| {
+            format!(
+                "staging kuma-files: it is not beside the running kuma ({}); a \
+                 desktop image needs the release's binaries together",
+                kuma_binary.display()
+            )
+        })?;
+        let files_desktop = parent.join("kuma-files.desktop");
+        std::fs::copy(&files_desktop, dir.join("kuma-files.desktop")).with_context(|| {
+            format!(
+                "staging kuma-files.desktop: it is not beside the running kuma ({}) — \
+                 the app's entry ships from the kumaui tree beside its binary",
+                kuma_binary.display()
+            )
+        })?;
+        let files_icon = parent.join("kuma-files.png");
+        std::fs::copy(&files_icon, dir.join("kuma-files.png")).with_context(|| {
+            format!(
+                "staging kuma-files.png: it is not beside the running kuma ({}) — \
+                 the entry names this icon, so the icon rides with it",
+                kuma_binary.display()
+            )
+        })?;
     }
     if config.nostr.enable {
         let mut names = vec!["kuma-nostrd", "kuma-nostr"];
@@ -242,6 +273,13 @@ mod tests {
         // as stable.
         std::fs::write(bin_home.path().join("kuma-shell"), "not really kuma-shell\n").unwrap();
         std::fs::write(bin_home.path().join("kuma-greeter"), "not really kuma-greeter\n").unwrap();
+        // Koguma's trio rides with them: the binary, its desktop entry,
+        // and the icon the entry names. Written for every case like the
+        // shell's stubs, because write_context only reads them where a
+        // niri image will COPY them.
+        std::fs::write(bin_home.path().join("kuma-files"), "not really kuma-files\n").unwrap();
+        std::fs::write(bin_home.path().join("kuma-files.desktop"), "not really kuma-files\n").unwrap();
+        std::fs::write(bin_home.path().join("kuma-files.png"), "not really kuma-files\n").unwrap();
         if cfg.nostr.enable {
             let mut names = vec!["kuma-nostrd", "kuma-nostr"];
             if cfg.nostr.relay.enable {

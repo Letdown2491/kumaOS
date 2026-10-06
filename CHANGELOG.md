@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Koguma, kuma's own file manager, ships in the image — installed,
+  not yet the default.** The third kumaui binary rides the same road
+  as the shell and the greeter: built at the pinned kumaui commit,
+  staged beside the kuma binary, baked in at `/usr/bin/kuma-files`,
+  with the desktop entry and icon shipped from the kumaui tree beside
+  it — so the launcher lists it under its own name, keywords and all.
+  Thunar stays the `inode/directory` default for now, deliberately:
+  the plan is for the field to ride Koguma as the daily file manager
+  for a release before a later one drops Thunar and swaps the default.
+  The smoke launches it in the guest through the session's own user
+  manager and holds it to its activation socket — a shipped app that
+  cannot launch is exactly the thing a smoke exists to catch.
+
 - **Samba browsing arrives — and every gvfs mount gains a plain POSIX
   path.** `gvfs-smb` puts the samba backend in the image for the first
   time: any gvfs consumer can browse `smb://`, Thunar included. And

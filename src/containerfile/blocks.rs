@@ -3110,6 +3110,34 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     // binaries, and an image that ships one without the other ships a
     // greeter config pointing at a binary that is not there.
     e.copy_exec(&greeter_bin, "/usr/bin/kuma-greeter");
+    // Koguma, the file manager: the third kumaui binary and the first
+    // kumaui app the image offers the user. Installed, not default —
+    // the ship release's whole point is a file manager beside Thunar
+    // for the field to ride, and the mimeapps pin below still hands
+    // inode/directory to thunar.desktop, so the swap is a decision a
+    // later release makes after the ride, not a default this one
+    // moves. The desktop entry and the icon ride from the kumaui tree
+    // beside the binary: the entry is the app's identity — the name
+    // the launcher shows, the keywords it matches, the MimeType it
+    // claims — and it ships from the tree that builds the app, not
+    // regenerated here.
+    let files_bin = e.supplied("kuma-files");
+    e.copy_exec(&files_bin, "/usr/bin/kuma-files");
+    let files_desktop = e.supplied("kuma-files.desktop");
+    e.copy(&files_desktop, "/usr/share/applications/kuma-files.desktop");
+    let files_icon = e.supplied("kuma-files.png");
+    e.copy(&files_icon, "/usr/share/icons/hicolor/256x256/apps/kuma-files.png");
+    // The entry is kumaui's own, but the image installs it, so the
+    // image's standard for entries holds here too — the same three
+    // questions the seam block asks of the entries it generates: the
+    // entry validates, the Exec it names is the binary copied just
+    // above it, and the icon the entry asks for sits where the theme
+    // will look for it. A malformed entry is not an error anywhere at
+    // runtime — the launcher silently skips it, so the verb is simply
+    // not there and nothing says why.
+    e.raw(
+        "RUN desktop-file-validate /usr/share/applications/kuma-files.desktop \\\n    && test -x /usr/bin/kuma-files \\\n    && test -f /usr/share/icons/hicolor/256x256/apps/kuma-files.png\n",
+    );
     e.copy(&kitty, "/etc/xdg/kitty/kitty.conf");
     // kitty skips settings it doesn't recognise and starts anyway, so a
     // renamed key ships a silently unthemed terminal — which is exactly
