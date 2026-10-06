@@ -95,6 +95,16 @@ pub(crate) const NIRI_PACKAGES: &[&str] = &[
     "file-roller",
     "gvfs",
     "gvfs-mtp",
+    // gvfs-fuse: the daemon that exposes every gvfs mount as plain POSIX
+    // paths under /run/user/$UID/gvfs. Koguma browses samba and MTP
+    // alike through those paths — it reads $XDG_RUNTIME_DIR/gvfs directly
+    // — while Thunar goes through GIO, which is why the image never missed
+    // the daemon: a bare-metal install pulled it in as a weak dep, the
+    // composed image does not. gvfs-smb: the samba backend, and with it
+    // samba browsing exists in the image at all, for any gvfs consumer,
+    // Thunar included.
+    "gvfs-fuse",
+    "gvfs-smb",
     "wf-recorder",
     // base ships zram-generator but not the defaults that activate it:
     // without this the desktop has zero swap and the OOM killer eats

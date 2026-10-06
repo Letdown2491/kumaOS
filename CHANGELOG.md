@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Samba browsing arrives — and every gvfs mount gains a plain POSIX
+  path.** `gvfs-smb` puts the samba backend in the image for the first
+  time: any gvfs consumer can browse `smb://`, Thunar included. And
+  `gvfs-fuse` puts the daemon that exposes every active gvfs mount as
+  plain files under `/run/user/$UID/gvfs` into the composed image at
+  last — a bare-metal install always pulled it in as a weak
+  dependency, the composed image did not, so gvfs mounts existed
+  without ever being reachable as files. Koguma — kuma's own file
+  manager, which this release ships in the image — browses every gvfs
+  mount, samba and MTP alike, through those paths alone, while Thunar
+  goes through GIO directly, which is why the gap could hide until
+  now.
+
 ## v44.5.0 (2026-10-05)
 
 - **The image carries its OCI version, and bootloader-update stops
