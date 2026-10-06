@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v44.6.0 (2026-10-07)
+
 - **Koguma, kuma's own file manager, ships in the image — installed,
   not yet the default.** The third kumaui binary rides the same road
   as the shell and the greeter: built at the pinned kumaui commit,

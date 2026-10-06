@@ -118,8 +118,8 @@ RUN . /usr/lib/os-release \
     esac \
     && sed -i \
         -e 's|^NAME=.*|NAME="kumaOS"|' \
-        -e "s|^PRETTY_NAME=.*|PRETTY_NAME=\"kumaOS 44.5.0${CODENAME:+ ($CODENAME)}\"|" \
-        -e "s|^VERSION=.*|VERSION=\"44.5.0${CODENAME:+ ($CODENAME)}\"|" \
+        -e "s|^PRETTY_NAME=.*|PRETTY_NAME=\"kumaOS 44.6.0${CODENAME:+ ($CODENAME)}\"|" \
+        -e "s|^VERSION=.*|VERSION=\"44.6.0${CODENAME:+ ($CODENAME)}\"|" \
         -e 's|^ID=.*|ID=kuma|' \
         -e 's|^DEFAULT_HOSTNAME=.*|DEFAULT_HOSTNAME="kumaos"|' \
         -e 's|^ANSI_COLOR=.*|ANSI_COLOR="0;38;2;126;224;168"|' \
@@ -137,7 +137,7 @@ COPY kuma.toml /usr/lib/kuma/kuma.toml
 
 LABEL io.kuma.image="1"
 LABEL io.kuma.builder=<version-and-commit>
-LABEL org.opencontainers.image.version="44.5.0"
+LABEL org.opencontainers.image.version="44.6.0"
 
 RUN find /run /tmp -mindepth 1 -delete; \
     find /var/log -type f -delete; \
