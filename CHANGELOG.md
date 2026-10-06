@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## v44.6.0 (2026-10-07)
+## v44.6.0 (2026-10-09)
 
 - **Koguma, kuma's own file manager, ships in the image — installed,
   not yet the default.** The third kumaui binary rides the same road
