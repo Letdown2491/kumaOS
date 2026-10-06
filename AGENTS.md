@@ -204,6 +204,13 @@ road every release ships.
   while the guest sat at its login prompt, reachable and willing, for
   half an hour. The key is 0600 at write and at the use site both, so
   an artifact kept by an older binary still works.
+- a local smoke lap leaves root-owned `vm-smoke/` debris behind, Oct 05:
+  smoke.sh's sudo steps (losetup, cryptsetup, the install lap's mounts)
+  write as root, so the next rootless `podman run :Z` dies at lsetxattr
+  EPERM — the relabel cannot touch root's files — and the canonical
+  container `cargo test` is blocked until `sudo rm -rf vm-smoke` runs
+  (15 GB of disk.raw and OVMF state measured, Oct 5's laps). Clean the
+  debris after any local lap, before the next container build or test.
 
 ## Agent skills
 
