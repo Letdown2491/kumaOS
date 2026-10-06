@@ -19,6 +19,12 @@ COPY niri-extras.kdl /usr/lib/kuma/niri-extras.kdl
 COPY kuma-wallpaper.jpg /usr/share/backgrounds/kuma/kuma-wallpaper.jpg
 COPY --chmod=755 kuma-shell /usr/bin/kuma-shell
 COPY --chmod=755 kuma-greeter /usr/bin/kuma-greeter
+COPY --chmod=755 kuma-files /usr/bin/kuma-files
+COPY kuma-files.desktop /usr/share/applications/kuma-files.desktop
+COPY kuma-files.png /usr/share/icons/hicolor/256x256/apps/kuma-files.png
+RUN desktop-file-validate /usr/share/applications/kuma-files.desktop \
+    && test -x /usr/bin/kuma-files \
+    && test -f /usr/share/icons/hicolor/256x256/apps/kuma-files.png
 COPY kitty.conf /etc/xdg/kitty/kitty.conf
 RUN rc=0; kitty +runpy "import sys; from kitty.config import load_config; bad = []; load_config('/etc/xdg/kitty/kitty.conf', accumulate_bad_lines=bad); sys.exit('malformed kitty.conf lines: %s' % bad if bad else 0)" 2>/tmp/kitty.err || rc=$?; \
     cat /tmp/kitty.err >&2; \
