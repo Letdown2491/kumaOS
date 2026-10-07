@@ -195,6 +195,15 @@ recipe never reaches the running machine. kumaOS's keeps working after install:
 change you made by hand into a proposal against the declaration instead of an
 error to erase.
 
+**secureblue** hardened this same Fedora base much further than anyone, and
+the floor every kumaOS image ships borrows its audited set — ptrace
+restricted, kernel pointers out of `/proc`, coredumps dropped, a firewalld
+zone that serves the desktop and nothing the network can reach, NTS-
+authenticated time, faillock on the login stacks. What kumaOS leaves out
+is the half with a price an owner should choose: `io_uring`, kernel
+lockdown, SMT. [SECURITY.md](SECURITY.md) is the trust and reporting
+story; [how kuma behaves](docs/concepts.md) has the floor and its whys.
+
 ## Principles
 
 In order:
@@ -218,8 +227,9 @@ In order:
   or back up and install one that doesn't.
 - [How kuma behaves](docs/concepts.md): why drift is a proposal rather than
   an error, what `kuma.lock` pins and what it only records, how `/etc` is
-  merged rather than replaced, how a bad update rolls itself back, and what
-  an install decides that a declaration cannot.
+  merged rather than replaced, how a bad update rolls itself back, the
+  hardening floor every image carries, and what an install decides that a
+  declaration cannot.
 - [The contract](docs/contract.md): what 44.0 promises, what it declines,
   and the rules every later release follows. The major version names the
   Fedora base; a promise ends only in a release that announced the ending.
