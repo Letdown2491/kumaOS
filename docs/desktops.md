@@ -19,7 +19,7 @@ An image is built in layers, and they are not all curated by the same hand:
    maintains it; kuma includes it unmodified.
 2. **kuma's base.** Networking, firmware, and the handful of things any real
    machine needs: `shadow-utils`, `sudo`, `chrony`, `openssh-server`,
-   `passwd`, `cryptsetup`, `fwupd`. See
+   `authselect`, `passwd`, `cryptsetup`, `fwupd`. See
    [where the base system comes from](concepts.md#where-the-base-system-comes-from).
 3. **The desktop set.** Everything below.
 

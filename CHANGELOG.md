@@ -40,6 +40,9 @@
   unanswered, the router sees a new stable MAC per Wi-Fi network,
   SysRq is gone, the console before the LUKS prompt is quieter
   (`printk = 3 3 3 3`), and builds pay `init_on_free`'s few percent.
+  And `authselect` is named in the composed base rather than riding in
+  as pam's dependency, because the floor's flip is kuma's dependency
+  to own.
 
 ## v44.6.0 (2026-10-09)
 

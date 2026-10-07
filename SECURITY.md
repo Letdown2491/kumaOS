@@ -111,9 +111,13 @@ publish with it:
   prompt. It is a deliberate choice for a kiosk or a VM, and it is not a good
   one for a laptop that leaves the house.
 
-Every image also runs `sshd` with password authentication on, and the account
-an install creates is in `wheel`; what that means on a network you do not run,
-and the ways to turn it off, are argued in
+Every image also runs `sshd` with password authentication on, and the
+account an install creates is in `wheel`. The hardening floor's firewalld
+zone does not serve ssh to the world — the only address that reaches it is
+qemu's user-net gateway, the lane the test harness arrives from — and
+`pam_faillock` caps online guessing at 50 failures for a day. What that
+means on a network you run, how to serve ssh deliberately, and the ways to
+turn it off, are argued in
 [how kuma behaves](docs/concepts.md#where-the-base-system-comes-from).
 
 ## What a build pins

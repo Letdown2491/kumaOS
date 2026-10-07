@@ -109,30 +109,75 @@ Two consequences:
 
 Naming a `base` opts out of all of it: any bootc image can be one.
 
-**The base runs sshd.** `openssh-server` is composed in, and the image enables
-`sshd.service` by name, so every kuma machine listens on port 22 and
-firewalld's default zone permits it. This is deliberate rather than
-inherited: `kuma vm` and the boot stage of the smoke tests both reach a guest
-over ssh, so an image that could not be reached that way would take the test
-harness with it.
+**The base runs sshd, and the firewall answers for it.** `openssh-server` is
+composed in, and the image enables `sshd.service` by name. The unit is a
+curated default rather than an inherited one because `kuma vm` and the boot
+stage of the smoke tests both reach a guest over ssh — an image that could
+not be reached that way would take the test harness with it. Where the
+world's route in used to live — firewalld's default zone, which permitted
+ssh outright — the hardening floor has closed the door: the shipped public
+zone stops serving `ssh`, and what remains is a rich rule admitting ssh
+from 10.0.2.2 alone, qemu's user-mode gateway, the address the test lanes
+arrive from. The price is named in the zone description: a network
+numbered 10.0.2.0/24 would reach sshd too.
 
 Authentication is Fedora's default, which means passwords work, and the
-account `kuma install` creates is in `wheel`. On a laptop that joins a
-network you do not run, that is a password prompt anybody on that network
-can reach. Online guessing is rate-limited rather than locked out, so a
-weak password is weak here in a way the hash's own cost does not help. If
-you declare `[user].ssh_keys`, kuma serves them from `/etc/kuma/keys/<name>`
-alongside the user's own `~/.ssh/authorized_keys` and never overwrites it.
-To require keys, drop a conf into `/etc/ssh/sshd_config.d/`; `/etc` is
-merged rather than replaced, so it survives image updates, and `kuma doctor`
-will report it as a local modification because it is one.
+account `kuma install` creates is in `wheel`. The prompt is no longer
+something a stranger on the coffee-shop wifi can reach, but the floor does
+not pretend the unit is off: an owner who wants to reach the machine over
+the network serves ssh deliberately, with `firewall-cmd --permanent
+--zone=public --add-service=ssh`. Online guessing is capped rather than
+merely rate-limited — the floor wires `pam_faillock` into the login
+stacks, and 50 failed attempts lock the account for a day;
+`faillock --user <name> --reset` clears it. If you declare
+`[user].ssh_keys`, kuma serves them from `/etc/kuma/keys/<name>` alongside
+the user's own `~/.ssh/authorized_keys` and never overwrites it. To
+require keys, drop a conf into `/etc/ssh/sshd_config.d/`; `/etc` is merged
+rather than replaced, so it survives image updates, and `kuma doctor` will
+report it as a local modification because it is one.
 
 `[services].disable = ["sshd.service"]` turns it off on a machine that
 doesn't want it. It is a default, not part of kuma's floor: the image enables
 it above your `[services]` block, so your declaration wins, the way it does
-for anything a desktop enables. Boot health and rollback sit below that line
-and cannot be switched off. Disable sshd and `kuma vm` still builds a disk,
-but nothing will be able to ssh into it.
+for anything a desktop enables. Boot health, rollback, and the hardening
+floor sit below that line and cannot be switched off. Disable sshd and
+`kuma vm` still builds a disk, but nothing will be able to ssh into it.
+
+**The hardening floor.** Below the `[services]` line sits a set no
+declaration can switch off, taken from secureblue's audited hardening and
+adapted to what kuma's gate can run. Six files ship in every image:
+
+- `/usr/lib/sysctl.d/70-kuma-hardening.conf` — ptrace restricted to
+  processes you launched (`kernel.yama.ptrace_scope = 1`), kernel pointers
+  gone from `/proc`, perf root-only, kexec disabled, SysRq off, coredumps
+  dropped, ASLR entropy at the arch maximum, and the TCP/ICMP set —
+  including `icmp_echo_ignore_all`, which is why a debugging session
+  cannot ping the machine (`sysctl -w` brings it back for the session).
+- `/usr/lib/bootc/kargs.d/05-kuma-hardening.toml` — `init_on_free` (the
+  one karg with a measurable cost, a few percent on allocation-heavy
+  work), `page_alloc.shuffle`, `vsyscall=none`, `vdso32=0`,
+  `module.sig_enforce` (every module in the image is Fedora's own),
+  `rd.shell=0` with `rd.emergency=halt` (no initramfs shell on a machine
+  whose disk is encrypted), `systemd.ssh_auto=no`, and
+  `random.trust_cpu=off`.
+- `/etc/firewalld/zones/public.xml` — the zone described above.
+- `/etc/chrony.conf` — NTS-authenticated time from two independent
+  vendors, replacing the unsigned pool. Time is a root CA revocation,
+  log ordering and kerberos expiry; an on-path attacker between the
+  machine and a pool could feed it.
+- `/etc/NetworkManager/conf.d/kuma-mac.conf` — a random but stable MAC
+  per Wi-Fi connection: the access point sees a different address on
+  each network the machine joins and the same one every time on each.
+  Router-side DHCP reservations follow the new address once.
+- `/etc/security/faillock.conf` — the lockout described above.
+
+What secureblue ships that the floor does not, and why: the sysctls and
+kargs Fedora's kernel already defaults (`init_on_alloc`, `slab_nomerge`,
+`randomize_kstack_offset`); `io_uring_disabled`, a real mitigation with a
+real breakage list; and `lockdown=confidentiality` with
+`mitigations=auto,nosmt` — the first disables hibernation, which the
+image's `resume=` kargs are set up for, and the second halves the cores.
+Both are decisions, and the floor does not make an owner's decisions.
 
 ## What every image carries
 
