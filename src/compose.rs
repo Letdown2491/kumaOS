@@ -137,6 +137,10 @@ packages:
   - sudo            # the wheel/privilege model every account assumes
   - chrony          # NTP; the desktop enables chronyd.service
   - openssh-server  # remote access; VMs and smoke tests ssh in
+  - authselect      # owns the PAM stacks; the hardening floor flips
+                    # with-faillock through it. pam happens to require
+                    # it today — named so the flip is kuma's dependency,
+                    # not that luck's.
   - passwd          # password management
   - ncurses         # clear, tput, reset: ncurses-base ships terminfo and
                     # ncurses-libs the library, but the commands every
