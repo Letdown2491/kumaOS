@@ -58,7 +58,10 @@ pub enum Level {
 
 /// Kinds whose writes sign unattended at Basic — the everyday social
 /// surface: notes, reposts, reactions, comments, long-form, zap
-/// receipts, pin and follow-set lists, blossom authorizations.
+/// receipts, pin and follow-set lists, blossom authorizations. The
+/// blossom kind's safety is the verb's, not the kind's:
+/// `is_sensitive` reads the auth's `t` tag, and a `delete`
+/// authorization asks the way kind 5 does.
 /// The direction is signet's, borrowed with one divergence: only an
 /// explicitly safe kind rides, and anything unknown asks — the mute
 /// list (10000) is deliberately absent from this list, because a
@@ -87,6 +90,17 @@ fn is_sensitive(method: &NostrConnectMethod, params: &[String]) -> bool {
         // arbitrary blobs — and rides at Basic like an everyday sign.
         NostrConnectMethod::Nip04Encrypt => true,
         NostrConnectMethod::SignEvent => match params.first().and_then(|json| event_kind(json)) {
+            // A blossom authorization rides the safe list only when
+            // the verb it authorizes is not destructive: get, upload
+            // and list are the everyday surface, and a `delete` auth
+            // can destroy content at a server — a deletion wearing
+            // another kind, which asks the way kind 5 does. A verb
+            // that cannot be read asks too: what cannot be read
+            // cannot be vouched for.
+            Some(24242) => !matches!(
+                params.first().and_then(|json| blossom_auth_verb(json)).as_deref(),
+                Some("get" | "upload" | "list")
+            ),
             Some(kind) => !SAFE_KINDS.contains(&(kind as u16)),
             None => true,
         },
@@ -842,6 +856,22 @@ fn event_kind(json: &str) -> Option<u64> {
     }
 }
 
+/// The verb a blossom authorization (kind 24242) authorizes — BUD-01's
+/// own `t` tag: get, upload, delete, list. Read leniently like the
+/// kind, and with the same direction: an unreadable verb is one that
+/// asks.
+fn blossom_auth_verb(json: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let tags = value.get("tags")?.as_array()?;
+    for tag in tags {
+        let Some(pair) = tag.as_array() else { continue };
+        if pair.first().and_then(|t| t.as_str()) == Some("t") {
+            return pair.get(1).and_then(|t| t.as_str()).map(str::to_string);
+        }
+    }
+    None
+}
+
 /// The event's content, whole, when it is a string field — the
 /// judgment's material.
 fn event_content(json: &str) -> Option<String> {
@@ -871,6 +901,7 @@ fn kind_label(kind: u64) -> Option<&'static str> {
         10001 => "Pin List",
         10002 => "Relay List",
         22242 => "HTTP Auth",
+        24242 => "Blossom Auth",
         27235 => "HTTP Auth",
         30000 => "Categorized People",
         30001 => "Categorized Bookmarks",
@@ -899,6 +930,13 @@ fn sign_event_summary(params: &[String]) -> String {
             10002 => "Update relay list".into(),
             22242 => "Sign http auth".into(),
             24133 => "Sign NIP-46 response".into(),
+            24242 => match params.first().and_then(|json| blossom_auth_verb(json)).as_deref() {
+                Some("get") => "Authorize a download (blossom auth)".into(),
+                Some("upload") => "Authorize an upload (blossom auth)".into(),
+                Some("delete") => "Delete blobs (blossom auth)".into(),
+                Some("list") => "List blobs (blossom auth)".into(),
+                _ => "Sign blossom authorization".into(),
+            },
             27235 => "Sign http auth".into(),
             30023 => "Sign article".into(),
             other => format!("Sign event (kind {other})"),
@@ -970,6 +1008,22 @@ mod tests {
             "{}",
         );
         vec![unsigned.as_json()]
+    }
+
+    /// A blossom authorization (kind 24242) with its verb in the `t`
+    /// tag, built as hand JSON on purpose: the policy layer reads the
+    /// event leniently, and this tests the lenient reader against the
+    /// shape an app actually sends. An empty verb is the unreadable
+    /// case — a `t` tag with nothing usable in it.
+    fn blossom_write(verb: &str) -> Vec<String> {
+        let event = serde_json::json!({
+            "pubkey": nostr::key::Keys::generate().public_key().to_string(),
+            "created_at": unix_now(),
+            "kind": 24242,
+            "tags": [["t", verb], ["expiration", "4102444800"]],
+            "content": ""
+        });
+        vec![event.to_string()]
     }
 
     fn profile_write() -> Vec<String> {
@@ -1179,6 +1233,53 @@ mod tests {
         });
         tokio::task::yield_now().await;
         assert_eq!(engine.prompts().len(), 1, "an unknown kind asks at Basic");
+        engine.approve(&engine.prompts()[0].id, None).unwrap();
+        ask.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_blossom_delete_authorization_asks_at_basic() {
+        let engine = engine();
+        let app = app();
+        let engine_for_ask = engine.clone();
+        let ask = tokio::spawn(async move {
+            engine_for_ask.decide(&app, &NostrConnectMethod::GetPublicKey, &[]).await
+        });
+        tokio::task::yield_now().await;
+        engine.approve(&engine.prompts()[0].id, None).unwrap();
+        ask.await.unwrap();
+        engine.set_level(&app.to_string(), Level::Basic).unwrap();
+
+        // The everyday verbs — get, upload, list — ride unattended,
+        // exactly what the kind's safe-list entry promised before the
+        // verb read existed.
+        for verb in ["get", "upload", "list"] {
+            let allowed =
+                engine.decide(&app, &NostrConnectMethod::SignEvent, &blossom_write(verb)).await;
+            assert!(matches!(allowed, Decision::Allow), "blossom {verb} rides at Basic");
+            assert!(engine.prompts().is_empty(), "blossom {verb} popped no card");
+        }
+
+        // A delete authorization is a deletion wearing another kind:
+        // it asks the way kind 5 does.
+        let engine_for_ask = engine.clone();
+        let ask = tokio::spawn(async move {
+            engine_for_ask.decide(&app, &NostrConnectMethod::SignEvent, &blossom_write("delete"))
+                .await
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(engine.prompts().len(), 1, "a blossom delete asks at Basic");
+        engine.approve(&engine.prompts()[0].id, None).unwrap();
+        ask.await.unwrap();
+
+        // An auth whose verb cannot be read asks too — the lenient
+        // read fails toward the person, not toward the signature.
+        let engine_for_ask = engine.clone();
+        let ask = tokio::spawn(async move {
+            engine_for_ask.decide(&app, &NostrConnectMethod::SignEvent, &blossom_write("")).await
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(engine.prompts().len(), 1, "an unreadable blossom verb asks at Basic");
         engine.approve(&engine.prompts()[0].id, None).unwrap();
         ask.await.unwrap();
     }

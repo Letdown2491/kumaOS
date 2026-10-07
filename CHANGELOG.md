@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **A blossom `delete` authorization asks, the way any deletion asks.**
+  Kind 24242 rode the safe list whole — every blossom authorization
+  signed unattended at Basic, blind to which verb the auth carried, and
+  a delete authorization is a deletion wearing another kind. The
+  policy layer now reads the auth's `t` tag (BUD-01's own field):
+  `get`, `upload` and `list` keep riding Basic, `delete` prompts — the
+  mute-list precedent, that a write which reshapes the user's content
+  is the person's to answer — and so does an auth whose verb cannot be
+  read. The ask card speaks blossom now: the summary names the act
+  ("Delete blobs (blossom auth)") where the number used to. No new
+  bunker surface was needed for Koguma's blossom pane: the standard
+  NIP-46 `sign_event` already carries kind 24242, and the blossom
+  server list is Koguma's own configuration, not the bunker's — an
+  off-distro install holds its own list, so the bunker would fork the
+  feature by hosting one (issues #27, #28).
+
 - **`kuma-nostr export` — the backup that makes `destroy` survivable on
   purpose.** The daemon wraps the vault's key fresh under a passphrase
   the person chose and answers the `ncryptsec1` string the import

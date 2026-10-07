@@ -60,8 +60,10 @@ app starts at the most careful level:
   app gets the refusal.
 - **Basic** — the everyday social stuff signs without asking: notes,
   reposts, reactions, long-form. Anything sensitive still asks: profile
-  and follows, relay and mute lists, deletions, every decrypt, private
-  messages (NIP-04), and anything the safe list does not name.
+  and follows, relay and mute lists, deletions — kind 5's and a blossom
+  `delete` authorization's alike, the same act wearing another kind —
+  every decrypt, private messages (NIP-04), and anything the safe list
+  does not name.
 - **Trust** — signs everything unattended. `kuma doctor` flags any app at
   Trust by name, because a standing grant is the loudest thing in the
   layer.
