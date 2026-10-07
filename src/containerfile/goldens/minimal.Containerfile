@@ -3,6 +3,15 @@ FROM localhost/kuma-base:m5b1f3da61dcf
 
 RUN systemctl enable sshd.service
 
+COPY hardening-sysctl.conf /usr/lib/sysctl.d/70-kuma-hardening.conf
+COPY kargs-hardening.toml /usr/lib/bootc/kargs.d/05-kuma-hardening.toml
+COPY public.zone.xml /etc/firewalld/zones/public.xml
+COPY chrony.conf /etc/chrony.conf
+COPY kuma-mac.conf /etc/NetworkManager/conf.d/kuma-mac.conf
+COPY faillock.conf /etc/security/faillock.conf
+
+RUN authselect enable-feature with-faillock && authselect apply-changes
+
 RUN --mount=type=cache,target=/var/cache/libdnf5 \
     dnf -y install --setopt=keepcache=1 fuse fuse-libs
 
