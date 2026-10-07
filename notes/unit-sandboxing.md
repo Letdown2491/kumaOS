@@ -2,9 +2,9 @@
 
 Status: planned 2026-09-27, from the security audit (four sweeps, nothing
 above Low; this is the one finding worth work). Not started. Base-independent:
-works identically on a Fedora 44 image, which per the doctrine in
-[44.2.0-plan.md](44.2.0-plan.md) is exactly what lands before the 45.0.0
-rebase — so this is a 44.x item, not a 45.0.0 rider.
+works identically on a Fedora 44 image, and landing 44.x work before the
+45.0.0 rebase is the standing doctrine — so this is a 44.x item, not a
+45.0.0 rider.
 
 ## The threat model, stated precisely
 
