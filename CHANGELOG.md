@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+- **A hardening floor, taken from secureblue's audited set and adapted
+  to what kuma's gate can run.** Every image ships six new files:
+  `/usr/lib/sysctl.d/70-kuma-hardening.conf` (the kernel's cheap
+  answers to the exploit classes that start in userspace — ptrace
+  restricted to your own descendants, kernel pointers gone from
+  `/proc`, perf root-only, kexec disabled, SysRq off, coredumps to
+  `/bin/false`, the TCP/ICMP set, and the rest), 
+  `/usr/lib/bootc/kargs.d/05-kuma-hardening.toml` (`init_on_free`,
+  `page_alloc.shuffle`, `vsyscall=none`, `vdso32=0`,
+  `module.sig_enforce`, `rd.shell=0`, `rd.emergency=halt`,
+  `systemd.ssh_auto=no`, `random.trust_cpu=off`), a firewalld public
+  zone that no longer serves `ssh` to the world, NTS-authenticated
+  chrony (`time.cloudflare.com` and `nts.netnod.se` replacing the
+  unsigned pool), stable-random Wi-Fi MACs per connection, and
+  faillock at secureblue's numbers (50 failures, a day's lock) wired
+  in through `authselect enable-feature`. The sysctl set subtracted
+  everything the running kernel already defaults and everything with a
+  price a desktop would feel — `io_uring_disabled` and
+  `lockdown`/`nosmt` are named decisions that stay unmade — and the
+  kargs set subtracted the three kargs the kernel's config already
+  carries. The sshd story is the change's spine: the boot smoke and
+  `kuma vm` reach the guest over ssh and the install lap reaches it
+  with a password, so the unit stays enabled and the closure moves to
+  the firewall, which is where the world's route in actually was. The
+  public zone keeps a rich rule admitting ssh from 10.0.2.2 alone —
+  qemu's user-net gateway, the address `kuma vm`'s 127.0.0.1 bind
+  already assumes — and names its price in the zone description: a
+  network numbered 10.0.2.0/24 would reach sshd, which is the cost of
+  the test lane living in the shipped zone instead of a fixture. The
+  boot smoke gained a hardening lap that asserts the sysctl values,
+  the kargs on `/proc/cmdline`, the zone's shape from the running
+  firewall, NTS sources, faillock's wiring, and the MAC conf — the
+  floor's quiet regression reports itself, and the kargs merge through
+  bootc's kargs.d gets its measurement on the next lap. What the user
+  feels: `strace -p` and perf on host processes want root, ping goes
+  unanswered, the router sees a new stable MAC per Wi-Fi network,
+  SysRq is gone, the console before the LUKS prompt is quieter
+  (`printk = 3 3 3 3`), and builds pay `init_on_free`'s few percent.
+
 ## v44.6.0 (2026-10-09)
 
 - **Koguma, kuma's own file manager, is the image's file manager —

@@ -3285,6 +3285,83 @@ smoke_boot() {
     [ -z "$failed" ] || bad "failed units: $(echo "$failed" | tr '\n' ' ')"
     ok "no failed units"
 
+    # ---- the hardening floor ----
+    # The image's own posture, asserted from the guest so a quiet
+    # regression reports itself. The sysctl values mirror
+    # 70-kuma-hardening.conf in order, the kargs list mirrors
+    # 05-kuma-hardening.toml, and the zone is the one the guest is
+    # being reached through: ssh works here only because the slirp rule
+    # lets it, so green on the lane asserts the rule as much as the
+    # harness. A sysctl that drifts means either the file stopped
+    # shipping or a base change stopped it applying, and both are news.
+    local hard got want
+    hard=$(guest 'sysctl -n kernel.yama.ptrace_scope kernel.kptr_restrict \
+        kernel.perf_event_paranoid kernel.kexec_load_disabled fs.suid_dumpable \
+        vm.unprivileged_userfaultfd vm.mmap_rnd_bits net.core.bpf_jit_harden \
+        kernel.sysrq net.ipv4.icmp_echo_ignore_all' | tr '\n' ' ' | xargs)
+    want="1 2 3 1 0 0 32 2 0 1"
+    [ "$hard" = "$want" ] || bad "hardening sysctls drifted: got '$hard', want '$want'"
+    ok "hardening sysctls at the floor"
+
+    local cmdline karg
+    cmdline=$(guest cat /proc/cmdline)
+    for karg in init_on_free=1 page_alloc.shuffle=1 vsyscall=none vdso32=0 \
+                module.sig_enforce=1 rd.shell=0 rd.emergency=halt \
+                systemd.ssh_auto=no random.trust_cpu=off; do
+        case " $cmdline " in
+            *" $karg "*) ;;
+            *) bad "karg $karg missing from /proc/cmdline: $cmdline" ;;
+        esac
+    done
+    ok "hardening kargs applied"
+
+    # The world's route to sshd ends at the zone; the lane is the rule.
+    # Both runtime reads, so a zone file that ships but does not parse
+    # is caught here and not by the next person to run firewall-cmd.
+    local zone_services rich
+    zone_services=$(gsudo firewall-cmd --zone=public --list-services)
+    case " $zone_services " in
+        *ssh*) bad "the public zone still serves ssh: '$zone_services'" ;;
+    esac
+    ok "the public zone no longer serves ssh"
+    rich=$(gsudo firewall-cmd --zone=public --list-rich-rules)
+    case "$rich" in
+        *"10.0.2.2"*) ;;
+        *) bad "the slirp lane is missing from the zone: '$rich'" ;;
+    esac
+    ok "the only ssh route is the test lane"
+
+    # NTS: two configured sources and the pool actually gone. Presence
+    # rather than sync state — a source that has not finished its
+    # handshake yet would flake a boot that is otherwise fine.
+    local nts
+    nts=$(guest 'grep -c " nts" /etc/chrony.conf')
+    [ "${nts:-0}" -ge 2 ] || bad "chrony has $nts NTS server lines; expected two"
+    guest 'chronyc -N sources' | grep -q cloudflare \
+        || bad "chrony's sources do not include the NTS vendor; the pool may be back"
+    ok "time comes in over NTS"
+
+    # faillock: wired into the stack and carrying its numbers.
+    guest 'grep -q pam_faillock /etc/pam.d/system-auth' \
+        || bad "pam_faillock is not in system-auth; the lockout is decorative"
+    guest 'grep -q "^deny = 50" /etc/security/faillock.conf' \
+        || bad "faillock.conf lost its deny count"
+    ok "login brute force is capped"
+
+    # The Wi-Fi MAC conf is a file the VM cannot exercise (the lane is
+    # ethernet), so the assert is the file's, which is still enough to
+    # catch it not shipping.
+    guest 'grep -q "cloned-mac-address=stable" /etc/NetworkManager/conf.d/kuma-mac.conf' \
+        || bad "the Wi-Fi MAC conf stopped shipping"
+    ok "Wi-Fi MACs are stable-random per network"
+
+    # The lane's own contract: sshd stays enabled in every image, or the
+    # stage that has been talking to the guest all along has nothing to
+    # talk to on the next run.
+    [ "$(guest systemctl is-enabled sshd.service)" = enabled ] \
+        || bad "sshd is not enabled; kuma vm and this stage lost their lane"
+    ok "sshd is still the curated default the lane rides on"
+
     # /var/home has to be its own btrfs subvolume, or `[snapshots]` is a
     # timer that runs hourly and takes nothing: a snapshot is of a
     # subvolume, the script exits 0 on a target that is not one, and the

@@ -879,6 +879,67 @@ mod tests {
         }
     }
 
+    /// The hardening floor is in every image, and it is a floor: emitted
+    /// after the declaration's [services] block, where nothing an owner
+    /// writes can reach it. secureblue's audited sysctl set, the kargs
+    /// half, the firewalld zone that ends the world's route to sshd, NTS
+    /// time, the Wi-Fi MAC conf, and faillock. The sshd story it depends
+    /// on is the test above's: the unit stays enabled, and the zone's
+    /// slirp rule is the lane the gate reaches the guest through.
+    #[test]
+    fn hardening_floor_is_in_every_image() {
+        for declaration in [
+            "schema_version = 1",
+            "schema_version = 1\n[system]\ndesktop = \"niri\"\n",
+            "schema_version = 1\n[system]\ndesktop = \"cosmic\"\n",
+        ] {
+            let out = generate(&config(declaration));
+            for named in [
+                "COPY hardening-sysctl.conf /usr/lib/sysctl.d/70-kuma-hardening.conf",
+                "COPY kargs-hardening.toml /usr/lib/bootc/kargs.d/05-kuma-hardening.toml",
+                "COPY public.zone.xml /etc/firewalld/zones/public.xml",
+                "COPY chrony.conf /etc/chrony.conf",
+                "COPY kuma-mac.conf /etc/NetworkManager/conf.d/kuma-mac.conf",
+                "COPY faillock.conf /etc/security/faillock.conf",
+                "authselect enable-feature with-faillock",
+            ] {
+                assert!(out.contains(named), "{named} missing for: {declaration}");
+            }
+        }
+    }
+
+    /// The zone carries the lane, not the world. The distinction is
+    /// indent-shaped and that is the point: a top-level `<service
+    /// name="ssh"/>` is the world's route back in and exactly the line
+    /// this block exists to remove, while the same element nested in the
+    /// rich rule is the slirp lane. The strings differ by indentation
+    /// only, so both halves are pinned against a reformat that would
+    /// quietly turn one into the other.
+    #[test]
+    fn the_zone_serves_the_lane_and_not_the_world() {
+        assert!(FIREWALLD_PUBLIC_ZONE.contains("10.0.2.2/32"), "the slirp lane");
+        assert!(
+            !FIREWALLD_PUBLIC_ZONE.contains("\n  <service name=\"ssh\"/>"),
+            "ssh is a top-level service again — the world's route is back"
+        );
+        assert!(
+            FIREWALLD_PUBLIC_ZONE.contains("\n    <service name=\"ssh\"/>"),
+            "the rule's own ssh element vanished — the gate's lane went with it"
+        );
+        // The values that motivated the whole change, pinned at the
+        // const so a well-meant renumber cannot hollow the floor.
+        for line in [
+            "kernel.yama.ptrace_scope = 1",
+            "kernel.kptr_restrict = 2",
+            "kernel.perf_event_paranoid = 3",
+            "kernel.kexec_load_disabled = 1",
+            "kernel.printk = 3 3 3 3",
+            "net.ipv4.icmp_echo_ignore_all = 1",
+        ] {
+            assert!(HARDENING_SYSCTL.contains(line), "sysctl floor lost: {line}");
+        }
+    }
+
     #[test]
     fn boot_health_ships_in_every_image() {
         let out = generate(&config("schema_version = 1"));
