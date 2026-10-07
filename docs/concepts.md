@@ -709,6 +709,14 @@ store under `~/.local/share/flatpak/db` (the location and notification
 prompts you answered), device pairings, and units you enabled in your own
 `systemd --user` manager. `[services]` is system scope only.
 
+**Display settings.** Mode, scale, and position belong to this machine's
+monitors, not to the system — two machines built from one declaration have
+different screens, the same reason timezone stays out. The shell applies
+your changes live and persists the difference to
+`~/.config/niri/local.kdl`, the delta file the image's niri config
+includes last, so your choices win over the image's defaults without ever
+shadowing them.
+
 **Everything else in `/etc` the image never shipped.** `kuma doctor`
 watches the files this image owns and says nothing about the rest. A
 real machine carries dozens of legitimately local files, and a check
