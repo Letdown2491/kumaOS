@@ -12,7 +12,7 @@ on a timer; snapshots survive a mistake, backups survive the disk.
 
 **Bunker.** A remote signer: a daemon holding a nostr key that answers
 signing requests from paired apps. The nostr layer runs one per session;
-see [the nostr layer](concepts.md#the-nostr-layer).
+see [the nostr layer](nostr.md).
 
 **Pairing URI.** The one-time invite a client or the bunker mints —
 `bunker://` from the bunker, `nostrconnect://` from the client. It
@@ -87,12 +87,13 @@ inside a LUKS container, unlocked by a passphrase at every boot.
 **nsec.** A nostr secret key, spelled `nsec1…` when encoded. The thing
 that *is* a nostr identity; everything else about the account is
 derivable from it. The nostr layer holds one in the login keyring and
-signs with it only through the policy engine.
+signs with it only through the policy engine;
+[the nostr layer](nostr.md) has the details.
 
 **ncryptsec.** An nsec wrapped by NIP-49 with a passphrase, spelled
-`ncryptsec1…`. The form the vault stores, so the stored format is the
-format an independent-passphrase vault needs, whatever the keyring
-itself proves to be worth.
+`ncryptsec1…`. The form the vault stores. Today the passphrase is
+stored next to the key, so the wrap adds no second secret; it exists so
+a vault with an independent passphrase later needs no migration.
 
 **Machine state.** What is true of one machine rather than of the system it
 runs — hostname, timezone, which wifi network, the volume. kuma
