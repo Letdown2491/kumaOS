@@ -786,6 +786,11 @@ mod tests {
         assert!(XSETTINGSD_CONF.contains("Net/ThemeName \"adw-gtk3-dark\""));
         assert!(GTK3_SETTINGS_INI.contains("gtk-theme-name = adw-gtk3-dark"));
         assert!(out.contains("RUN test -d /usr/share/themes/adw-gtk3-dark"));
+        // the focus ring must stay an outline AROUND the window: niri's
+        // default paints it as a filled rect behind the window, and a
+        // translucent surface composites over that fill instead of the
+        // wallpaper (issue #31)
+        assert!(NIRI_EXTRAS.contains("draw-border-with-background false"));
         // upstream niri spawns alacritty; the image ships kitty, so the sed
         // must rewrite the bind, and the grep guard must keep it honest
         assert!(out.contains("grep -q '\"alacritty\"' /usr/share/doc/niri/default-config.kdl"));

@@ -2055,6 +2055,18 @@ spawn-at-startup "/usr/libexec/kuma-battery-watch"
 window-rule {
     geometry-corner-radius 8
     clip-to-geometry true
+    // niri's default renders the focused window's ring as a filled rect
+    // BEHIND the window (its answer to arbitrarily shaped CSD borders), and
+    // a translucent surface composites over that fill: kuma-term at alpha 0
+    // read as a flat gray card, probes behind it measuring exactly the
+    // active-color below. false draws the ring as an outline AROUND the
+    // window instead — the conventional look, and translucency shows the
+    // wallpaper again. Nothing in the look needs the filled variant.
+    // kuma-shell also writes a per-app copy of this rule into its local.kdl
+    // store for installs older than the image that carries the fix; the
+    // rules are additive and identical, so the shim is redundant here, not
+    // conflicting.
+    draw-border-with-background false
     focus-ring {
         active-color "#b8bec8"
         inactive-color "#333940"

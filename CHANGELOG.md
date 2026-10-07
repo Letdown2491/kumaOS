@@ -118,6 +118,21 @@
   off-distro install holds its own list, so the bunker would fork the
   feature by hosting one (issues #27, #28).
 
+- **The focus ring stays an outline: translucent windows show the
+  wallpaper when focused.** niri's default renders the focused window's
+  ring as a filled rectangle behind the window — its answer to
+  arbitrarily shaped client-side borders — and a translucent surface
+  composites over that fill, so a fully transparent kuma-term blended
+  over a flat gray card instead of the wallpaper: pixel probes behind
+  the focused terminal measured exactly the look block's active-color.
+  The image's Kuma look window-rule now sets
+  `draw-border-with-background false`, drawing the ring around the
+  window instead — the conventional look everywhere else (issue #31).
+  kuma-shell already writes a per-app copy of the rule into its
+  local.kdl store for installs older than this image; the rules are
+  additive and identical, so the shim is redundant here, not
+  conflicting.
+
 ## v44.5.0 (2026-10-05)
 
 - **The image carries its OCI version, and bootloader-update stops
