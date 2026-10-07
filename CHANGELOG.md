@@ -1,47 +1,39 @@
 # Changelog
 
-## Unreleased
+## v44.6.0 (2026-10-09)
 
-- **A blossom `delete` authorization asks, the way any deletion asks.**
-  Kind 24242 rode the safe list whole — every blossom authorization
-  signed unattended at Basic, blind to which verb the auth carried, and
-  a delete authorization is a deletion wearing another kind. The
-  policy layer now reads the auth's `t` tag (BUD-01's own field):
-  `get`, `upload` and `list` keep riding Basic, `delete` prompts — the
-  mute-list precedent, that a write which reshapes the user's content
-  is the person's to answer — and so does an auth whose verb cannot be
-  read. The ask card speaks blossom now: the summary names the act
-  ("Delete blobs (blossom auth)") where the number used to. No new
-  bunker surface was needed for Koguma's blossom pane: the standard
-  NIP-46 `sign_event` already carries kind 24242, and the blossom
-  server list is Koguma's own configuration, not the bunker's — an
-  off-distro install holds its own list, so the bunker would fork the
-  feature by hosting one (issues #27, #28).
+- **Koguma, kuma's own file manager, is the image's file manager —
+  default and only.** The third kumaui binary rides the same road as
+  the shell and the greeter: built at the pinned kumaui commit, staged
+  beside the kuma binary, baked in at `/usr/bin/kuma-files`, with the
+  desktop entry and icon shipped from the kumaui tree beside it — so
+  the launcher lists it under its own name, keywords and all, and the
+  mimeapps default hands it `inode/directory` outright. Thunar and its
+  archive plugin leave the set in the same release, and the XFCE tail
+  that rode in as their dependencies — exo, garcon, xfconf, tumbler,
+  the libxfce pair, the panel straggler, ~32 MB installed — leaves
+  with them. file-roller stays: it is Koguma's extract catch-all, the
+  end of the ladder tar, unzip and the single-file decompressors
+  cannot finish (7z/rar). The plan's original order — ship Koguma
+  installed-not-default, ride it for a release, drop Thunar after —
+  was collapsed by the owner's call, 2026-10-06: the ride runs on the
+  drop, on the dev machine, with no net. The smoke launches Koguma in
+  the guest through the session's own user manager and holds it to its
+  activation socket — a shipped app that cannot launch is exactly the
+  thing a smoke exists to catch, and a default that cannot launch is
+  a desktop with no file manager at all.
 
-- **`kuma-nostr export` — the backup that makes `destroy` survivable on
-  purpose.** The daemon wraps the vault's key fresh under a passphrase
-  the person chose and answers the `ncryptsec1` string the import
-  surface already reads, so an imported nostr identity can be walked
-  off the machine before `destroy`, a decommission, or a disk's last
-  day. The fresh wrap is the point: the vault's stored passphrase is a
-  random string carried beside the key it protects, and a backup whose
-  secret lives on the disk being backed up away from is not a backup.
-  The CLI asks for the passphrase twice at a terminal (once on a
-  pipe), refuses weak ones through the same tested gate the
-  independent-passphrase vault mode will inherit, writes the file 0600
-  at creation and checked after, and never overwrites — a second
-  export names the collision instead of silently replacing the older
-  backup. The CLI still reads no keys: the passphrase rides the 0600
-  loopback socket the import's secret rides in on, and the wrapping
-  happens daemon-side against the in-memory key — a locked vault
-  refuses. The docs gained the truth the code always had: the bunker's
-  key is whichever road you took at setup — a generated key is
-  disposable by design, an imported identity is not replaceable at all
-  — and two stale claims that an imported identity never signs (a
-  bunker comment, a nostr.md sentence) are corrected. The nostr-relay
-  escrow from the issue's option list is declined: new infrastructure
-  and a published backup's metadata signature for what a file and the
-  `[backup]` restic repository already solve.
+- **Samba browsing arrives — and every gvfs mount gains a plain POSIX
+  path.** `gvfs-smb` puts the samba backend in the image for the first
+  time: any gvfs consumer can browse `smb://`. And `gvfs-fuse` puts
+  the daemon that exposes every active gvfs mount as plain files under
+  `/run/user/$UID/gvfs` into the composed image at last — a bare-metal
+  install always pulled it in as a weak dependency, the composed image
+  did not, so gvfs mounts existed without ever being reachable as
+  files. Koguma — the file manager this release makes the default —
+  browses every gvfs mount, samba and MTP alike, through those paths
+  alone; the image's GIO-native consumers never needed the FUSE
+  daemon, which is why the gap could hide until now.
 
 - **A hardening floor, taken from secureblue's audited set and adapted
   to what kuma's gate can run.** Every image ships six new files:
@@ -49,7 +41,7 @@
   answers to the exploit classes that start in userspace — ptrace
   restricted to your own descendants, kernel pointers gone from
   `/proc`, perf root-only, kexec disabled, SysRq off, coredumps to
-  `/bin/false`, the TCP/ICMP set, and the rest), 
+  `/bin/false`, the TCP/ICMP set, and the rest),
   `/usr/lib/bootc/kargs.d/05-kuma-hardening.toml` (`init_on_free`,
   `page_alloc.shuffle`, `vsyscall=none`, `vdso32=0`,
   `module.sig_enforce`, `rd.shell=0`, `rd.emergency=halt`,
@@ -85,40 +77,46 @@
   as pam's dependency, because the floor's flip is kuma's dependency
   to own.
 
-## v44.6.0 (2026-10-09)
+- **`kuma-nostr export` — the backup that makes `destroy` survivable on
+  purpose.** The daemon wraps the vault's key fresh under a passphrase
+  the person chose and answers the `ncryptsec1` string the import
+  surface already reads, so an imported nostr identity can be walked
+  off the machine before `destroy`, a decommission, or a disk's last
+  day. The fresh wrap is the point: the vault's stored passphrase is a
+  random string carried beside the key it protects, and a backup whose
+  secret lives on the disk being backed up away from is not a backup.
+  The CLI asks for the passphrase twice at a terminal (once on a
+  pipe), refuses weak ones through the same tested gate the
+  independent-passphrase vault mode will inherit, writes the file 0600
+  at creation and checked after, and never overwrites — a second
+  export names the collision instead of silently replacing the older
+  backup. The CLI still reads no keys: the passphrase rides the 0600
+  loopback socket the import's secret rides in on, and the wrapping
+  happens daemon-side against the in-memory key — a locked vault
+  refuses. The docs gained the truth the code always had: the bunker's
+  key is whichever road you took at setup — a generated key is
+  disposable by design, an imported identity is not replaceable at all
+  — and two stale claims that an imported identity never signs (a
+  bunker comment, a nostr.md sentence) are corrected. The nostr-relay
+  escrow from the issue's option list is declined: new infrastructure
+  and a published backup's metadata signature for what a file and the
+  `[backup]` restic repository already solve.
 
-- **Koguma, kuma's own file manager, is the image's file manager —
-  default and only.** The third kumaui binary rides the same road as
-  the shell and the greeter: built at the pinned kumaui commit, staged
-  beside the kuma binary, baked in at `/usr/bin/kuma-files`, with the
-  desktop entry and icon shipped from the kumaui tree beside it — so
-  the launcher lists it under its own name, keywords and all, and the
-  mimeapps default hands it `inode/directory` outright. Thunar and its
-  archive plugin leave the set in the same release, and the XFCE tail
-  that rode in as their dependencies — exo, garcon, xfconf, tumbler,
-  the libxfce pair, the panel straggler, ~32 MB installed — leaves
-  with them. file-roller stays: it is Koguma's extract catch-all, the
-  end of the ladder tar, unzip and the single-file decompressors
-  cannot finish (7z/rar). The plan's original order — ship Koguma
-  installed-not-default, ride it for a release, drop Thunar after —
-  was collapsed by the owner's call, 2026-10-06: the ride runs on the
-  drop, on the dev machine, with no net. The smoke launches Koguma in
-  the guest through the session's own user manager and holds it to its
-  activation socket — a shipped app that cannot launch is exactly the
-  thing a smoke exists to catch, and a default that cannot launch is
-  a desktop with no file manager at all.
-
-- **Samba browsing arrives — and every gvfs mount gains a plain POSIX
-  path.** `gvfs-smb` puts the samba backend in the image for the first
-  time: any gvfs consumer can browse `smb://`. And `gvfs-fuse` puts
-  the daemon that exposes every active gvfs mount as plain files under
-  `/run/user/$UID/gvfs` into the composed image at last — a bare-metal
-  install always pulled it in as a weak dependency, the composed image
-  did not, so gvfs mounts existed without ever being reachable as
-  files. Koguma — the file manager this release makes the default —
-  browses every gvfs mount, samba and MTP alike, through those paths
-  alone; the image's GIO-native consumers never needed the FUSE
-  daemon, which is why the gap could hide until now.
+- **A blossom `delete` authorization asks, the way any deletion asks.**
+  Kind 24242 rode the safe list whole — every blossom authorization
+  signed unattended at Basic, blind to which verb the auth carried, and
+  a delete authorization is a deletion wearing another kind. The
+  policy layer now reads the auth's `t` tag (BUD-01's own field):
+  `get`, `upload` and `list` keep riding Basic, `delete` prompts — the
+  mute-list precedent, that a write which reshapes the user's content
+  is the person's to answer — and so does an auth whose verb cannot be
+  read. The ask card speaks blossom now: the summary names the act
+  ("Delete blobs (blossom auth)") where the number used to. No new
+  bunker surface was needed for Koguma's blossom pane: the standard
+  NIP-46 `sign_event` already carries kind 24242, and the blossom
+  server list is Koguma's own configuration, not the bunker's — an
+  off-distro install holds its own list, so the bunker would fork the
+  feature by hosting one (issues #27, #28).
 
 ## v44.5.0 (2026-10-05)
 

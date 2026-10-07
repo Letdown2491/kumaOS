@@ -50,7 +50,7 @@ pub struct Config {
     pub nostr: Nostr,
 }
 
-/// The nostr layer's declaration (notes/44.4.0-plan.md, item 4).
+/// The nostr layer's declaration.
 ///
 /// `enable` gates the whole render: the daemon and CLI binaries, the
 /// hardened user unit, the plugin and its bind when they land. Absent

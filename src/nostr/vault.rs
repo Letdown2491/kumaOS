@@ -1,8 +1,8 @@
 //! The vault: where the daemon's nostr key lives when it is not in
 //! memory.
 //!
-//! The design is the plan's gate-style lock (notes/44.4.0-plan.md, item
-//! 1). The Secret Service's login collection is the wall — it is already
+//! The design is a gate-style lock. The Secret Service's login
+//! collection is the wall — it is already
 //! PAM-unlocked at greetd, so a fresh machine needs no second secret and
 //! no new passphrase UX — and the vault is honest about that being a
 //! gate: `lock` drops the key from memory and refuses to sign, `unlock`
