@@ -180,6 +180,13 @@ road every release ships.
   builds vgem out of tree against the running kernel's headers when
   the module will not load (the WSL trick: one file, seconds, no
   reboot).
+- The boot smoke's hardening lap pins the image's floor (blocks.rs's
+  hardening block): the sysctl values, the kargs on /proc/cmdline, the
+  public zone's shape, NTS sources, faillock's wiring, the MAC conf.
+  A floor change is a two-file change — blocks.rs AND the lap — and
+  the kargs' merge through bootc's kargs.d is measured there, not in
+  cargo test. The zone's slirp rule is the lane the smoke arrives
+  through; removing it strands the stage that reads everything else.
 - Existence is not accessibility, Oct 05: an insmod'd node ships 0600
   root:root — devtmpfs's default, and the runner's udev rules do not
   widen a faux-bus vgem — while the smoke's qemu runs as the runner
