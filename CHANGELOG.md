@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **`kuma-nostr export` — the backup that makes `destroy` survivable on
+  purpose.** The daemon wraps the vault's key fresh under a passphrase
+  the person chose and answers the `ncryptsec1` string the import
+  surface already reads, so an imported nostr identity can be walked
+  off the machine before `destroy`, a decommission, or a disk's last
+  day. The fresh wrap is the point: the vault's stored passphrase is a
+  random string carried beside the key it protects, and a backup whose
+  secret lives on the disk being backed up away from is not a backup.
+  The CLI asks for the passphrase twice at a terminal (once on a
+  pipe), refuses weak ones through the same tested gate the
+  independent-passphrase vault mode will inherit, writes the file 0600
+  at creation and checked after, and never overwrites — a second
+  export names the collision instead of silently replacing the older
+  backup. The CLI still reads no keys: the passphrase rides the 0600
+  loopback socket the import's secret rides in on, and the wrapping
+  happens daemon-side against the in-memory key — a locked vault
+  refuses. The docs gained the truth the code always had: the bunker's
+  key is whichever road you took at setup — a generated key is
+  disposable by design, an imported identity is not replaceable at all
+  — and two stale claims that an imported identity never signs (a
+  bunker comment, a nostr.md sentence) are corrected. The nostr-relay
+  escrow from the issue's option list is declined: new infrastructure
+  and a published backup's metadata signature for what a file and the
+  `[backup]` restic repository already solve.
+
 - **A hardening floor, taken from secureblue's audited set and adapted
   to what kuma's gate can run.** Every image ships six new files:
   `/usr/lib/sysctl.d/70-kuma-hardening.conf` (the kernel's cheap

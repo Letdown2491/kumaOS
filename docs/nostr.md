@@ -98,10 +98,12 @@ minimum) with `--inactivity-lock-secs`, and it locks itself when nothing
 has used or fed it for that long. This is off by default. Starting the
 daemon again starts a fresh window.
 
-One more thing worth knowing: the signing key is not your identity. The
-layer generates a dedicated signer key, so an app learns your real npub
-only if you import one and answer a `get_public_key` with it. To a relay
-operator, the bunker is pseudonymous.
+One more thing worth knowing: the bunker's key is whichever road you
+took at setup. By default the layer generates a key that exists nowhere
+else — machine-local, tied to nothing about you — and to a relay
+operator that makes the bunker pseudonymous. If you imported an
+identity you already hold, the bunker signs as that identity, and its
+npub is yours.
 
 ## Removing an app
 
@@ -146,8 +148,33 @@ program the right to ask. The policy engine still decides.
 
 ## Losing the key
 
-If you delete the vault (`kuma-nostr destroy`), you lose the nostr
-identity and nothing else on the machine. The bunker's key is unrelated
-to the image signing key, to disk encryption, and to your account
-password. Because destroy is unrecoverable, it is a dry run until you
-confirm it.
+The vault's key is the whole identity. `destroy` deletes it, and so does
+losing the disk. What that costs depends on which road you took at
+setup. A generated key is disposable by design: run `kuma-nostr setup`
+again, pair your apps again, and the new npub is as good as the old
+one. An imported identity is not replaceable at all — posts, followers,
+and history are gone with the key.
+
+Either way, the bunker's key is unrelated to the image signing key, to
+disk encryption, and to your account password. Its loss costs the
+identity and nothing else on the machine.
+
+So before destroying the vault, or right after importing an identity
+you care about, make the backup:
+
+```console
+$ kuma-nostr export --output ~/backups/nostr-identity.ncryptsec
+```
+
+The daemon wraps the key fresh under a passphrase you choose — 16 or
+more characters, letters and digits, because a file that has left the
+machine is defended by its passphrase alone. The file is created 0600
+and never overwritten, so a second export refuses to clobber the first.
+Put it somewhere off the machine: a password manager, a USB stick, or
+anywhere in your home that the `[backup]` restic repository already
+carries offsite, encrypted. `kuma-nostr import` reads the file back, on
+this machine or the next.
+
+Destroy itself stays unrecoverable by design, and its warning means
+what it says. The export is how you walk through the point of no return
+on purpose.

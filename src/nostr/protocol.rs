@@ -56,6 +56,14 @@ pub enum Request {
         #[serde(default)]
         confirm: bool,
     },
+    /// Wrap the vault's key fresh under a passphrase the person chose
+    /// and answer the `ncryptsec1` string — the backup that makes
+    /// `destroy` survivable on purpose. The passphrase rides the same
+    /// loopback socket the import's secret rides in on: mode 0600, the
+    /// person's own uid, the boundary the layer already trusts.
+    Export {
+        passphrase: String,
+    },
     /// The pending asks, for the CLI's `prompts` and the panel.
     Prompts,
     /// The activity log, oldest first — what was asked, by whom, and
@@ -166,6 +174,7 @@ pub enum OkResponse {
     Touch { ok: bool },
     DestroyDryRun { ok: bool, would: String },
     Destroy { ok: bool },
+    Export { ok: bool, ncryptsec: String },
     Prompts { ok: bool, prompts: Vec<super::policy::PromptView> },
     Log { ok: bool, log: Vec<super::policy::LogEntry> },
     Approve { ok: bool },
@@ -441,6 +450,10 @@ impl<S: super::vault::SecretStore> Daemon<S> {
                     Err(e) => err_response(e),
                 }
             }
+            Request::Export { passphrase } => match self.export(&passphrase) {
+                Ok(ncryptsec) => Response::Ok(OkResponse::Export { ok: true, ncryptsec }),
+                Err(e) => err_response(e),
+            },
             Request::Prompts => {
                 Response::Ok(OkResponse::Prompts { ok: true, prompts: self.engine.prompts() })
             }
@@ -729,6 +742,24 @@ impl<S: super::vault::SecretStore> Daemon<S> {
             .await?
             .ok_or_else(|| anyhow!("rotated and found no identity"))?;
         Ok(super::bunker::bunker_uri(&npub, &self.relays, Some(&secret)))
+    }
+
+    /// The export that gives `destroy` a way through on purpose: the
+    /// vault's key, wrapped fresh under a passphrase the person chose —
+    /// never the stored wrap's random one, which lives beside the key
+    /// it protects and would ship with the file. The stored blob is
+    /// untouched; this reads, it does not rewrite. The passphrase
+    /// clears the same strength bar the independent-passphrase vault
+    /// mode will ask, because the file it protects is the same thing:
+    /// a nostr identity whose compromise is silent and total.
+    fn export(&self, passphrase: &str) -> anyhow::Result<String> {
+        let key = self
+            .vault
+            .key()
+            .cloned()
+            .ok_or_else(|| anyhow!("the bunker is locked; unlock before exporting"))?;
+        keys::passphrase_strength(passphrase)?;
+        Ok(keys::to_ncryptsec(&key, passphrase)?.to_bech32()?)
     }
 
     /// Disarm: pool down, bunker dropped. A locked bunker holds no
@@ -1328,6 +1359,78 @@ mod tests {
             )
             .await;
         assert!(encode(&junk).contains("\"ok\":false"));
+    }
+
+    #[tokio::test]
+    async fn export_round_trips_through_import_and_refuses_locked_or_weak() {
+        let mut daemon = daemon().await;
+        daemon.handle(decode(r#"{"cmd":"setup","mode":{"how":"generate"}}"#).unwrap()).await;
+        let before = decode_status_vault(
+            &encode(&daemon.handle(decode(r#"{"cmd":"status"}"#).unwrap()).await),
+        )["pubkey"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Locked refuses before anything is wrapped — the CLI's
+        // pre-check asks the same question for the same reason.
+        daemon.handle(decode(r#"{"cmd":"lock"}"#).unwrap()).await;
+        let locked = daemon
+            .handle(
+                decode(r#"{"cmd":"export","passphrase":"a licence to decode 4412"}"#).unwrap(),
+            )
+            .await;
+        let line = encode(&locked);
+        assert!(line.contains("\"ok\":false") && line.contains("locked"), "{line}");
+
+        daemon.handle(decode(r#"{"cmd":"unlock"}"#).unwrap()).await;
+        let weak = daemon
+            .handle(
+                decode(r#"{"cmd":"export","passphrase":"all letters no digits"}"#).unwrap(),
+            )
+            .await;
+        let line = encode(&weak);
+        assert!(
+            line.contains("\"ok\":false"),
+            "the strength gate holds on the daemon side too: {line}"
+        );
+
+        let good = daemon
+            .handle(
+                decode(r#"{"cmd":"export","passphrase":"a licence to decode 4412"}"#).unwrap(),
+            )
+            .await;
+        let line = encode(&good);
+        assert!(
+            line.contains("ncryptsec1"),
+            "the answer is the import surface's own format: {line}"
+        );
+
+        // The round trip is the whole point: what export wrote, import
+        // eats back as the same identity. Destroy first, because a
+        // second setup is refused — and the restore is exactly what a
+        // person with a lost machine runs.
+        let ncryptsec = serde_json::from_str::<serde_json::Value>(line.trim())
+            .unwrap()["ncryptsec"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        daemon.handle(decode(r#"{"cmd":"destroy","confirm":true}"#).unwrap()).await;
+        let restore = serde_json::json!({
+            "cmd": "setup",
+            "mode": {"how": "import", "secret": ncryptsec, "passphrase": "a licence to decode 4412"}
+        })
+        .to_string();
+        let restored = daemon.handle(decode(&restore).unwrap()).await;
+        let line = encode(&restored);
+        assert!(line.contains("\"ok\":true"), "the exported key imports back: {line}");
+        let after = decode_status_vault(
+            &encode(&daemon.handle(decode(r#"{"cmd":"status"}"#).unwrap()).await),
+        )["pubkey"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(before, after, "the restored identity is the one exported");
     }
 
     #[tokio::test]

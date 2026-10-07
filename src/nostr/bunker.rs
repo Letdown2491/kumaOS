@@ -16,11 +16,11 @@
 //! re-locks only to execute; an approval arriving a minute later finds
 //! a lock that was free the whole time.
 //!
-//! The key doing the signing is the dedicated remote-signer key the
-//! vault holds — never the user's imported identity. Apps see the
-//! bunker pubkey and learn nothing else until a method answer tells
-//! them; that is the opinion the plan holds one layer down, and it is
-//! why `get_public_key` answers with the signer key's public half.
+//! The key doing the signing is the one the vault holds — a fresh
+//! signer when setup generated, the imported identity itself when setup
+//! imported. Either way the vault key is the bunker's whole identity:
+//! apps see its pubkey and learn nothing else until a method answer
+//! tells them, and `get_public_key` answers with its public half.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;

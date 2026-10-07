@@ -7,9 +7,9 @@
 //! this binary without widening the trust boundary.
 //!
 //! The verbs the layer has so far: `setup` (which asks rather than
-//! guesses), `generate`, `import`, `unlock`, `lock`, `status`,
-//! `destroy`. Pairing, prompts and the bunker arrive with the policy
-//! engine and ride the same socket.
+//! guesses), `generate`, `import`, `export` (the backup that makes
+//! `destroy` survivable on purpose), `unlock`, `lock`, `status`,
+//! `destroy`. Pairing, prompts and the bunker ride the same socket.
 
 use anyhow::Result;
 use clap::Parser;
@@ -88,6 +88,18 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Wrap the vault's key under a passphrase you choose and write the
+    /// `ncryptsec1` string to a file — the backup that makes `destroy`
+    /// survivable on purpose. `import` reads the file back, here or on
+    /// the next machine. The file is created 0600 and never
+    /// overwritten: a backup clobbered by a second run is a backup you
+    /// forgot you had lost.
+    Export {
+        /// Where the wrapped key lands. Required without `--json`, which
+        /// answers the raw document and lets the caller do the writing.
+        #[arg(long, required_unless_present = "json")]
+        output: Option<std::path::PathBuf>,
+    },
     /// The asks waiting on a person, newest last.
     Prompts,
     /// The activity log, oldest first: what was asked, by whom, and
@@ -140,6 +152,10 @@ fn main() -> Result<()> {
 
     let bunker_verb = matches!(cli.command, Command::Bunker { .. });
     let bunker_qr = matches!(cli.command, Command::Bunker { qr: true, .. });
+    let export_path = match &cli.command {
+        Command::Export { output } => output.as_deref(),
+        _ => None,
+    };
 
     // The identity verbs share one pre-check, because the worst order is
     // ask-then-refuse: the person pastes their secret key and only then
@@ -155,6 +171,20 @@ fn main() -> Result<()> {
                 "a vault already exists; destroy it first (`kuma-nostr destroy --yes`) \
                  — replacing a key is spelled"
             );
+        }
+    }
+
+    // The export reads the key, so its worst order is ask-then-refuse
+    // too: a passphrase typed twice and only then a locked gate. Status
+    // first, by the same logic as the identity verbs above.
+    if matches!(cli.command, Command::Export { .. }) {
+        let status = client.status()?;
+        let vault = &status["vault"];
+        if vault["exists"].as_bool() != Some(true) {
+            anyhow::bail!("no vault; nothing to export (set one up with `kuma-nostr setup`)");
+        }
+        if vault["unlocked"].as_bool() != Some(true) {
+            anyhow::bail!("the vault is locked; unlock it first (`kuma-nostr unlock`)");
         }
     }
 
@@ -190,6 +220,10 @@ fn main() -> Result<()> {
             format!(r#"{{"cmd":"mint"{label}}}"#)
         }
         Command::Destroy { yes } => format!(r#"{{"cmd":"destroy","confirm":{yes}}}"#),
+        Command::Export { .. } => {
+            let passphrase = read_new_passphrase()?;
+            format!(r#"{{"cmd":"export","passphrase":{}}}"#, json_string(&passphrase))
+        }
         Command::Prompts => r#"{"cmd":"prompts"}"#.to_string(),
         Command::Log => r#"{"cmd":"log"}"#.to_string(),
         Command::Approve { id, remember } => {
@@ -235,6 +269,10 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Some(path) = export_path {
+        return export_write(&value, path);
+    }
+
     render(&value)
 }
 
@@ -278,6 +316,34 @@ fn read_passphrase() -> Result<String> {
     let trimmed = passphrase.trim().to_string();
     if trimmed.is_empty() {
         anyhow::bail!("an ncryptsec needs the passphrase it was wrapped with");
+    }
+    Ok(trimmed)
+}
+
+/// The export's passphrase is chosen, not pasted: a terminal asks twice
+/// and refuses a mismatch; a pipe reads one line and trusts the
+/// script's own care. The daemon refuses weak ones either way — the
+/// file is a nostr identity in transit, and the bar is the vault
+/// mode's own.
+fn read_new_passphrase() -> Result<String> {
+    use std::io::IsTerminal;
+    let first = if std::io::stdin().is_terminal() {
+        let a = rpassword::prompt_password(
+            "a passphrase for the exported file (16+ characters, letters and digits): ",
+        )?;
+        let b = rpassword::prompt_password("again: ")?;
+        if a.trim() != b.trim() {
+            anyhow::bail!("the two passphrases do not match");
+        }
+        a
+    } else {
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        line
+    };
+    let trimmed = first.trim().to_string();
+    if trimmed.is_empty() {
+        anyhow::bail!("no passphrase arrived on stdin");
     }
     Ok(trimmed)
 }
@@ -462,6 +528,40 @@ fn render(value: &serde_json::Value) -> Result<()> {
         ),
         _ => println!("{value}"),
     }
+    Ok(())
+}
+
+/// The export's landing: the daemon's `ncryptsec1` string, written 0600
+/// at creation and again after — the ssh key's lesson, that a mode
+/// promised at write is a mode you check at the use site — and never
+/// over an existing file. The person deletes the old backup on purpose
+/// or picks a new name; a silent overwrite is how a good backup
+/// becomes a missing one. The confirmation names the file and the road
+/// back in.
+fn export_write(value: &serde_json::Value, path: &std::path::Path) -> Result<()> {
+    if value.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        anyhow::bail!(
+            "the daemon refused: {}",
+            value["error"].as_str().unwrap_or("no reason given")
+        );
+    }
+    let ncryptsec = value["ncryptsec"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("the daemon answered without the wrapped key"))?;
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(ncryptsec.as_bytes())?;
+        file.write_all(b"\n")?;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    println!("exported to {}; import it back with `kuma-nostr import`", path.display());
     Ok(())
 }
 
