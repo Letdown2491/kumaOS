@@ -2667,17 +2667,19 @@ $1          `--`
 /// free-solid): the terminal's fontconfig fallback resolves them from
 /// the fonts fontawesome-fonts-all already ships, so no font package
 /// joins the image for a fetch line — a tofu box means the terminal
-/// you're in isn't falling back. The two kuma-owned lines ride Command
-/// modules: the CLI's own version and the signer's unit state (green
-/// when active, red otherwise), keyed in the wordmark's green — words
-/// among the icons, deliberately. Identity you invoke: nothing runs
+/// you're in isn't falling back. No kuma-owned lines: `kuma --version`
+/// answers in the CLI and the signer's state in `systemctl --user
+/// status`, and a card repeats neither. The padding top is the vertical
+/// centering — fastfetch has none, so the number carries the
+/// arithmetic: the info block runs ~20 lines, the bear 11, and
+/// (20 − 11) / 2 rounds to 4. Identity you invoke: nothing runs
 /// fastfetch at shell startup.
 pub(crate) const FASTFETCH_CONFIG: &str = r#"{
     "logo": {
         "type": "file",
         "source": "/usr/lib/kuma/fastfetch-logo.txt",
         "color": { "1": "38;2;226;190;146" },
-        "padding": { "top": 1, "right": 3 }
+        "padding": { "top": 4, "right": 3 }
     },
     "display": {
         "color": { "keys": "38;2;192;197;222" },
@@ -2687,7 +2689,6 @@ pub(crate) const FASTFETCH_CONFIG: &str = r#"{
         "title",
         "separator",
         { "type": "os", "key": "\uf17c" },
-        { "type": "command", "text": "kuma --version 2>/dev/null | head -n1", "key": "Version", "keyColor": "38;2;126;224;168" },
         { "type": "kernel", "key": "\uf013" },
         { "type": "uptime", "key": "\uf017" },
         { "type": "packages", "key": "\uf1b3" },
@@ -2695,7 +2696,6 @@ pub(crate) const FASTFETCH_CONFIG: &str = r#"{
         { "type": "shell", "key": "\uf120" },
         { "type": "wm", "key": "\uf2d0" },
         { "type": "terminal", "key": "\uf2d2" },
-        { "type": "command", "text": "s=$(systemctl --user is-active kuma-nostrd 2>/dev/null); if [ \"$s\" = active ]; then printf '\\033[32m%s\\033[0m' \"$s\"; else printf '\\033[31m%s\\033[0m' \"$s\"; fi", "key": "Signer", "keyColor": "38;2;126;224;168" },
         "break",
         { "type": "cpu", "key": "\uf2db" },
         { "type": "gpu", "key": "\uf108" },
