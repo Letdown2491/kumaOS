@@ -135,6 +135,27 @@
   additive and identical, so the shim is redundant here, not
   conflicting.
 
+- **New installs land on the finished desktop: the shipped defaults are
+  now the setup daily use converged on.** The compiled defaults were
+  first-draft scaffolding — workspaces and window title on the bar,
+  xterm's VGA primaries in the terminal, Koguma at 100% zoom — and a
+  fresh machine opened onto them unchanged. The three surfaces now ship
+  the owner's lived-in arrangement: the bar gains the apps launcher
+  beside workspaces on the left, moves the clock to center, and fills
+  the right cluster with tray, notifications, volume, internet and
+  battery (the gear stays as the bar's fixed last element), at the
+  shipped geometry — 32px, two thirds, centered, xl radius, square top
+  corners — with the wallpaper-derived theme on and the dock off (one
+  setting away, first-run pins intact). kuma-term's built-in theme
+  replaces the VGA fallback with the noctalia pastels, ANSI 16 and
+  chrome both, so a box with no conf renders the shipped look, and the
+  wallpaper palette still wins the chrome on kumaOS. Koguma opens at
+  125% zoom with the inspector docked at the bottom. Nothing binds
+  anyone: config.toml, the kuma-term conf, and the Koguma state file
+  all still win over the defaults the moment they exist, so machines
+  that have saved a preference keep theirs, and the change reaches only
+  the boxes that never expressed one.
+
 ## v44.5.0 (2026-10-05)
 
 - **The image carries its OCI version, and bootloader-update stops
