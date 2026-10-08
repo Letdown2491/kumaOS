@@ -17,6 +17,7 @@ COPY --chmod=755 kuma-greeter-session /usr/libexec/kuma-greeter-session
 COPY kargs-desktop.toml /usr/lib/bootc/kargs.d/10-kuma-desktop.toml
 COPY niri-extras.kdl /usr/lib/kuma/niri-extras.kdl
 COPY kuma-wallpaper.jpg /usr/share/backgrounds/kuma/kuma-wallpaper.jpg
+COPY NotoColorEmoji.ttf /usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf
 COPY --chmod=755 kuma-shell /usr/bin/kuma-shell
 COPY --chmod=755 kuma-greeter /usr/bin/kuma-greeter
 COPY --chmod=755 kuma-files /usr/bin/kuma-files
