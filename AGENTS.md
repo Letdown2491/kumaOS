@@ -11,7 +11,7 @@ the toolchain:
 # from the checkout's root; ~ is this machine's home, which is the
 # only identity the tree is allowed to carry
 podman run --rm -v "$PWD":/kuma:Z \
-  -v ~/"\.cargo":/mnt/cargo:Z -v ~/"\.rustup":/mnt/rustup:Z \
+  -v ~/.cargo:/mnt/cargo:Z -v ~/.rustup:/mnt/rustup:Z \
   -w /kuma -e RUSTUP_HOME=/mnt/rustup -e CARGO_HOME=/mnt/cargo \
   localhost/kuma-dev-gcc bash -c 'export PATH=/mnt/cargo/bin:$PATH; cargo test'
 ```
