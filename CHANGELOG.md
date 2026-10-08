@@ -161,17 +161,17 @@
   replaced with a shaped one: keys in the shipped palette's periwinkle,
   usage bars on memory, disk and battery, the window manager shortened
   to WM, and the disk pinned to `/var`, because the bootc root is a
-  read-only overlay that reported itself as a full disk. Two kuma-owned
-  lines ride Command modules: the CLI's own `kuma --version`, and the
-  signer's unit state, green when active and red otherwise, both keyed
-  in the wordmark's green. The wordmark under the bear went: the OS
-  line beside her already says kumaOS. The bear stays. The generic
-  keys draw instead of spell: Font Awesome 6 glyphs, written as JSON
-  `\u` escapes and resolved by the terminal's own fontconfig fallback
-  into the fonts `fontawesome-fonts-all` already ships — no font
-  package joins the image for a fetch line. The two kuma lines keep
-  their words, green among the icons: the card speaks in pictures,
-  kuma's lines speak in words.
+  read-only overlay that reported itself as a full disk. The wordmark
+  under the bear went: the OS line beside her already says kumaOS. The
+  bear stays, and now sits centered against the info block — fastfetch
+  has no vertical centering, so the logo's top padding carries the
+  arithmetic. The keys draw instead of spell: Font Awesome 6 glyphs,
+  written as JSON `\u` escapes and resolved by the terminal's own
+  fontconfig fallback into the fonts `fontawesome-fonts-all` already
+  ships — no font package joins the image for a fetch line. Version and
+  signer state left the card entirely: `kuma --version` answers in the
+  CLI, the signer's state in `systemctl`, and a business card repeats
+  neither.
 
 ## v44.5.0 (2026-10-05)
 
