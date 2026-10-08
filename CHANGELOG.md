@@ -156,6 +156,16 @@
   that have saved a preference keep theirs, and the change reaches only
   the boxes that never expressed one.
 
+- **The fastfetch card reads like the distro's business card.** The
+  bare module list — a stock fetch with the bear beside it — is
+  replaced with a shaped one: keys in the shipped palette's periwinkle,
+  usage bars on memory, disk and battery, the window manager shortened
+  to WM, and the disk pinned to `/var`, because the bootc root is a
+  read-only overlay that reported itself as a full disk. Two kuma-owned
+  lines ride Command modules: the CLI's own `kuma --version`, and the
+  signer's unit state, green when active and red otherwise, both keyed
+  in the wordmark's green. The bear stays.
+
 ## v44.5.0 (2026-10-05)
 
 - **The image carries its OCI version, and bootloader-update stops
