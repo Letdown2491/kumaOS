@@ -164,7 +164,8 @@
   read-only overlay that reported itself as a full disk. Two kuma-owned
   lines ride Command modules: the CLI's own `kuma --version`, and the
   signer's unit state, green when active and red otherwise, both keyed
-  in the wordmark's green. The bear stays.
+  in the wordmark's green. The wordmark under the bear went: the OS
+  line beside her already says kumaOS. The bear stays.
 
 ## v44.5.0 (2026-10-05)
 
