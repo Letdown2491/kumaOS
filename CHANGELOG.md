@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v44.6.0 (2026-10-09)
 
 - **Color emoji paints in kuma's own renderers.** The shell, the greeter,
   Koguma and kuma-term rasterize glyphs through swash, which paints bitmap
@@ -24,8 +24,6 @@
   menu coves toward the dock and rides the panel drawer chrome again.
   kuma-term itself is not baked: it installs user-side, beside the font
   it needs.
-
-## v44.6.0 (2026-10-09)
 
 - **Koguma, kuma's own file manager, is the image's file manager —
   default and only.** The third kumaui binary rides the same road as
