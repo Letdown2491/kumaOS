@@ -2661,11 +2661,17 @@ $1          `--`
 "#;
 
 /// System-wide default via XDG_CONFIG_DIRS; a user config in
-/// ~/.config/fastfetch still wins, same as every other config here. Two
-/// kuma-owned lines ride Command modules: the CLI's own version and the
-/// signer's unit state (green when active, red otherwise), keyed in the
-/// wordmark's green. Identity you invoke: nothing runs fastfetch at
-/// shell startup.
+/// ~/.config/fastfetch still wins, same as every other config here. Keys
+/// are Font Awesome 6 glyphs, written as JSON \u escapes so the source
+/// names the codepoint (the penguin is the brands face, everything else
+/// free-solid): the terminal's fontconfig fallback resolves them from
+/// the fonts fontawesome-fonts-all already ships, so no font package
+/// joins the image for a fetch line — a tofu box means the terminal
+/// you're in isn't falling back. The two kuma-owned lines ride Command
+/// modules: the CLI's own version and the signer's unit state (green
+/// when active, red otherwise), keyed in the wordmark's green — words
+/// among the icons, deliberately. Identity you invoke: nothing runs
+/// fastfetch at shell startup.
 pub(crate) const FASTFETCH_CONFIG: &str = r#"{
     "logo": {
         "type": "file",
@@ -2680,23 +2686,23 @@ pub(crate) const FASTFETCH_CONFIG: &str = r#"{
     "modules": [
         "title",
         "separator",
-        "os",
+        { "type": "os", "key": "\uf17c" },
         { "type": "command", "text": "kuma --version 2>/dev/null | head -n1", "key": "Version", "keyColor": "38;2;126;224;168" },
-        "kernel",
-        "uptime",
-        "packages",
+        { "type": "kernel", "key": "\uf013" },
+        { "type": "uptime", "key": "\uf017" },
+        { "type": "packages", "key": "\uf1b3" },
         "break",
-        "shell",
-        { "type": "wm", "key": "WM" },
-        "terminal",
+        { "type": "shell", "key": "\uf120" },
+        { "type": "wm", "key": "\uf2d0" },
+        { "type": "terminal", "key": "\uf2d2" },
         { "type": "command", "text": "s=$(systemctl --user is-active kuma-nostrd 2>/dev/null); if [ \"$s\" = active ]; then printf '\\033[32m%s\\033[0m' \"$s\"; else printf '\\033[31m%s\\033[0m' \"$s\"; fi", "key": "Signer", "keyColor": "38;2;126;224;168" },
         "break",
-        "cpu",
-        "gpu",
-        { "type": "memory", "key": "Memory" },
-        { "type": "disk", "folders": "/var" },
-        "battery",
-        "media",
+        { "type": "cpu", "key": "\uf2db" },
+        { "type": "gpu", "key": "\uf108" },
+        { "type": "memory", "key": "\uf538" },
+        { "type": "disk", "folders": "/var", "key": "\uf1c0" },
+        { "type": "battery", "key": "\uf240" },
+        { "type": "media", "key": "\uf001" },
         "break",
         "colors"
     ]
