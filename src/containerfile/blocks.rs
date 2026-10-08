@@ -2661,7 +2661,11 @@ $2     k   u   m   a  O  S
 "#;
 
 /// System-wide default via XDG_CONFIG_DIRS; a user config in
-/// ~/.config/fastfetch still wins, same as every other config here.
+/// ~/.config/fastfetch still wins, same as every other config here. Two
+/// kuma-owned lines ride Command modules: the CLI's own version and the
+/// signer's unit state (green when active, red otherwise), keyed in the
+/// wordmark's green. Identity you invoke: nothing runs fastfetch at
+/// shell startup.
 pub(crate) const FASTFETCH_CONFIG: &str = r#"{
     "logo": {
         "type": "file",
@@ -2669,20 +2673,30 @@ pub(crate) const FASTFETCH_CONFIG: &str = r#"{
         "color": { "1": "38;2;226;190;146", "2": "38;2;126;224;168" },
         "padding": { "top": 1, "right": 3 }
     },
+    "display": {
+        "color": { "keys": "38;2;192;197;222" },
+        "percent": { "type": 3 }
+    },
     "modules": [
         "title",
         "separator",
         "os",
+        { "type": "command", "text": "kuma --version 2>/dev/null | head -n1", "key": "Version", "keyColor": "38;2;126;224;168" },
         "kernel",
         "uptime",
         "packages",
+        "break",
         "shell",
-        "wm",
+        { "type": "wm", "key": "WM" },
         "terminal",
+        { "type": "command", "text": "s=$(systemctl --user is-active kuma-nostrd 2>/dev/null); if [ \"$s\" = active ]; then printf '\\033[32m%s\\033[0m' \"$s\"; else printf '\\033[31m%s\\033[0m' \"$s\"; fi", "key": "Signer", "keyColor": "38;2;126;224;168" },
+        "break",
         "cpu",
         "gpu",
-        "memory",
-        "disk",
+        { "type": "memory", "key": "Memory" },
+        { "type": "disk", "folders": "/var" },
+        "battery",
+        "media",
         "break",
         "colors"
     ]
