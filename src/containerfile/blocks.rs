@@ -2643,8 +2643,9 @@ pub(crate) fn clipboard_bridge() -> String {
 }
 
 /// Joan G. Stark's classic ASCII bear (her "jgs" signature moved here so
-/// it doesn't render on every run), wallpaper-bear warm brown ($1) with
-/// the wordmark in kuma green ($2). Identity you invoke: fastfetch is
+/// it doesn't render on every run), wallpaper-bear warm brown ($1). The
+/// wordmark under her went: the OS line beside her already says kumaOS,
+/// and the bear speaks for herself. Identity you invoke: fastfetch is
 /// baked but nothing runs it at shell startup.
 pub(crate) const FASTFETCH_LOGO: &str = r#"$1 .--.              .--.
 $1: (\ ". _......_ ." /) :
@@ -2657,7 +2658,6 @@ $1 \   | .  .==.  . |   /
 $1  '._ \.' \__/ './ _.'
 $1  /  ``'._-''-_.'``  \
 $1          `--`
-$2     k   u   m   a  O  S
 "#;
 
 /// System-wide default via XDG_CONFIG_DIRS; a user config in
@@ -2670,7 +2670,7 @@ pub(crate) const FASTFETCH_CONFIG: &str = r#"{
     "logo": {
         "type": "file",
         "source": "/usr/lib/kuma/fastfetch-logo.txt",
-        "color": { "1": "38;2;226;190;146", "2": "38;2;126;224;168" },
+        "color": { "1": "38;2;226;190;146" },
         "padding": { "top": 1, "right": 3 }
     },
     "display": {
