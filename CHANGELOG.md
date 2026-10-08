@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## v44.6.0 (2026-10-09)
 
 - **Color emoji paints in kuma's own renderers.** The shell, the greeter,
