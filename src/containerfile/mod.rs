@@ -445,6 +445,27 @@ mod tests {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
     }
 
+    /// The vendored emoji face is a 10 MB binary nobody diffs by eye, so
+    /// the only honest review of a re-vendor is this pin refusing to
+    /// match. It names upstream v2.048 (tag 20250623, commit
+    /// c7a259fc809502bcb45d983f6a78f94dfceb1fbe), the newest build
+    /// Fedora no longer packages: the packaged faces are monochrome or
+    /// COLRv1, and swash paints neither's color glyphs — see
+    /// NOTO_COLOR_EMOJI. Move the file and this pin in the same commit,
+    /// and cite the upstream tag in the message; a font that changed
+    /// without its provenance moving is a blob nobody can vouch for.
+    #[test]
+    fn the_vendored_emoji_face_is_the_pinned_upstream_build() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(NOTO_COLOR_EMOJI);
+        assert_eq!(
+            hex(&hash),
+            "3ed77810c203e1a67735dc19d395f32c23f2d7c0c3696690f4f78e15e57ab816",
+            "assets/noto-emoji/NotoColorEmoji.ttf is not the pinned upstream \
+             build: re-vendor deliberately and move this pin in the same commit"
+        );
+    }
+
     /// The declaration, the units, and the helpers all shipped while the
     /// binary that drives them did not, so an installed machine had no way
     /// to run the `kuma update` docs/agents.md promises it. Every image,

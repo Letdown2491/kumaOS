@@ -43,6 +43,27 @@ collection (`pack_4/spinner_alt`): a 60-frame grayscale boot spinner.
   default theme, so it draws the early-boot splash and the LUKS unlock
   prompt on encrypted machines.
 
+## noto-emoji/ (color emoji font)
+
+Google's **Noto Color Emoji** face, the CBDT/CBLC bitmap build from the
+[noto-emoji](https://github.com/googlefonts/noto-emoji) repository.
+
+- Source: <https://github.com/googlefonts/noto-emoji/tree/v2.048>
+- Vendored at upstream tag `v2.048` (commit
+  `c7a259fc809502bcb45d983f6a78f94dfceb1fbe`, 2025-06-23), sha256
+  `3ed77810c203e1a67735dc19d395f32c23f2d7c0c3696690f4f78e15e57ab816`,
+  unmodified. Diff future updates against that commit.
+- License: [SIL Open Font License 1.1](https://openfontlicense.org), whose
+  full text ships beside the face (`noto-emoji/LICENSE`).
+- Why vendored at all: no Fedora package ships this format any more. The
+  noto-emoji packaging switched to the COLRv1 build on 2025-04-09, and
+  COLRv1 is beyond the swash rasterizer every kuma GPUI renderer paints
+  through — the packaged color face draws blank boxes in the shell,
+  greeter, Koguma and kuma-term, and the packaged `google-noto-emoji-fonts`
+  has been monochrome since the same switch. The image installs the vendored
+  face at `/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf` beside the
+  packaged faces, which stay for every renderer that is not swash-based.
+
 ## The rest
 
 `kitty.conf` is configuration written for kuma and carries the project's MIT

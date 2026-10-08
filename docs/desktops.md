@@ -156,6 +156,12 @@ failure someone had to diagnose:
   carry a major version that changes under you; this one does not.
 - **`google-noto-sans-cjk-vf-fonts`**, because the default sans is
   latin-only and CJK pages render as empty boxes.
+- **the color emoji face is vendored, not packaged.** Fedora's noto-emoji
+  packaging switched to the COLRv1 format in April 2025, which the GPUI
+  renderers (shell, greeter, Koguma, kuma-term) cannot rasterize — every
+  emoji drew as an empty box. The image bakes the bitmap (CBDT) build,
+  pinned in `assets/noto-emoji/`, beside the packaged faces, which remain
+  for every renderer that is not GPUI. See `assets/CREDITS.md`.
 - **`avahi`** is named rather than assumed. It used to arrive with
   fedora-bootc by luck, and kuma's composed base does not carry it.
 

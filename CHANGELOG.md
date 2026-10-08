@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Color emoji paints in kuma's own renderers.** The shell, the greeter,
+  Koguma and kuma-term rasterize glyphs through swash, which paints bitmap
+  (CBDT/CBLC) emoji but cannot rasterize COLRv1 — and Fedora's noto-emoji
+  packaging switched to COLRv1 in April 2025, so the packaged color face
+  drew every emoji as an empty box and the packaged `google-noto-emoji-fonts`
+  has been monochrome since. No Fedora package ships the bitmap build any
+  more, so the image vendors it: upstream Noto Color Emoji v2.048, pinned
+  by hash in `assets/noto-emoji/` (license beside it, record in
+  `assets/CREDITS.md`), baked at
+  `/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf` on the niri arm
+  beside the packaged faces, which stay for every renderer that is not
+  swash-based — the kumaui font loader evicts letter-less faces it cannot
+  pull a color bitmap from, so the two faces sort themselves out. A test
+  pins the vendored bytes to their upstream sha256; the packaged faces
+  ride the same set unchanged.
+
 ## v44.6.0 (2026-10-09)
 
 - **Koguma, kuma's own file manager, is the image's file manager —

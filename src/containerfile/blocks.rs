@@ -131,6 +131,10 @@ pub(crate) const NIRI_PACKAGES: &[&str] = &[
     "xsettingsd",
     "spice-vdagent",
     "xdg-user-dirs",
+    // The color emoji face this pulls (COLRv1) paints nothing through
+    // swash, but every other renderer in the desktop reads it fine; the
+    // face kuma's own renderers paint is vendored, see NOTO_COLOR_EMOJI.
+    // Both faces stay: dropping either strand half the desktop.
     "default-fonts-core-emoji",
     "mate-polkit",
     "firewalld",
@@ -2731,6 +2735,28 @@ pub(crate) mod plymouth_theme {
 /// The install root every theme file COPY lands under.
 pub(crate) const PLYMOUTH_THEME_DIR: &str = "spinner_alt";
 
+/// The color emoji face, vendored because no Fedora package ships it in
+/// a form kuma's renderers can paint. The GPUI renderers (shell, greeter,
+/// Koguma, kuma-term) rasterize glyphs through swash, which paints bitmap
+/// emoji (CBDT/CBLC) but cannot rasterize COLRv1 — and Fedora's noto-emoji
+/// packaging switched to COLRv1 on 2025-04-09: `google-noto-emoji-fonts`
+/// has been the monochrome face since, and the color face
+/// (`google-noto-color-emoji-fonts`, pulled in by
+/// `default-fonts-core-emoji`) paints nothing through swash. So the CBDT
+/// build is vendored here: upstream v2.048, tagged 20250623, commit
+/// `c7a259fc809502bcb45d983f6a78f94dfceb1fbe`, sha256
+/// `3ed77810c203e1a67735dc19d395f32c23f2d7c0c3696690f4f78e15e57ab816`,
+/// installed at /usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf.
+///
+/// The COLRv1 face stays installed beside it on the niri arm, and that is
+/// not a conflict: the kumaui font loader evicts any letter-less face it
+/// cannot pull a color bitmap from, so the CBDT face is the one that
+/// survives for kuma's renderers while every other renderer (pango, GTK,
+/// kitty) keeps Fedora's default. See assets/CREDITS.md for the license
+/// record; re-vendor by diffing against the pinned upstream commit.
+pub(crate) const NOTO_COLOR_EMOJI: &[u8] =
+    include_bytes!("../../assets/noto-emoji/NotoColorEmoji.ttf");
+
 /// Rebrand the OS identity: kumaOS, not Fedora. ID_LIKE=fedora keeps tools
 /// that sniff os-release (toolbox, distrobox, dnf COPR, …) working. Runs
 /// last so every dnf layer before it still sees stock Fedora metadata.
@@ -3096,6 +3122,9 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     let fastfetch = e.stage("fastfetch-config.jsonc", FASTFETCH_CONFIG);
     let fastfetch_logo = e.stage("fastfetch-logo.txt", FASTFETCH_LOGO);
     let wallpaper = e.stage("kuma-wallpaper.jpg", WALLPAPER);
+    // The vendored CBDT emoji face (see NOTO_COLOR_EMOJI): the only color
+    // emoji font in the image that swash can paint.
+    let emoji_font = e.stage("NotoColorEmoji.ttf", NOTO_COLOR_EMOJI);
     // The graphical greeter and everything it reads: the binary is
     // kumaUI's second binary from the same build as the shell, the
     // compositor config and the session wrapper are constants above,
@@ -3137,6 +3166,7 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     e.copy(&kargs, "/usr/lib/bootc/kargs.d/10-kuma-desktop.toml");
     e.copy(&niri_extras, "/usr/lib/kuma/niri-extras.kdl");
     e.copy(&wallpaper, "/usr/share/backgrounds/kuma/kuma-wallpaper.jpg");
+    e.copy(&emoji_font, "/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf");
     // The shell: built from the kumaui tree and staged into the build
     // context beside the running kuma, the same road kuma-nostrd rides
     // — the release ships its binaries together, and a build whose
