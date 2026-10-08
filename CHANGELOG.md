@@ -165,7 +165,13 @@
   lines ride Command modules: the CLI's own `kuma --version`, and the
   signer's unit state, green when active and red otherwise, both keyed
   in the wordmark's green. The wordmark under the bear went: the OS
-  line beside her already says kumaOS. The bear stays.
+  line beside her already says kumaOS. The bear stays. The generic
+  keys draw instead of spell: Font Awesome 6 glyphs, written as JSON
+  `\u` escapes and resolved by the terminal's own fontconfig fallback
+  into the fonts `fontawesome-fonts-all` already ships — no font
+  package joins the image for a fetch line. The two kuma lines keep
+  their words, green among the icons: the card speaks in pictures,
+  kuma's lines speak in words.
 
 ## v44.5.0 (2026-10-05)
 
