@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- **A lag-window freeworld can no longer poison the image.** Fedora pushed
+  mesa 26.2.3 to the mirrors hours before rpmfusion's matching freeworld
+  build, and every compose inside that window downgraded mesa to the older
+  build — 26.0.3-4, whose LLVM 22.1 shader JIT kills SelectionDAG's type
+  legalizer on the greeter's fragment shader: the greeter, or the shell
+  behind it, died sig=11 at first draw, probabilistically — six runner
+  boots lost to it in one afternoon while the morning's boots won, and the
+  same image booted green on a real GPU all day. The core, pulled from a
+  vgem-only mount namespace replicating the runner's DRM-less shape, named
+  the stack: `gallivm_jit_function` under `llvmpipe_update_fs` under
+  `lvp_execute_cmd_buffer` (kumaOS#36). The freeworld step now asks the
+  candidate's version before installing: a build matching Fedora's mesa
+  installs as before; a lag-window build is skipped with a loud note and
+  the image composes alive — VA-API decode falls back to CPU, which is a
+  regression of degree, where a greeter that cannot boot is a regression
+  of kind. A metadata failure still fails the build rather than composing
+  blind.
+
+- **The image carries the full libav build.** kuma-files' video support
+  (the previews and player riding the 44.7.0 kumaui pin) decodes
+  in-process through libav, and Fedora's free build strips the codecs
+  people actually hold — H.264, H.265, AAC — the same patent story the
+  freeworld block answers one layer down at the VA-API driver. rpmfusion's
+  `ffmpeg-libs` replaces the stripped libs under the same sonames (both
+  sides on ffmpeg 8.1), so everything that linked the free build keeps
+  working and H.264 decodes now. The swap carries no version chase:
+  `ffmpeg-libs` pins nothing of Fedora's packages, so there is no lag
+  window to guard.
+
+
 ## v44.6.0 (2026-10-09)
 
 - **Color emoji paints in kuma's own renderers.** The shell, the greeter,
