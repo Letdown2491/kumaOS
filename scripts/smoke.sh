@@ -3279,6 +3279,8 @@ smoke_boot() {
     # those apart. Beside the lap's dirs, not inside one: the cleanup
     # rm -rf's vm-smoke/$name on the way out, pass or fail, and evidence
     # written there dies with the lap that needs it.
+    # shellcheck disable=SC2029  # $* joins the caller's args into the remote
+    # sudo command line, on the client, before the guest ever sees one.
     gsudo() { ssh "${ssh_opts[@]}" "sudo -S -p '' $*" 2>>"vm-smoke/gsudo-$name.err" <<<"kuma"; }
 
     echo "   .. waiting for ssh on $port"
