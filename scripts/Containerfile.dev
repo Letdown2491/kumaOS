@@ -10,6 +10,15 @@
 # whatever a build outside it already did, and the image never pins a
 # toolchain version this repo would then have to keep current.
 #
+# The base tracks the release's Fedora, deliberately: the kumaui binaries
+# the image stages (kuma-shell, kuma-greeter, Koguma, kuma-files) are
+# built here, and a binary born here must link the sonames the runtime
+# image ships. The libav work made that load-bearing — kuma-files decodes
+# video through ffmpeg-next, and Fedora's libavcodec moved from soname 61
+# (7.1.x, on 42) to 62 (8.1.x, on 44): built against the old base, the
+# binary aborts on first exec against the 44-based image and host. Bump
+# this WITH the release's Fedora, not after.
+#
 #   podman build -t kuma-dev-gcc -f scripts/Containerfile.dev .
 #
 #   podman run --rm --userns=keep-id --security-opt label=disable \
@@ -20,7 +29,7 @@
 # home mount. Do NOT reach for `:z` instead, which would relabel the
 # entire home directory. --userns=keep-id keeps target/ owned by you
 # rather than by a subuid nobody can write to afterwards.
-FROM registry.fedoraproject.org/fedora-toolbox:42
+FROM registry.fedoraproject.org/fedora-toolbox:44
 
 # musl-gcc: the relay's ring (rustls's crypto) needs a C compiler for
 # the musl target, which is the release's target; a gnu-only container
