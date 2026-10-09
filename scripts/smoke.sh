@@ -3451,6 +3451,23 @@ smoke_boot() {
         ok "the full libav build backs the baked kuma-files"
     fi
 
+    # A binary present is not a binary that execs — the vgem node's
+    # lesson one layer up. The baked binaries were born wherever built
+    # them (the CI runner, a dev container), and a libav generation
+    # mismatch gives a kuma-files that aborts at first exec inside the
+    # very image that ships it, with every build gate green: nothing
+    # here has ever run it. ldd reads the verdict out of the loader —
+    # and it exits 0 with libraries missing on several ld.so versions,
+    # so the output is the verdict, not the status.
+    local bin missing
+    for bin in kuma-shell kuma-greeter kuma-files; do
+        guest "test -x /usr/bin/$bin" || continue
+        missing=$(guest "ldd /usr/bin/$bin" | grep "not found")
+        [ -z "$missing" ] \
+            || bad "$bin does not resolve its libraries: $(echo "$missing" | head -3)"
+    done
+    ok "the baked binaries resolve every library"
+
     # Everything above this line ran as the wrong account. `kuma vm` writes
     # a bib blueprint with a hardcoded `kuma` user (main.rs, vm_config), so
     # the account this stage logs in as is the disk builder's, created at
