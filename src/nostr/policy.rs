@@ -1264,7 +1264,8 @@ mod tests {
         // it asks the way kind 5 does.
         let engine_for_ask = engine.clone();
         let ask = tokio::spawn(async move {
-            engine_for_ask.decide(&app, &NostrConnectMethod::SignEvent, &blossom_write("delete"))
+            engine_for_ask
+                .decide(&app, &NostrConnectMethod::SignEvent, &blossom_write("delete"))
                 .await
         });
         tokio::task::yield_now().await;

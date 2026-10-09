@@ -551,11 +551,8 @@ fn export_write(value: &serde_json::Value, path: &std::path::Path) -> Result<()>
     {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(path)?;
+        let mut file =
+            std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?;
         file.write_all(ncryptsec.as_bytes())?;
         file.write_all(b"\n")?;
     }

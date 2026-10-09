@@ -278,7 +278,8 @@ mod tests {
         // shell's stubs, because write_context only reads them where a
         // niri image will COPY them.
         std::fs::write(bin_home.path().join("kuma-files"), "not really kuma-files\n").unwrap();
-        std::fs::write(bin_home.path().join("kuma-files.desktop"), "not really kuma-files\n").unwrap();
+        std::fs::write(bin_home.path().join("kuma-files.desktop"), "not really kuma-files\n")
+            .unwrap();
         std::fs::write(bin_home.path().join("kuma-files.png"), "not really kuma-files\n").unwrap();
         if cfg.nostr.enable {
             let mut names = vec!["kuma-nostrd", "kuma-nostr"];

@@ -1365,9 +1365,9 @@ mod tests {
     async fn export_round_trips_through_import_and_refuses_locked_or_weak() {
         let mut daemon = daemon().await;
         daemon.handle(decode(r#"{"cmd":"setup","mode":{"how":"generate"}}"#).unwrap()).await;
-        let before = decode_status_vault(
-            &encode(&daemon.handle(decode(r#"{"cmd":"status"}"#).unwrap()).await),
-        )["pubkey"]
+        let before = decode_status_vault(&encode(
+            &daemon.handle(decode(r#"{"cmd":"status"}"#).unwrap()).await,
+        ))["pubkey"]
             .as_str()
             .unwrap()
             .to_string();
@@ -1376,18 +1376,14 @@ mod tests {
         // pre-check asks the same question for the same reason.
         daemon.handle(decode(r#"{"cmd":"lock"}"#).unwrap()).await;
         let locked = daemon
-            .handle(
-                decode(r#"{"cmd":"export","passphrase":"a licence to decode 4412"}"#).unwrap(),
-            )
+            .handle(decode(r#"{"cmd":"export","passphrase":"a licence to decode 4412"}"#).unwrap())
             .await;
         let line = encode(&locked);
         assert!(line.contains("\"ok\":false") && line.contains("locked"), "{line}");
 
         daemon.handle(decode(r#"{"cmd":"unlock"}"#).unwrap()).await;
         let weak = daemon
-            .handle(
-                decode(r#"{"cmd":"export","passphrase":"all letters no digits"}"#).unwrap(),
-            )
+            .handle(decode(r#"{"cmd":"export","passphrase":"all letters no digits"}"#).unwrap())
             .await;
         let line = encode(&weak);
         assert!(
@@ -1396,9 +1392,7 @@ mod tests {
         );
 
         let good = daemon
-            .handle(
-                decode(r#"{"cmd":"export","passphrase":"a licence to decode 4412"}"#).unwrap(),
-            )
+            .handle(decode(r#"{"cmd":"export","passphrase":"a licence to decode 4412"}"#).unwrap())
             .await;
         let line = encode(&good);
         assert!(
@@ -1410,8 +1404,8 @@ mod tests {
         // eats back as the same identity. Destroy first, because a
         // second setup is refused — and the restore is exactly what a
         // person with a lost machine runs.
-        let ncryptsec = serde_json::from_str::<serde_json::Value>(line.trim())
-            .unwrap()["ncryptsec"]
+        let ncryptsec = serde_json::from_str::<serde_json::Value>(line.trim()).unwrap()
+            ["ncryptsec"]
             .as_str()
             .unwrap()
             .to_string();
@@ -1424,9 +1418,9 @@ mod tests {
         let restored = daemon.handle(decode(&restore).unwrap()).await;
         let line = encode(&restored);
         assert!(line.contains("\"ok\":true"), "the exported key imports back: {line}");
-        let after = decode_status_vault(
-            &encode(&daemon.handle(decode(r#"{"cmd":"status"}"#).unwrap()).await),
-        )["pubkey"]
+        let after = decode_status_vault(&encode(
+            &daemon.handle(decode(r#"{"cmd":"status"}"#).unwrap()).await,
+        ))["pubkey"]
             .as_str()
             .unwrap()
             .to_string();
