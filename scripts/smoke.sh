@@ -310,6 +310,14 @@ bad()  {
         # a compositor or GPU client dying without its own log line
         # leaves a kernel line instead: traps/segfault, oom-kill
         guest 'journalctl -k -b --no-pager | grep -iE "segfault|general protection|traps:|oom-kill|killed process" | tail -10' || true
+        # And a process that dumped core left its stack on the guest.
+        # coredumpctl reads it back even with no debuginfo installed:
+        # the crashing frame names its own shared object, which is the
+        # difference between "rc=139 after 1s" and a culprit. The list
+        # first (what dumped, when), then each regular suspect's stack.
+        guest 'coredumpctl --no-pager --since=-2h list 2>/dev/null | tail -5' || true
+        # shellcheck disable=SC2016  # $p must expand on the guest, not here
+        guest 'for p in kuma-greeter kuma-shell niri kuma-files; do coredumpctl --no-pager info "$p" 2>/dev/null | tail -50; done' || true
         guest 'journalctl -b --no-pager | grep -iE "greetd|niri|noctalia|kuma-shell|kuma-greeter" | tail -30' || true
         guest 'journalctl -b --no-pager | grep -vE "sshd|logind|audit|session-[0-9]+" | tail -30' || true
         guest 'journalctl --user -b --no-pager | grep -vE "sshd|logind|audit|session-[0-9]+" | tail -30' || true
