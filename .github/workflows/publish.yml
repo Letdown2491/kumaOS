@@ -62,7 +62,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     outputs:
-      image_repo: ${{ steps.ref.outputs.image_repo }}
+      repo: ${{ steps.ref.outputs.repo }}
       example: ${{ steps.guard.outputs.example }}
       version: ${{ steps.ref.outputs.version }}
       staging: ${{ steps.ref.outputs.staging }}
@@ -129,13 +129,13 @@ jobs:
           set -euo pipefail
           owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
-          image_repo="ghcr.io/$owner/kuma"
+          repo="ghcr.io/$owner/kuma"
           {
-            echo "image_repo=$image_repo"
+            echo "repo=$repo"
             echo "version=$version"
-            echo "staging=$image_repo:${{ steps.guard.outputs.example }}-staging"
-            echo "remote=$image_repo:${{ steps.guard.outputs.example }}"
-            echo "pinned=$image_repo:${{ steps.guard.outputs.example }}-$version"
+            echo "staging=$repo:${{ steps.guard.outputs.example }}-staging"
+            echo "remote=$repo:${{ steps.guard.outputs.example }}"
+            echo "pinned=$repo:${{ steps.guard.outputs.example }}-$version"
             echo "local=localhost/kuma-publish:${{ steps.guard.outputs.example }}"
           } >> "$GITHUB_OUTPUT"
 
@@ -315,7 +315,7 @@ jobs:
 
       - name: move the tags
         env:
-          IMAGE_REPO: ${{ needs.publish.outputs.image_repo }}
+          IMAGE_REPO: ${{ needs.publish.outputs.repo }}
           DIGEST: ${{ needs.publish.outputs.digest }}
           EXAMPLE: ${{ needs.publish.outputs.example }}
           VERSION: ${{ needs.publish.outputs.version }}

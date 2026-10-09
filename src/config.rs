@@ -1511,12 +1511,18 @@ pub(crate) mod tests {
         super::documented_commands("docs/getting-started.md")
     }
 
-    /// Publishing moves the mutable tag, and three of the four jobs that
-    /// validate a published image read that tag. So dispatching them
-    /// before a publish re-tests the previous release, and the mechanism
-    /// keeping the order right was somebody remembering it: for v0.11.0
-    /// the validation was simply never run, and its cross-version job
-    /// still holds an unanswered question about that release.
+    /// Publishing gates the mutable tag on the validation. The laps
+    /// install and boot the digest-pinned staging ref this run pushed;
+    /// the promote job moves the tags people pull only if every lap came
+    /// back green. Two of the first three publishes failed their
+    /// validations after the tags were already live (44.3.0's
+    /// signatures, 44.6.0's greeter) — under the old order the laps
+    /// could tell somebody the same day, but what they said was that
+    /// the broken thing was public. Composes of one commit are not
+    /// byte-stable (src/lock.rs: layered packages resolve live on
+    /// purpose), so gating on "the same image built again" is not an
+    /// option: the bytes that go live must be the bytes that were
+    /// validated.
     #[test]
     fn publishing_triggers_the_workflow_that_validates_what_was_published() {
         let read = |name: &str| {
@@ -1533,11 +1539,22 @@ pub(crate) mod tests {
         );
         assert!(
             publish.contains("needs: publish"),
-            "the validation runs after the publish, so nothing it finds can unpublish anything"
+            "the validation runs after the staging push, so the laps see this run's bytes"
         );
         assert!(
-            publish.contains("image: ${{ needs.publish.outputs.remote }}"),
-            "the validation should test the image this run published, not a default"
+            publish
+                .contains("image: ${{ needs.publish.outputs.staging }}@${{ needs.publish.outputs.digest }}"),
+            "the validation should install the digest-pinned staging ref, not a default and not an unpinned tag: \
+             a tag can move under a concurrent publish and put different bytes under this run's verdict"
+        );
+        assert!(
+            publish.contains("needs: [publish, validate]"),
+            "the promote job waits on the validation: the tags move only when every lap is green"
+        );
+        assert!(
+            publish.contains("crane tag"),
+            "the promotion re-points the tags at the validated digest without moving bytes, \
+             so the digest the signature names is the digest the tags serve"
         );
         assert!(
             read("published.yml").contains("workflow_call:"),
