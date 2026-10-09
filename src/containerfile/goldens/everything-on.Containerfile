@@ -6,7 +6,13 @@ RUN --mount=type=cache,target=/var/cache/libdnf5 \
 RUN --mount=type=cache,target=/var/cache/libdnf5 \
     rm -rf /var/cache/libdnf5/@commandline-* \
     && dnf -y install --setopt=keepcache=1 "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
-    && dnf -y install --setopt=keepcache=1 --allowerasing mesa-va-drivers-freeworld
+    && v_before=$(rpm -q --qf '%{EVR}' mesa-libEGL) \
+    && dnf -y install --setopt=keepcache=1 --allowerasing mesa-va-drivers-freeworld \
+    && v_after=$(rpm -q --qf '%{EVR}' mesa-libEGL) \
+    && { [ "$v_after" = "$v_before" ] || { \
+        echo "mesa-freeworld's build lags Fedora's mesa: the freeworld install downgraded mesa $v_before -> $v_after" >&2; \
+        echo "that mesa's LLVM JIT crashes the greeter's shader compile (kumaOS#36): wait for rpmfusion's rebuild to catch up, then build again" >&2; \
+        exit 1; } }
 RUN test -d /usr/share/themes/adw-gtk3-dark
 COPY greetd-config.toml /etc/greetd/config.toml
 COPY greetd-restart.conf /usr/lib/systemd/system/greetd.service.d/10-kuma-restart.conf

@@ -326,9 +326,23 @@ pub(crate) fn registries_d() -> String {
 /// 11.5 KiB download per build and keeps the step off the resume path
 /// entirely. The repo packages the second dnf installs are checksummed
 /// and stay cached as before.
+/// The repo packages the second dnf installs are checksummed
+/// and stay cached as before.
+///
+/// The install must never DRAG mesa back: rpmfusion's freeworld build
+/// is versioned with Fedora's mesa and requires the matching one, so a
+/// compose in the hours between Fedora pushing a mesa and rpmfusion's
+/// rebuild landing downgrades mesa to the older build. On 2026-10-09
+/// that downgrade carried LLVM 22.1's shader-JIT crash into the image
+/// (kumaOS#36): the greeter's fragment shader kills SelectionDAG's
+/// type legalizer and the greeter — or the shell — dies sig=11 at
+/// first draw; six runner boots lost to it in one afternoon, and the
+/// boots that lived prove nothing about the next one. The guard fails
+/// the build naming the lag window instead: VA-API decode can wait
+/// hours for rpmfusion; a greeter that cannot boot waits for nobody.
 pub(crate) fn mesa_freeworld() -> String {
     dnf_layer(
-        "rm -rf /var/cache/libdnf5/@commandline-* \\\n    && dnf -y install --setopt=keepcache=1 \"https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm\" \\\n    && dnf -y install --setopt=keepcache=1 --allowerasing mesa-va-drivers-freeworld",
+        "rm -rf /var/cache/libdnf5/@commandline-* \\\n    && dnf -y install --setopt=keepcache=1 \"https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm\" \\\n    && v_before=$(rpm -q --qf '%{EVR}' mesa-libEGL) \\\n    && dnf -y install --setopt=keepcache=1 --allowerasing mesa-va-drivers-freeworld \\\n    && v_after=$(rpm -q --qf '%{EVR}' mesa-libEGL) \\\n    && { [ \"$v_after\" = \"$v_before\" ] || { \\\n        echo \"mesa-freeworld's build lags Fedora's mesa: the freeworld install downgraded mesa $v_before -> $v_after\" >&2; \\\n        echo \"that mesa's LLVM JIT crashes the greeter's shader compile (kumaOS#36): wait for rpmfusion's rebuild to catch up, then build again\" >&2; \\\n        exit 1; } }",
     )
 }
 
