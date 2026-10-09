@@ -332,17 +332,22 @@ pub(crate) fn registries_d() -> String {
 /// The install must never DRAG mesa back: rpmfusion's freeworld build
 /// is versioned with Fedora's mesa and requires the matching one, so a
 /// compose in the hours between Fedora pushing a mesa and rpmfusion's
-/// rebuild landing downgrades mesa to the older build. On 2026-10-09
-/// that downgrade carried LLVM 22.1's shader-JIT crash into the image
-/// (kumaOS#36): the greeter's fragment shader kills SelectionDAG's
-/// type legalizer and the greeter — or the shell — dies sig=11 at
-/// first draw; six runner boots lost to it in one afternoon, and the
-/// boots that lived prove nothing about the next one. The guard fails
-/// the build naming the lag window instead: VA-API decode can wait
-/// hours for rpmfusion; a greeter that cannot boot waits for nobody.
+/// rebuild landing would downgrade mesa to the older build. On
+/// 2026-10-09 that downgrade carried LLVM 22.1's shader-JIT crash into
+/// the image (kumaOS#36): the greeter's fragment shader kills
+/// SelectionDAG's type legalizer and the greeter — or the shell — dies
+/// sig=11 at first draw; six runner boots lost to it in one afternoon,
+/// and the runner-side mirror stayed stale hours after the local one
+/// caught up. So the step asks the candidate's version first, and in a
+/// lag window composes WITHOUT freeworld rather than with a poisoned
+/// mesa: VA-API decode falls back to CPU, which is a regression of
+/// degree, where a greeter that cannot boot is a regression of kind.
+/// The note is loud, and the resolved set records the absence.
+/// A metadata failure is not a lag window — no candidate visible fails
+/// the build rather than composing blind.
 pub(crate) fn mesa_freeworld() -> String {
     dnf_layer(
-        "rm -rf /var/cache/libdnf5/@commandline-* \\\n    && dnf -y install --setopt=keepcache=1 \"https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm\" \\\n    && v_before=$(rpm -q --qf '%{EVR}' mesa-libEGL) \\\n    && dnf -y install --setopt=keepcache=1 --allowerasing mesa-va-drivers-freeworld \\\n    && v_after=$(rpm -q --qf '%{EVR}' mesa-libEGL) \\\n    && { [ \"$v_after\" = \"$v_before\" ] || { \\\n        echo \"mesa-freeworld's build lags Fedora's mesa: the freeworld install downgraded mesa $v_before -> $v_after\" >&2; \\\n        echo \"that mesa's LLVM JIT crashes the greeter's shader compile (kumaOS#36): wait for rpmfusion's rebuild to catch up, then build again\" >&2; \\\n        exit 1; } }",
+        "rm -rf /var/cache/libdnf5/@commandline-* \\\n    && dnf -y install --setopt=keepcache=1 \"https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm\" \\\n    && v_mesa=$(rpm -q --qf '%{version}' mesa-libEGL) \\\n    && v_free=$(dnf -q repoquery --latest-limit=1 --qf '%{version}' mesa-va-drivers-freeworld) \\\n    && { if [ -z \"$v_free\" ]; then \\\n        echo \"repoquery found no mesa-va-drivers-freeworld candidate - cannot tell whether the freeworld build lags Fedora's mesa; failing rather than composing blind\" >&2; \\\n        exit 1; \\\n    elif [ \"$v_free\" = \"$v_mesa\" ]; then \\\n        dnf -y install --setopt=keepcache=1 --allowerasing mesa-va-drivers-freeworld; \\\n    else \\\n        echo \"note: mesa-freeworld's build ($v_free) lags Fedora's mesa ($v_mesa) - installing it would downgrade mesa to the build whose LLVM JIT crashes the greeter (kumaOS#36)\" >&2; \\\n        echo \"skipping the freeworld install: VA-API decode falls back to CPU until rpmfusion's rebuild catches up\" >&2; \\\n    fi; }",
     )
 }
 

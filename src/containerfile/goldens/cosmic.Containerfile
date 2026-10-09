@@ -6,13 +6,17 @@ RUN --mount=type=cache,target=/var/cache/libdnf5 \
 RUN --mount=type=cache,target=/var/cache/libdnf5 \
     rm -rf /var/cache/libdnf5/@commandline-* \
     && dnf -y install --setopt=keepcache=1 "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
-    && v_before=$(rpm -q --qf '%{EVR}' mesa-libEGL) \
-    && dnf -y install --setopt=keepcache=1 --allowerasing mesa-va-drivers-freeworld \
-    && v_after=$(rpm -q --qf '%{EVR}' mesa-libEGL) \
-    && { [ "$v_after" = "$v_before" ] || { \
-        echo "mesa-freeworld's build lags Fedora's mesa: the freeworld install downgraded mesa $v_before -> $v_after" >&2; \
-        echo "that mesa's LLVM JIT crashes the greeter's shader compile (kumaOS#36): wait for rpmfusion's rebuild to catch up, then build again" >&2; \
-        exit 1; } }
+    && v_mesa=$(rpm -q --qf '%{version}' mesa-libEGL) \
+    && v_free=$(dnf -q repoquery --latest-limit=1 --qf '%{version}' mesa-va-drivers-freeworld) \
+    && { if [ -z "$v_free" ]; then \
+        echo "repoquery found no mesa-va-drivers-freeworld candidate - cannot tell whether the freeworld build lags Fedora's mesa; failing rather than composing blind" >&2; \
+        exit 1; \
+    elif [ "$v_free" = "$v_mesa" ]; then \
+        dnf -y install --setopt=keepcache=1 --allowerasing mesa-va-drivers-freeworld; \
+    else \
+        echo "note: mesa-freeworld's build ($v_free) lags Fedora's mesa ($v_mesa) - installing it would downgrade mesa to the build whose LLVM JIT crashes the greeter (kumaOS#36)" >&2; \
+        echo "skipping the freeworld install: VA-API decode falls back to CPU until rpmfusion's rebuild catches up" >&2; \
+    fi; }
 RUN rm /etc/xdg/autostart/com.system76.CosmicInitialSetup.desktop
 RUN printf 'COSMIC_DISABLE_OVERLAY_SCANOUT=1\nCOSMIC_DISABLE_DIRECT_SCANOUT=1\n' >> /etc/environment
 RUN test -f /usr/lib64/security/pam_gnome_keyring.so \
