@@ -17,6 +17,8 @@ RUN --mount=type=cache,target=/var/cache/libdnf5 \
         echo "note: mesa-freeworld's build ($v_free) lags Fedora's mesa ($v_mesa) - installing it would downgrade mesa to the build whose LLVM JIT crashes the greeter (kumaOS#36)" >&2; \
         echo "skipping the freeworld install: VA-API decode falls back to CPU until rpmfusion's rebuild catches up" >&2; \
     fi; }
+RUN --mount=type=cache,target=/var/cache/libdnf5 \
+    dnf -y install --setopt=keepcache=1 --allowerasing ffmpeg-libs
 RUN test -d /usr/share/themes/adw-gtk3-dark
 COPY greetd-config.toml /etc/greetd/config.toml
 COPY greetd-restart.conf /usr/lib/systemd/system/greetd.service.d/10-kuma-restart.conf

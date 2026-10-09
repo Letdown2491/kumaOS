@@ -17,6 +17,8 @@ RUN --mount=type=cache,target=/var/cache/libdnf5 \
         echo "note: mesa-freeworld's build ($v_free) lags Fedora's mesa ($v_mesa) - installing it would downgrade mesa to the build whose LLVM JIT crashes the greeter (kumaOS#36)" >&2; \
         echo "skipping the freeworld install: VA-API decode falls back to CPU until rpmfusion's rebuild catches up" >&2; \
     fi; }
+RUN --mount=type=cache,target=/var/cache/libdnf5 \
+    dnf -y install --setopt=keepcache=1 --allowerasing ffmpeg-libs
 RUN rm /etc/xdg/autostart/com.system76.CosmicInitialSetup.desktop
 RUN printf 'COSMIC_DISABLE_OVERLAY_SCANOUT=1\nCOSMIC_DISABLE_DIRECT_SCANOUT=1\n' >> /etc/environment
 RUN test -f /usr/lib64/security/pam_gnome_keyring.so \

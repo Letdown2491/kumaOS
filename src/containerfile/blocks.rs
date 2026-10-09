@@ -351,6 +351,23 @@ pub(crate) fn mesa_freeworld() -> String {
     )
 }
 
+/// Koguma (kuma-files) decodes video in-process through libav, for the
+/// previews and the player. Fedora's free libav build strips the codecs
+/// people actually hold — H.264, H.265, AAC — the same patent story the
+/// freeworld block answers one layer down at the VA-API driver, and the
+/// swap is that block's own --allowerasing pattern aimed one layer up:
+/// rpmfusion's full build replaces the stripped libs under the same
+/// sonames (Fedora and rpmfusion are on the same ffmpeg release, 8.1),
+/// so nothing that linked the free build notices except that H.264
+/// decodes now. The decode path is libav's own (software, in-process)
+/// and, through libva, the VA-API driver the freeworld block restores —
+/// hardware decode rides the same swap. ffmpeg-libs pins nothing of
+/// Fedora's packages, so there is no version chase and no lag window
+/// to guard.
+pub(crate) fn ffmpeg_libs() -> String {
+    dnf_install("--allowerasing ffmpeg-libs")
+}
+
 /// The mount that turns dnf's cache from dead weight in the image into a
 /// cache that survives across builds.
 ///
@@ -3169,6 +3186,7 @@ fn desktop_niri(e: &mut Emitter<'_>) {
         NIRI_PACKAGES.join(" ")
     )));
     e.raw(&mesa_freeworld());
+    e.raw(&ffmpeg_libs());
     // A theme named in four places and present in none is a desktop
     // that silently falls back to light Adwaita, so prove the
     // package put the directory where the four names point.
@@ -3351,6 +3369,7 @@ fn desktop_cosmic(e: &mut Emitter<'_>) {
     e.raw("\n");
     e.raw(&dnf_install(&COSMIC_PACKAGES.join(" ")));
     e.raw(&mesa_freeworld());
+    e.raw(&ffmpeg_libs());
     // Fedora ships cosmic-greeter.service (preset-enabled, aliased as
     // display-manager.service) running `greetd --config
     // /etc/greetd/cosmic-greeter.toml` — kuma writes no greeter config

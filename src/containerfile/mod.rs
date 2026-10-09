@@ -753,6 +753,9 @@ mod tests {
         assert!(out.contains("mesa-vulkan-drivers"));
         assert!(out.contains("rpmfusion-free-release"));
         assert!(out.contains("--allowerasing mesa-va-drivers-freeworld"));
+        // kuma-files' video previews decode through libav: rpmfusion's
+        // full build swaps in over the stripped free one
+        assert!(out.contains("--allowerasing ffmpeg-libs"));
         assert!(out.contains("COPY greetd-config.toml /etc/greetd/config.toml"));
         assert!(out.contains("niri validate --config /etc/niri/config.kdl"));
         assert!(out.contains("systemctl set-default graphical.target"));
@@ -3354,6 +3357,9 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         assert!(out.contains("rm /etc/xdg/autostart/com.system76.CosmicInitialSetup.desktop"));
         // the session pulls only the pipewire library; the daemon is on us
         assert!(out.contains("pipewire"));
+        // kuma-files rides cosmic too: the full libav build swaps in here
+        // the same as the niri arm
+        assert!(out.contains("--allowerasing ffmpeg-libs"));
         // the store would fight convergence — its installs get removed daily
         assert!(!out.contains("cosmic-store"));
         // the default dock pins the editor; the session alone doesn't pull it
