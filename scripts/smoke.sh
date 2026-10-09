@@ -1553,6 +1553,7 @@ smoke_published() {
             guest 'systemd-run --user --unit=kuma-files-smoke kuma-files' \
                 || bad "kuma-files would not launch from the session's user manager"
             local koguma_deadline=$((SECONDS + 60))
+            # shellcheck disable=SC2016  # $(id -u) must expand on the guest, not here
             until guest 'pgrep -x kuma-files >/dev/null && test -S "/run/user/$(id -u)/kuma-files.sock"'; do
                 [ $SECONDS -lt $koguma_deadline ] \
                     || bad "kuma-files launched but never answered: no process or no activation socket"
@@ -3294,7 +3295,7 @@ smoke_boot() {
     # lets it, so green on the lane asserts the rule as much as the
     # harness. A sysctl that drifts means either the file stopped
     # shipping or a base change stopped it applying, and both are news.
-    local hard got want
+    local hard want
     hard=$(guest 'sysctl -n kernel.yama.ptrace_scope kernel.kptr_restrict \
         kernel.perf_event_paranoid kernel.kexec_load_disabled fs.suid_dumpable \
         vm.unprivileged_userfaultfd vm.mmap_rnd_bits net.core.bpf_jit_harden \
