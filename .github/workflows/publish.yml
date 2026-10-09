@@ -60,7 +60,7 @@ jobs:
   # `:niri-$version`) are computed here but pushed nowhere; only the
   # staging tag leaves this job.
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       repo: ${{ steps.ref.outputs.repo }}
       example: ${{ steps.guard.outputs.example }}
@@ -281,7 +281,7 @@ jobs:
   # own command run against the tags the stranger uses.
   promote:
     needs: [publish, validate]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

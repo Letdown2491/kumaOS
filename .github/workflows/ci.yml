@@ -66,7 +66,7 @@ jobs:
   # start ahead of the slow jobs; it does not gate `test`, which is what
   # a pull request waits on.
   when:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # a guard job that takes 3s
     timeout-minutes: 5
     outputs:
@@ -104,7 +104,7 @@ jobs:
   # image that keeps kuma's floor (greenboot, the lint, the baked
   # declaration, a greeter check on every desktop).
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # cargo with a warm cache runs in under a minute
     timeout-minutes: 20
     steps:
@@ -161,7 +161,7 @@ jobs:
     # the action pins carry: a moving main silently decides what this
     # gate means. Dependabot cannot see a raw git clone; the pin is
     # bumped by hand, and the diff is the review.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -241,7 +241,7 @@ jobs:
   # covered without touching this file.
   #
   image:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # the real exposure here: it normally takes 12 to 14 minutes, and the default is six hours
     timeout-minutes: 45
     # Skipped on both scheduled runs: this builds a real image with
@@ -298,7 +298,7 @@ jobs:
   # image stage, so the install stage rides along for the cost of the
   # install itself rather than a second build.
   boot:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: when
     if: >-
       github.event_name != 'pull_request' &&
@@ -372,7 +372,7 @@ jobs:
   # units with no coverage here for exactly that reason. It tests the
   # tree, so it runs when the tree changes.
   install:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: when
     if: >-
       github.event_name != 'pull_request' &&
@@ -428,7 +428,7 @@ jobs:
   # push it keeps where the promise lives: this is the only automated
   # check that a hibernated machine comes back.
   hibernate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: when
     if: >-
       github.event_name == 'workflow_dispatch' ||
@@ -471,7 +471,7 @@ jobs:
   # nobody takes twice: you install once, and a stranger installs once,
   # and if a restore does not work then nothing else here mattered.
   dead-disk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: when
     if: >-
       github.event_name != 'pull_request' &&
@@ -517,7 +517,7 @@ jobs:
   # here, where they cost a red run instead of a release; release.yml
   # switched attaching on once this had gone green on a hosted runner.
   iso:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: when
     if: >-
       github.event_name != 'pull_request' &&
@@ -587,7 +587,7 @@ jobs:
   # losing its maintainer is worth hearing about on a Monday, and is not
   # worth blocking a push over.
   audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # 17s in practice
     timeout-minutes: 10
     steps:

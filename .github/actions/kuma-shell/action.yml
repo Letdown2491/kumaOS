@@ -40,11 +40,19 @@ runs:
   using: composite
   steps:
     # What a bare runner needs that the kumaui dev container carries over
-    # from the desktop stack it is built on: measured on ubuntu 24.04,
+    # from the desktop stack it is built on: measured on ubuntu 26.04,
     # this list builds and links the shell, and without one of them the
     # build does not get past configure. pkg-config, a compiler and curl
     # are preinstalled; pam is the lock screen's authenticator, the rest
-    # is what gpui links against.
+    # is what gpui links against. The libav four are kuma-files': it
+    # links libav in-process through ffmpeg-next, and the soname a
+    # binary is born with must be the soname the runtime image ships —
+    # 26.04's ffmpeg 8.0 is libavcodec 62, the same 44's image provides,
+    # while 24.04 would birth a .so.60 binary that aborts at first exec
+    # inside the very image that ships it, with every gate green (the
+    # boot lap's ldd probe catches the class; this list removes the
+    # cause). The callers pin runs-on to 26.04 for the same reason — and
+    # ubuntu-latest migrates here regardless by Nov 19, 2026.
     - name: install the shell's build dependencies
       shell: bash
       run: >
@@ -52,6 +60,7 @@ runs:
         && sudo apt-get install -y --no-install-recommends
         libfontconfig-dev libfreetype-dev libxkbcommon-dev libpam0g-dev
         libwayland-dev libvulkan-dev
+        libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
 
     - name: check out kumaui at its pinned commit
       shell: bash

@@ -40,7 +40,7 @@ env:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       # Whether a release carries the live ISO, decided in one place.
       #
