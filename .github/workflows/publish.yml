@@ -12,6 +12,27 @@
 # from live media is the other half and needs `kuma install`, which needs
 # this to exist first: there is nothing to install until something is
 # published.
+#
+# The shape is compose, stage, prove, promote. The compose builds the
+# image; the audit checks it; the push puts it on a staging tag nobody
+# tracks; the validation laps install and boot THOSE bytes from the
+# registry; and the promote job moves the two real tags only if every lap
+# came back green. The order is not style: two of the first three
+# publishes failed their validations (44.3.0's signatures the fleet's own
+# policy could not read, 44.6.0's greeter segfault), and under the old
+# order the tags were already live when the laps said so — the laps could
+# tell somebody the same day, but what they said was that the broken
+# thing was public. Now a red lap means the tags still name the last
+# image that booted. The staging tag is disposable by design: nobody
+# installs from it, and the next publish overwrites it.
+#
+# Composes of one commit are not byte-stable — the layered packages
+# deliberately resolve live (src/lock.rs: pinning rpm NVRAs is worse than
+# useless on a live Fedora), so the base digest is pinned and everything
+# else moves with the repo. That is exactly why the promotion shape is
+# mandatory rather than nice: the bytes that go live must be the bytes
+# that were validated, because there is no such thing as "the same image
+# built again".
 name: publish
 
 on:
@@ -35,10 +56,19 @@ permissions:
   packages: write
 
 jobs:
+  # Compose and stage. The real tags (the moving `:niri` and the pinned
+  # `:niri-$version`) are computed here but pushed nowhere; only the
+  # staging tag leaves this job.
   publish:
     runs-on: ubuntu-latest
     outputs:
+      image_repo: ${{ steps.ref.outputs.image_repo }}
+      example: ${{ steps.guard.outputs.example }}
+      version: ${{ steps.ref.outputs.version }}
+      staging: ${{ steps.ref.outputs.staging }}
       remote: ${{ steps.ref.outputs.remote }}
+      pinned: ${{ steps.ref.outputs.pinned }}
+      digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -81,11 +111,14 @@ jobs:
 
       # Lowercased because ghcr rejects an uppercase path, and the owner
       # here is not.
-      # Two tags for one image: a moving one to track, and a pinned one
-      # to go back to. `:niri` means "the current niri image", which is
-      # what somebody rebasing wants and is also useless for saying "the
-      # one that worked last week": every publish overwrites what it
-      # means. kuma.lock exists because kuma cares about pinning what a
+      # Three tags, two jobs. The staging tag is where this job's image
+      # lives while the validation laps ask it questions. The moving tag
+      # (`:niri`) means "the current niri image", which is what somebody
+      # rebasing wants and is also useless for saying "the one that
+      # worked last week": every publish overwrites what it means. The
+      # pinned tag (`:niri-$version`) is the one to go back to. Both real
+      # tags are moved by the promote job, on the digest this job's push
+      # records. kuma.lock exists because kuma cares about pinning what a
       # build came from; the images it produces had no equivalent.
       #
       # The version comes from Cargo.toml, so a publish cannot label
@@ -96,10 +129,13 @@ jobs:
           set -euo pipefail
           owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
-          repo="ghcr.io/$owner/kuma"
+          image_repo="ghcr.io/$owner/kuma"
           {
-            echo "remote=$repo:${{ steps.guard.outputs.example }}"
-            echo "pinned=$repo:${{ steps.guard.outputs.example }}-$version"
+            echo "image_repo=$image_repo"
+            echo "version=$version"
+            echo "staging=$image_repo:${{ steps.guard.outputs.example }}-staging"
+            echo "remote=$image_repo:${{ steps.guard.outputs.example }}"
+            echo "pinned=$image_repo:${{ steps.guard.outputs.example }}-$version"
             echo "local=localhost/kuma-publish:${{ steps.guard.outputs.example }}"
           } >> "$GITHUB_OUTPUT"
 
@@ -173,21 +209,19 @@ jobs:
             exit 1
           fi
 
-      # --digestfile, because the registry decides the digest and podman
-      # only finds out by being told. `podman inspect .RepoDigests` reports
-      # the LOCAL manifest, which is not what the registry stored once
-      # podman recompressed layers on the way up, and signing that gives a
-      # signature for a manifest nobody can fetch.
-      - name: push
+      # The staging tag is the only thing this job puts on the registry:
+      # the validation laps install and boot these exact bytes before the
+      # tags people pull have moved. `--digestfile`, because the registry
+      # decides the digest and podman only finds out by being told.
+      # `podman inspect .RepoDigests` reports the LOCAL manifest, which is
+      # not what the registry stored once podman recompressed layers on
+      # the way up, and signing that gives a signature for a manifest
+      # nobody can fetch.
+      - name: push the staging tag
         id: push
         run: |
           set -euo pipefail
-          podman tag "${{ steps.ref.outputs.local }}" "${{ steps.ref.outputs.remote }}"
-          podman tag "${{ steps.ref.outputs.local }}" "${{ steps.ref.outputs.pinned }}"
-          podman push --digestfile digest.txt "${{ steps.ref.outputs.remote }}"
-          # Same manifest, so the same digest and the one signature below
-          # covers both tags.
-          podman push "${{ steps.ref.outputs.pinned }}"
+          podman push --digestfile digest.txt "${{ steps.ref.outputs.staging }}"
           echo "digest=$(cat digest.txt)" >> "$GITHUB_OUTPUT"
 
       - name: sign
@@ -201,18 +235,11 @@ jobs:
           # signature, and a signature on a tag says nothing about which
           # bytes were signed. The digest comes from the push itself.
           cosign sign --key env://COSIGN_KEY --yes \
-            "${{ steps.ref.outputs.remote }}@${{ steps.push.outputs.digest }}"
-        # A key pair rather than keyless, decided against the alternative:
-        # a policy.json sigstoreSigned requirement takes one of keyPath,
-        # fulcio or pki, and the fulcio block needs both oidcIssuer and
-        # subjectEmail. A GitHub Actions certificate carries no email, only
-        # a URI SAN naming the workflow, so no policy can express "signed
-        # by kuma's release workflow". The release binary stays keyless
-        # because `cosign verify-blob` has no such constraint.
+            "${{ steps.ref.outputs.staging }}@${{ steps.push.outputs.digest }}"
 
       # By TAG, with the committed public key: exactly the command
-      # SECURITY.md gives a stranger, run against the registry rather than
-      # against anything this job computed.
+      # SECURITY.md gives a stranger, run against the registry rather
+      # than against anything this job computed.
       #
       # That is the whole point, and the earlier version got it wrong. It
       # verified the same digest string the sign step had produced, so when
@@ -221,18 +248,98 @@ jobs:
       # The step meant to catch a silent signing failure shared the
       # failure's input and confirmed it. Verifying the tag resolves
       # through the registry, so it can only pass if what people pull is
-      # what was signed.
+      # what was signed. The staging tag is the tag that exists here.
       - name: verify the way a stranger would
         if: ${{ !inputs.allow_unsigned }}
         run: |
           set -euo pipefail
-          for ref in "${{ steps.ref.outputs.remote }}" "${{ steps.ref.outputs.pinned }}"; do
+          cosign verify --key cosign.pub \
+            "${{ steps.ref.outputs.staging }}" >/dev/null
+          echo "verified: ${{ steps.ref.outputs.staging }}"
+
+  # The registry question can only change when the registry changes, so
+  # the staging push triggers the validation rather than a person
+  # remembering to. Every lap installs and boots the staged digest —
+  # pinned by digest, so a concurrent publish re-staging the tag cannot
+  # put different bytes under this run's verdict. The REAL tags have not
+  # moved yet: a red lap here is a red run and no published change.
+  validate:
+    needs: publish
+    uses: ./.github/workflows/published.yml
+    with:
+      image: ${{ needs.publish.outputs.staging }}@${{ needs.publish.outputs.digest }}
+
+  # The tags move here, and only here, and only by digest: `crane tag`
+  # re-points a registry tag at a manifest that is already stored, which
+  # moves no bytes and cannot change the digest the signature names —
+  # `podman pull` + `podman push` instead would risk recompressing layers
+  # on the way back up and signing a manifest nobody can fetch, the
+  # exact class the digestfile comment above is about. The signature
+  # already covers these bytes (it was made against this digest in the
+  # publish job), so the verified thing and the promoted thing are the
+  # same thing by construction, and the verify below is the stranger's
+  # own command run against the tags the stranger uses.
+  promote:
+    needs: [publish, validate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        if: ${{ !inputs.allow_unsigned }}
+        with:
+          cosign-release: v2.6.5
+
+      # crane reads Docker's keychain, so the docker login is what it
+      # finds (the publish job's podman login wrote a different file in
+      # a different job's storage).
+      - name: log in to ghcr
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # Downloaded and verified by hash rather than trusted by tag: a
+      # moving download is one more silent thing deciding what this gate
+      # means, and the hash is what makes "verified" mean the same bytes
+      # somebody read once. v0.22.1's Linux x86_64 tarball, hashed
+      # against the release's own checksums.txt the day it was pinned.
+      - name: install crane
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 --silent --show-error --fail --location \
+            -o crane.tgz \
+            https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz
+          echo "0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0  crane.tgz" | sha256sum -c -
+          tar -xzf crane.tgz crane
+
+      - name: move the tags
+        env:
+          IMAGE_REPO: ${{ needs.publish.outputs.image_repo }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          EXAMPLE: ${{ needs.publish.outputs.example }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          set -euo pipefail
+          ./crane tag "$IMAGE_REPO@$DIGEST" "$EXAMPLE"
+          ./crane tag "$IMAGE_REPO@$DIGEST" "$EXAMPLE-$VERSION"
+
+      - name: verify the way a stranger would
+        if: ${{ !inputs.allow_unsigned }}
+        env:
+          REMOTE: ${{ needs.publish.outputs.remote }}
+          PINNED: ${{ needs.publish.outputs.pinned }}
+        run: |
+          set -euo pipefail
+          for ref in "$REMOTE" "$PINNED"; do
             cosign verify --key cosign.pub "$ref" >/dev/null
             echo "verified: $ref"
           done
 
       - name: summary
         env:
+          REMOTE: ${{ needs.publish.outputs.remote }}
+          PINNED: ${{ needs.publish.outputs.pinned }}
           ALLOW_UNSIGNED: ${{ inputs.allow_unsigned }}
         run: |
           # shellcheck disable=SC2016  # Actions substitutes its own
@@ -241,8 +348,11 @@ jobs:
           {
             echo "### Published"
             echo
-            echo '`${{ steps.ref.outputs.remote }}`  (moves)'
-            echo '`${{ steps.ref.outputs.pinned }}`  (pinned)'
+            echo 'The validation laps booted these exact bytes before either'
+            echo 'tag moved.'
+            echo
+            echo '`'"$REMOTE"'`  (moves)'
+            echo '`'"$PINNED"'`  (pinned)'
             echo
             if [ "$ALLOW_UNSIGNED" = "true" ]; then
               echo "**Unsigned.** Rebasing onto it verifies nothing."
@@ -250,21 +360,6 @@ jobs:
             echo "Rebase from an atomic Fedora with:"
             echo
             echo '```'
-            echo "sudo bootc switch ${{ steps.ref.outputs.remote }}"
+            echo "sudo bootc switch $REMOTE"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-
-  # The registry question can only change when the registry changes, so
-  # the publish that changes it triggers the validation rather than a
-  # person remembering to. Runs after, deliberately: this is the check
-  # that the published image installs and boots, and nothing it finds can
-  # unpublish anything. What it can do is tell somebody the same day.
-  #
-  # This is published.yml's only automatic trigger. It used to have a
-  # weekly schedule as well, which re-tested an unchanged artifact every
-  # Monday; the dispatch is still there for asking on purpose.
-  validate:
-    needs: publish
-    uses: ./.github/workflows/published.yml
-    with:
-      image: ${{ needs.publish.outputs.remote }}

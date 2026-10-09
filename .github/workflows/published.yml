@@ -12,11 +12,12 @@ name: published
 # writes one, and until this existed nothing ever booted a disk it had
 # written.
 on:
-  # publish.yml calls this when it has moved the tag, which is the only
-  # moment the answer can change. Every job here reads the mutable
-  # `:niri` tag, so dispatching them before a publish just re-tests the
-  # previous release, and remembering the order was the whole mechanism
-  # until now.
+  # publish.yml calls this once its staging tag holds the digest, and
+  # pins the input by digest so the laps judge exact bytes. The real
+  # tags (the moving and the pinned one) move only when every lap here
+  # is green — the promote job. Until then the tags people pull still
+  # name the last image that booted, which is the promotion gate's
+  # whole point: a red lap is a red run and no published change.
   #
   # It reads "every job" rather than "three of four" because the fourth
   # never belonged: `fix-verification` installed an image built from the
