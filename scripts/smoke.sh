@@ -3296,7 +3296,13 @@ smoke_boot() {
     # harness. A sysctl that drifts means either the file stopped
     # shipping or a base change stopped it applying, and both are news.
     local hard want
-    hard=$(guest 'sysctl -n kernel.yama.ptrace_scope kernel.kptr_restrict \
+    # Read as root. The 7.2.9 kernel (the 2026-10-08 :44 float) makes
+    # mmap_rnd_bits and bpf_jit_harden root-only-readable — 0600 nodes,
+    # the KASLR entropy and JIT posture held back from unprivileged
+    # eyes — so the user view EPERMs two of the ten reads, and with
+    # stderr discarded the drift report cannot tell a hidden value from
+    # a floor that stopped applying. Root sees the posture either way.
+    hard=$(gsudo 'sysctl -n kernel.yama.ptrace_scope kernel.kptr_restrict \
         kernel.perf_event_paranoid kernel.kexec_load_disabled fs.suid_dumpable \
         vm.unprivileged_userfaultfd vm.mmap_rnd_bits net.core.bpf_jit_harden \
         kernel.sysrq net.ipv4.icmp_echo_ignore_all' | tr '\n' ' ' | xargs)
