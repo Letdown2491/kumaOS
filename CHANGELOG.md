@@ -20,7 +20,7 @@
   pins the vendored bytes to their upstream sha256; the packaged faces
   ride the same set unchanged.
 
-- **The image's kumaui pin moves to `38828ee`.** The shell, greeter and
+- **The image's kumaui pin moves to `76bf810`.** The shell, greeter and
   Koguma the image bakes pick up the kuma-term and shell work since the
   old pin: launched apps land in their own systemd scopes, and the dock
   menu coves toward the dock and rides the panel drawer chrome again.
