@@ -3435,6 +3435,22 @@ smoke_boot() {
         ok "declared packages are installed"
     fi
 
+    # The full libav, wherever the binary that needs it rode along. On
+    # the same Fedora the free and full builds share the soname (62), so
+    # ldconfig cannot tell them apart and package presence is the only
+    # honest codec check. Both halves of the swap, then: the full build
+    # in — the compose's --allowerasing resolved — and the stripped free
+    # build out, or the runtime the baked binary linked against is a
+    # lie and its video support decodes nothing.
+    if guest 'test -x /usr/bin/kuma-files'; then
+        guest 'rpm -q ffmpeg-libs' >/dev/null \
+            || bad "kuma-files is in the image but ffmpeg-libs is not"
+        if guest 'rpm -q libavcodec-free'; then
+            bad "libavcodec-free survived the swap; the free set is still what the image links"
+        fi
+        ok "the full libav build backs the baked kuma-files"
+    fi
+
     # Everything above this line ran as the wrong account. `kuma vm` writes
     # a bib blueprint with a hardcoded `kuma` user (main.rs, vm_config), so
     # the account this stage logs in as is the disk builder's, created at
