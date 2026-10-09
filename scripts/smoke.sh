@@ -488,8 +488,16 @@ smoke_image() {
             || bad "lock doesn't reference the composed base tag"
         ok "lock records the composed base"
 
-        "$KUMA" --config "$file" update --check | grep -q 'composed' \
-            || bad "update --check doesn't explain composed-base updates"
+        # Captured rather than piped: the check's answer names "composed"
+        # in its first line and then lists every package the repos have
+        # moved, hundreds of lines when Fedora's backlog is deep. `grep
+        # -q` stops at the match and closes the pipe, kuma's next write
+        # dies with EPIPE, and under pipefail the panic's exit status
+        # fails this pipeline though the word it greps for was there.
+        # A capture reads to EOF; nothing downstream can close early.
+        checked=$("$KUMA" --config "$file" update --check 2>&1 || true)
+        grep -q 'composed' <<<"$checked" \
+            || bad "update --check doesn't explain composed-base updates: $checked"
         ok "check explains recompose semantics"
     fi
 }
@@ -3257,6 +3265,22 @@ smoke_boot() {
     # caller builds the command here and wants the guest to run it literally.
     guest() { ssh "${ssh_opts[@]}" "$@" 2>/dev/null; }
 
+    # The privileged reads (the sysctl floor, the public zone) need root:
+    # since the 7.2.9 kernel (the 2026-10-08 :44 float) two of the floor's
+    # keys are root-only-readable outright (0600 nodes, EPERM on the
+    # read), so the unprivileged read is not an option. The escalation is
+    # no second ssh lane — `kuma vm` builds every disk with kuma in
+    # wheel, "name and password kuma" (main.rs build_disk: the smoke and
+    # `kuma vm --run` both speak to this account by name) — so the key
+    # that got us in plus sudo -S with that password on stdin covers
+    # every root read. gsudo keeps its own stderr in a file rather than
+    # guest's /dev/null: its callers compare stdout, and an empty read is
+    # identical whether ssh died or sudo balked — the file is what tells
+    # those apart. Beside the lap's dirs, not inside one: the cleanup
+    # rm -rf's vm-smoke/$name on the way out, pass or fail, and evidence
+    # written there dies with the lap that needs it.
+    gsudo() { ssh "${ssh_opts[@]}" "sudo -S -p '' $*" 2>>"vm-smoke/gsudo-$name.err" <<<"kuma"; }
+
     echo "   .. waiting for ssh on $port"
     # 1800: a first boot here too - the qcow2 kuma vm builds recomposes
     # the composed base before sshd starts (see the 1128 note).
@@ -3603,8 +3627,12 @@ for file in examples/*.toml; do
     # bash, not the example's own shell: /usr/bin/fish is only in the
     # desktop sets, and a declared shell emits a build-time `test -x`
     # guard that would fail the minimal image. No password_hash, because
-    # nothing here logs in as this account; it asks the machine about it
-    # from the shell `kuma vm` already provides.
+    # on a disk `kuma vm` builds this account never exists at all — the
+    # installer's /var/lib/kuma/user answer (the kuma convenience
+    # account) shadows the declared user, by design — so there is no
+    # password to write down, and nothing here logs in as this account
+    # anyway; the boot probes ask the machine about the user from the
+    # shell `kuma vm` already provides.
     if [ $BOOT -eq 1 ]; then
         booted_file="vm-smoke/$name.toml"
         mkdir -p vm-smoke
