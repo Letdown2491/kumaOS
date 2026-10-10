@@ -228,6 +228,13 @@ jobs:
         id: push
         run: |
           set -euo pipefail
+          # The build tags the image as a localhost name; the push needs
+          # the registry's name. A tag is a pointer, so this moves no
+          # bytes and cannot drift the digest the signature and the
+          # validation laps key off. The staging shape's first run
+          # (2026-10-10) pushed with no local retag and died here:
+          # "image not known", before a byte moved.
+          podman tag "${{ steps.ref.outputs.local }}" "${{ steps.ref.outputs.staging }}"
           podman push --digestfile digest.txt "${{ steps.ref.outputs.staging }}"
           echo "digest=$(cat digest.txt)" >> "$GITHUB_OUTPUT"
 
