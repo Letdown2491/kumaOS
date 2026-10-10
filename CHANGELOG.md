@@ -86,6 +86,15 @@
   Network section always shows), and a markdown table with a multibyte
   cell no longer crashes the preview.
 
+- **Negotiating windows shed their client-drawn titlebar.** The image's
+  niri config now carries `prefer-no-csd`. Chromium/CEF and Electron apps
+  drew their own titlebar on Wayland in Chromium's hardcoded default blue
+  (rgb(93, 141, 218), measured on a Spotify flatpak), because the GTK
+  theme never feeds the frame there, and niri renders no titlebars for
+  windows that hand the job back. Apps that comply render bare under the
+  Kuma look's ring and rounding; apps that insist on CSD keep their
+  headerbars.
+
 
 ## v44.6.0 (2026-10-09)
 

@@ -2101,6 +2101,17 @@ spawn-at-startup "/usr/libexec/kuma-battery-watch"
 
 // Kuma look: rounded windows, quiet neutral focus ring. Window rules are
 // additive, so this themes every window without touching the stock layout.
+
+// One answer for windows that ask what the compositor prefers:
+// prefer-no-csd. Chromium/CEF and Electron apps paint their own titlebar
+// on Wayland in Chromium's hardcoded default blue (the GTK theme never
+// feeds the frame there), and niri renders no titlebars at all, so the
+// compositor can neither recolor the bar nor remove it itself; its
+// preference is the only lever, and it is uniform. Apps that comply
+// render bare under the ring and rounding below (Chromium does), and
+// apps that insist on CSD keep their headerbars: niri honors an
+// explicit request.
+prefer-no-csd
 window-rule {
     geometry-corner-radius 8
     clip-to-geometry true
