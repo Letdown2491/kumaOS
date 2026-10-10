@@ -40,19 +40,11 @@ runs:
   using: composite
   steps:
     # What a bare runner needs that the kumaui dev container carries over
-    # from the desktop stack it is built on: measured on ubuntu 26.04,
-    # this list builds and links the shell, and without one of them the
-    # build does not get past configure. pkg-config, a compiler and curl
-    # are preinstalled; pam is the lock screen's authenticator, the rest
-    # is what gpui links against. The libav four are kuma-files': it
-    # links libav in-process through ffmpeg-next, and the soname a
-    # binary is born with must be the soname the runtime image ships —
-    # 26.04's ffmpeg 8.0 is libavcodec 62, the same 44's image provides,
-    # while 24.04 would birth a .so.60 binary that aborts at first exec
-    # inside the very image that ships it, with every gate green (the
-    # boot lap's ldd probe catches the class; this list removes the
-    # cause). The callers pin runs-on to 26.04 for the same reason — and
-    # ubuntu-latest migrates here regardless by Nov 19, 2026.
+    # from the desktop stack it is built on: this list builds and links
+    # the shell, and without one of them the build does not get past
+    # configure. pkg-config, a compiler and curl are preinstalled; pam
+    # is the lock screen's authenticator, the rest is what gpui links
+    # against. nasm is ffmpeg's assembler, for the step below.
     - name: install the shell's build dependencies
       shell: bash
       run: >
@@ -60,7 +52,42 @@ runs:
         && sudo apt-get install -y --no-install-recommends
         libfontconfig-dev libfreetype-dev libxkbcommon-dev libpam0g-dev
         libwayland-dev libvulkan-dev
-        libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
+        nasm
+
+    # The libav four are kuma-files': it links libav in-process through
+    # ffmpeg-next, and the soname a binary is born with must be the
+    # soname the runtime image ships - 44's image carries ffmpeg 8.1
+    # (libavcodec 62) from rpmfusion, and a binary born on a distro
+    # libav of another era (24.04's .so.60) aborts at first exec inside
+    # the very image that ships it, with every gate green (the boot
+    # lap's ldd probe catches the class). An earlier verse satisfied
+    # this by pinning the runner to ubuntu-26.04 for its distro libav
+    # - but the runner's ground has moved under a green CI three times
+    # in five weeks, the pinned actionlint rejects the 26.04 label, and
+    # the snapshot under it broke the compose and the qemu laps both.
+    # So the libs are built here, from the 8.0 sources, and the
+    # contract stops inheriting from whichever distro the runner is
+    # rolling this week. Minimal configure - the demuxers and decoders
+    # a muted preview touches, no programs, no network, no docs - the
+    # build is a few minutes, and the sonames come from the source,
+    # not the snapshot.
+    - name: build libav 8 against the soname the image ships
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "$(mktemp -d)"
+        curl --proto '=https' --tlsv1.2 --retry 10 --location --silent --show-error \
+          https://ffmpeg.org/releases/ffmpeg-8.0.tar.xz | tar -xJ
+        cd ffmpeg-8.0
+        ./configure --prefix=/usr/local \
+          --disable-doc --disable-programs --disable-avdevice \
+          --disable-network --disable-autodetect \
+          --enable-decoder=h264,hevc,vp9,av1,aac,opus,flac \
+          --enable-demuxer=mov,matroska,webm,ogg \
+          --enable-protocol=file
+        make -j"$(nproc)"
+        sudo make install
+        sudo ldconfig
 
     - name: check out kumaui at its pinned commit
       shell: bash
