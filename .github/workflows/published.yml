@@ -81,12 +81,12 @@ jobs:
 
       - name: guest console
         if: failure() || cancelled()
-        run: tail -200 vm-smoke/published/console.log || true
+        run: tail -200 vm-smoke/console-published.log || true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: failure() || cancelled()
         with:
           name: console-published
-          path: vm-smoke/published/console.log
+          path: vm-smoke/console-published.log
           if-no-files-found: warn
 
   # 0.8's headline feature, booted for the first time.
@@ -116,7 +116,7 @@ jobs:
       - name: guest console
         if: failure() || cancelled()
         run: |
-          tail -200 vm-smoke/published/console.log || true
+          tail -200 vm-smoke/console-published.log || true
           echo "=== what the unlocker saw ==="
           cat vm-smoke/published/unlock.log || true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -124,7 +124,7 @@ jobs:
         with:
           name: console-encrypted
           path: |
-            vm-smoke/published/console.log
+            vm-smoke/console-published.log
             vm-smoke/published/unlock.log
           if-no-files-found: warn
 
@@ -203,10 +203,10 @@ jobs:
 
       - name: guest console
         if: failure() || cancelled()
-        run: tail -200 vm-smoke/published/console.log || true
+        run: tail -200 vm-smoke/console-published.log || true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: failure() || cancelled()
         with:
           name: console-cross-version
-          path: vm-smoke/published/console.log
+          path: vm-smoke/console-published.log
           if-no-files-found: warn

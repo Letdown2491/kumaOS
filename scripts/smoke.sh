@@ -3706,6 +3706,11 @@ EOF
     # install creates is the installer's answer, and building from a
     # declaration that already names one would test the case where the two
     # agree, which is the case that was never broken.
+    # A stale surviving copy must not impersonate this run's evidence:
+    # the copies below are per-run, so last run's is deleted before this
+    # run's laps can fail into a fresh one.
+    rm -f "vm-smoke/console-$name.log" \
+        "vm-smoke/console-$name-install.log" "vm-smoke/console-$name-iso.log"
     if (smoke_image "$file" "$tag" \
         && { [ $INSTALL -eq 0 ] || smoke_install "$example_file" "$tag" "$name"; } \
         && { [ $ISO -eq 0 ] || smoke_iso "$example_file" "$tag" "$name"; } \
@@ -3730,6 +3735,16 @@ EOF
         # freeze the smoke tests against a base the world has moved past,
         # which is the one thing they exist to notice.
         rm -f "${file%.toml}.lock"
+        # The guest console outlives its directory (issue #34): CI's
+        # console steps run after this loop has cleaned up, so the log is
+        # copied beside the lap dirs, where the rm lines below cannot
+        # reach it. The steps used to tail inside the directory and read
+        # nothing, every time, while the artifact upload warned.
+        for lap in "$name" "$name-install" "$name-iso"; do
+            if [ -f "vm-smoke/$lap/console.log" ]; then
+                cp "vm-smoke/$lap/console.log" "vm-smoke/console-$lap.log"
+            fi
+        done
         [ -d "vm-smoke/$name" ] && sudo rm -rf "vm-smoke/$name"
         [ -d "vm-smoke/$name-install" ] && sudo rm -rf "vm-smoke/$name-install"
         [ -d "vm-smoke/$name-iso" ] && sudo rm -rf "vm-smoke/$name-iso"

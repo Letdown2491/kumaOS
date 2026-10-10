@@ -333,6 +333,14 @@ jobs:
       # A boot failure is only useful if the guest's own account of it
       # survives the runner.
       #
+      # The path is beside the lap dir, not inside it: smoke.sh deletes
+      # vm-smoke/$name on every un-kept run, pass or fail, so a log read
+      # from inside the directory was read from a place that no longer
+      # existed -- these steps tailed nothing and uploaded a warn, every
+      # red lap, until 2026-10-09's debugging made the omission legible.
+      # The smoke copies the console beside the lap dir before cleaning
+      # up (issue #34).
+      #
       # `failure() || cancelled()`: failure() covers a red stage, and
       # cancelled() covers the runner killing the job itself (a timeout).
       # What it cannot cover is a step whose outcome is "cancelled" while
@@ -344,12 +352,12 @@ jobs:
       # so a red stage no longer depends on these steps to be read.
       - name: guest console
         if: failure() || cancelled()
-        run: tail -200 "vm-smoke/${{ matrix.example }}/console.log" || true
+        run: tail -200 "vm-smoke/console-${{ matrix.example }}.log" || true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: failure() || cancelled()
         with:
           name: console-${{ matrix.example }}
-          path: vm-smoke/${{ matrix.example }}/console.log
+          path: vm-smoke/console-${{ matrix.example }}.log
           if-no-files-found: warn
 
   # The only job that installs and boots an image built from THIS TREE.
@@ -389,12 +397,12 @@ jobs:
 
       - name: guest console
         if: failure() || cancelled()
-        run: tail -200 vm-smoke/published/console.log || true
+        run: tail -200 vm-smoke/console-published.log || true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: failure() || cancelled()
         with:
           name: console-install
-          path: vm-smoke/published/console.log
+          path: vm-smoke/console-published.log
           if-no-files-found: warn
 
   # 0.15's gate. Every other job here asks whether a machine booted; this
@@ -448,12 +456,12 @@ jobs:
 
       - name: guest console
         if: failure() || cancelled()
-        run: tail -200 vm-smoke/published/console.log || true
+        run: tail -200 vm-smoke/console-published.log || true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: failure() || cancelled()
         with:
           name: console-hibernate
-          path: vm-smoke/published/console.log
+          path: vm-smoke/console-published.log
           if-no-files-found: warn
 
   # 0.14's gate, and the only job here that answers a question about
@@ -485,6 +493,9 @@ jobs:
         with:
           smoke_args: --dead-disk
 
+      # This lap's dir survives its own failure: smoke_dead_disk's early
+      # returns skip its cleanup, so unlike the loop laps, the console is
+      # read where it was written. No surviving-copy road here.
       - name: guest console
         if: failure() || cancelled()
         run: tail -200 vm-smoke/dead-disk/console.log || true
@@ -552,13 +563,13 @@ jobs:
 
       - name: what the live session said
         if: failure() || cancelled()
-        run: tail -100 vm-smoke/niri-iso/console.log || true
+        run: tail -200 vm-smoke/console-niri-iso.log || true
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: failure() || cancelled()
         with:
           name: iso-console
-          path: vm-smoke/niri-iso/console.log
+          path: vm-smoke/console-niri-iso.log
           if-no-files-found: warn
 
       # Kept on success too, though the verdict is what this job is for:
