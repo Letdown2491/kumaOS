@@ -1512,17 +1512,20 @@ pub(crate) mod tests {
     }
 
     /// Publishing gates the mutable tag on the validation. The laps
-    /// install and boot the digest-pinned staging ref this run pushed;
-    /// the promote job moves the tags people pull only if every lap came
-    /// back green. Two of the first three publishes failed their
-    /// validations after the tags were already live (44.3.0's
+    /// install and boot a digest-pinned ref to the bytes this run
+    /// pushed; the promote job moves the tags people pull only if every
+    /// lap came back green. Two of the first three publishes failed
+    /// their validations after the tags were already live (44.3.0's
     /// signatures, 44.6.0's greeter) — under the old order the laps
     /// could tell somebody the same day, but what they said was that
     /// the broken thing was public. Composes of one commit are not
     /// byte-stable (src/lock.rs: layered packages resolve live on
     /// purpose), so gating on "the same image built again" is not an
     /// option: the bytes that go live must be the bytes that were
-    /// validated.
+    /// validated. The pin is repo@digest because containers/image
+    /// refuses a reference that carries both a tag and a digest —
+    /// tag@digest died at the install preflight before any VM booted
+    /// (2026-10-10's third red publish).
     #[test]
     fn publishing_triggers_the_workflow_that_validates_what_was_published() {
         let read = |name: &str| {
@@ -1543,8 +1546,8 @@ pub(crate) mod tests {
         );
         assert!(
             publish
-                .contains("image: ${{ needs.publish.outputs.staging }}@${{ needs.publish.outputs.digest }}"),
-            "the validation should install the digest-pinned staging ref, not a default and not an unpinned tag: \
+                .contains("image: ${{ needs.publish.outputs.repo }}@${{ needs.publish.outputs.digest }}"),
+            "the validation should install the digest-pinned repo ref, not a default and not an unpinned tag: \
              a tag can move under a concurrent publish and put different bytes under this run's verdict"
         );
         assert!(
