@@ -34,7 +34,7 @@ inputs:
     description: >-
       kumaui commit to build the shell from.
     required: false
-    default: 87fcd0707b12c03b1325246a2943e808c6a0ab19
+    default: 7659b5d632ae56395ec29f384541d0e8452db967
 
 runs:
   using: composite
