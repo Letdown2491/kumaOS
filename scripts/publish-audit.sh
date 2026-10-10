@@ -141,6 +141,40 @@ if [ -f "$mnt/usr/bin/kuma" ]; then
     done
 fi
 
+# Every package built from mesa's source -- Fedora's drivers and
+# libraries and rpmfusion's freeworld build alike -- must sit at one EVR.
+# rpmfusion resolves its freeworld build from its own repo, and when
+# Fedora has pushed a newer mesa than rpmfusion's matching build, dnf
+# answers the dependency by DOWNGRADING mesa to the freeworld build's
+# version. 44.6.0's first published tag shipped exactly that (issue
+# #36): a mesa stack at 26.0.3 whose LLVM segfaults its own shader JIT
+# inside the greeter, on GPU-less machines, probabilistically.
+#
+# What the rpmdb can see is inconsistency: a partial drag leaves some
+# mesa-sourced packages behind the freeworld build, and that names the
+# failure. A full-stack drag is invisible here -- the whole set moves
+# together and is self-consistent at the old EVR -- so this check is a
+# floor, not the whole guard; the validation laps on a GPU-less runner
+# are what catches the rest, which is the promotion gate's job.
+mesa_all=$(rpm --root="$mnt" -qa --qf '%{NAME} %{EVR} %{SOURCERPM}\n' 2>/dev/null \
+    | awk '$3 ~ /^mesa-[0-9]/ {print $1, $2}')
+if [ -z "$mesa_all" ]; then
+    bad "no mesa-sourced packages in the rpmdb" \
+        "the freeworld guard cannot grade an image that does not ship them"
+else
+    evrs=$(awk '{print $2}' <<< "$mesa_all" | sort -u | sort -V)
+    if [ "$(wc -l <<< "$evrs")" -eq 1 ]; then
+        ok "mesa stack and freeworld build at one EVR ($(head -n1 <<< "$evrs"))"
+    else
+        newest=$(tail -n1 <<< "$evrs")
+        while read -r pkg evr; do
+            [ -n "$pkg" ] || continue
+            bad "$pkg $evr is older than the freeworld build's $newest" \
+                "the freeworld resolution dragged mesa down (issue #36); wait for rpmfusion to catch up and compose again"
+        done <<< "$(awk -v newest="$newest" '$2 != newest {print $1, $2}' <<< "$mesa_all")"
+    fi
+fi
+
 echo
 if [ "$failures" -gt 0 ]; then
     echo "$failures check(s) failed: do not publish $image"

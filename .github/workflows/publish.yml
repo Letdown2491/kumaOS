@@ -152,7 +152,14 @@ jobs:
       # Before the registry, never after. A published image cannot be
       # unpublished from anybody who already pulled it.
       - name: audit for personal information
-        run: ./scripts/publish-audit.sh "${{ steps.ref.outputs.local }}"
+        run: |
+          # The freeworld guard queries the image's rpmdb by EVR, and the
+          # runner ships no rpm. Uninstalled here, the guard's answer
+          # would be "no mesa in the rpmdb" -- a false red on every
+          # publish, which is how a gate that cries wolf stops being read.
+          sudo apt-get update >/dev/null 2>&1
+          sudo apt-get install -y --no-install-recommends rpm >/dev/null 2>&1
+          ./scripts/publish-audit.sh "${{ steps.ref.outputs.local }}"
 
       # Pinned to the cosign 2.6 line, not the installer's default: v4 of
       # this action installs cosign v3, and cosign v3 changed where
