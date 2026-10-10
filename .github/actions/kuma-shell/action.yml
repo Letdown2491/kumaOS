@@ -129,6 +129,14 @@ runs:
         # write_context stages them as siblings too: the app's identity —
         # the launcher's entry and the icon it names — ships from the
         # tree that builds the app, not regenerated in the image repo.
+        # The entry is the app tree's one template with one
+        # substitution here: the binary lands at /usr/bin in the image
+        # (the dev install is ~/.local/bin, same template, build.sh
+        # substitutes that), and the mimetype claims are whatever the
+        # app tree's open surface can render.
         cp target/release/kuma-shell target/release/kuma-greeter target/release/kuma-files \
-           kuma-files/kuma-files.desktop kuma-files/packaging/kuma-files.png \
+           kuma-files/packaging/kuma-files.png \
            "$GITHUB_WORKSPACE/${KUMA_DIR%/}/"
+        sed "s|@BIN@|/usr/bin|" \
+          kuma-files/packaging/kuma-files.desktop.in \
+          > "$GITHUB_WORKSPACE/${KUMA_DIR%/}/kuma-files.desktop"
