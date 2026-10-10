@@ -1309,13 +1309,16 @@ smoke_published() {
         # $0 and $1, so it listed $HOME, which on a fresh install is
         # empty. The check reported "found 0" on a machine carrying all
         # eight, and only the install stage could ever see it.
-        # Koguma's entry is excluded from the seam's count: the eight
-        # generated verbs are the seam's own contract, and Koguma's
-        # entry is a real app's, shipped from the kumaui tree — one
-        # glob catches both, and only the count here is entitled to be
-        # exactly eight.
+        # The count selects by Exec, not by the kuma-* glob: the eight
+        # generated verbs are the seam's own contract, and each of them
+        # alone execs kuma-launch — the real apps beside them (kuma-files,
+        # and kuma-term since 44.7.0's baked terminal) exec their own
+        # binaries. The glob-plus-name-exclusion count aged out the day
+        # kuma-term.desktop joined the image and read "expected 8, found
+        # 9" on a healthy machine; the Exec selects exactly the generated
+        # verbs no matter how many baked apps ship beside them.
         local seam_entries
-        seam_entries=$(guest 'ls /usr/share/applications/kuma-*.desktop 2>/dev/null | grep -v kuma-files | wc -l' || echo 0)
+        seam_entries=$(guest 'grep -l "^Exec=/usr/libexec/kuma-launch" /usr/share/applications/kuma-*.desktop 2>/dev/null | wc -l' || echo 0)
         [ "$seam_entries" -eq 8 ] || bad "expected 8 seam entries, found $seam_entries"
         guest 'desktop-file-validate /usr/share/applications/kuma-*.desktop' \
             || bad "kuma's desktop entries do not validate on the booted machine"
