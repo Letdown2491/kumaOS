@@ -38,7 +38,7 @@ $ kuma-nostr log          # what was asked, and how it went
 
 A pairing URI works for exactly one app, once. The first connect burns its
 secret, so mint a new URI for each app. If an app gives you a
-`nostrconnect://` invite instead, paste it into `connect` — pasting is the
+`nostrconnect://` invite instead, paste it into `connect`: pasting is the
 approval, and the handshake happens on the client's own relays. If that
 fails, the error says why: a missing secret, no relay, or a plaintext
 relay to a machine that is not yours.
@@ -53,18 +53,18 @@ Pairing gives an app the right to *ask*. It never hands over key material.
 What the app may sign is decided by the policy engine, and a newly paired
 app starts at the most careful level:
 
-- **Ask** — every real request pops a prompt naming the app and the act
+- **Ask**: every real request pops a prompt naming the app and the act
   ("Sign a note", "Update relay list"), with the event's content shown for
   you to read. Sensitive requests get an extra cue. Nothing is signed
   until you answer. An unanswered ask times out after five minutes and the
   app gets the refusal.
-- **Basic** — the everyday social stuff signs without asking: notes,
+- **Basic**: the everyday social stuff signs without asking. Notes,
   reposts, reactions, long-form. Anything sensitive still asks: profile
-  and follows, relay and mute lists, deletions — kind 5's and a blossom
-  `delete` authorization's alike, the same act wearing another kind —
+  and follows, relay and mute lists, deletions (kind 5's and a blossom
+  `delete` authorization's alike, the same act wearing another kind),
   every decrypt, private messages (NIP-04), and anything the safe list
   does not name.
-- **Trust** — signs everything unattended. `kuma doctor` flags any app at
+- **Trust**: signs everything unattended. `kuma doctor` flags any app at
   Trust by name, because a standing grant is the loudest thing in the
   layer.
 
@@ -76,13 +76,13 @@ answer for everyone waiting.
 
 Every decision lands in an activity log that survives restarts and keeps
 the last 500 entries. The record holds the method, the event kind, and the
-verdict — never the event's content. Read it from the panel's Activity tab
+verdict, never the event's content. Read it from the panel's Activity tab
 or `kuma-nostr log`.
 
 ## The key, and where it lives
 
-The key is stored in your login keyring — the same place your browser's
-certificates and wifi passwords go — wrapped with a passphrase (NIP-49,
+The key is stored in your login keyring (the same place your browser's
+certificates and wifi passwords go), wrapped with a passphrase (NIP-49,
 stored as `ncryptsec`). Honest footnote: the passphrase is stored next to
 the key, so today the wrapping adds nothing the keyring doesn't already
 provide. It exists so that switching to a vault with an independent
@@ -102,7 +102,7 @@ daemon again starts a fresh window.
 
 One more thing worth knowing: the bunker's key is whichever road you
 took at setup. By default the layer generates a key that exists nowhere
-else — machine-local, tied to nothing about you — and to a relay
+else (machine-local, tied to nothing about you) and to a relay
 operator that makes the bunker pseudonymous. If you imported an
 identity you already hold, the bunker signs as that identity, and its
 npub is yours.
@@ -113,7 +113,7 @@ Three verbs, two outcomes:
 
 - `revoke` tombstones the pairing. The app is refused whatever it sends,
   the record stays so it can't sneak back with a cached secret, and
-  `unrevoke` brings it back (with a freshly minted URI — the original
+  `unrevoke` brings it back (with a freshly minted URI; the original
   burned on first use).
 - `delete` removes the record outright. A fresh URI can pair the same app
   again.
@@ -154,7 +154,7 @@ The vault's key is the whole identity. `destroy` deletes it, and so does
 losing the disk. What that costs depends on which road you took at
 setup. A generated key is disposable by design: run `kuma-nostr setup`
 again, pair your apps again, and the new npub is as good as the old
-one. An imported identity is not replaceable at all — posts, followers,
+one. An imported identity is not replaceable at all: posts, followers,
 and history are gone with the key.
 
 Either way, the bunker's key is unrelated to the image signing key, to
@@ -168,7 +168,7 @@ you care about, make the backup:
 $ kuma-nostr export --output ~/backups/nostr-identity.ncryptsec
 ```
 
-The daemon wraps the key fresh under a passphrase you choose — 16 or
+The daemon wraps the key fresh under a passphrase you choose: 16 or
 more characters, letters and digits, because a file that has left the
 machine is defended by its passphrase alone. The file is created 0600
 and never overwritten, so a second export refuses to clobber the first.

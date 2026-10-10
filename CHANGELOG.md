@@ -6,12 +6,12 @@
 
 - **The session answers its own privileged prompts.** kuma-shell registers
   as the polkit authentication agent (kumaui #65/#68): a prompt is the
-  lock screen's shape — one centered card, exclusive keyboard, the
-  ADR-0007 capture — the identity resolved from unix-user and unix-group,
+  lock screen's shape (one centered card, exclusive keyboard, the
+  ADR-0007 capture), the identity resolved from unix-user and unix-group,
   and the helper exchange riding polkit 127's socket-activated helper,
   whose per-connection sandbox replaces a permanent setuid binary.
-  mate-polkit leaves the niri session — the package stays for the cosmic
-  arm, whose only agent is the autostart-found mate one — and until the
+  mate-polkit leaves the niri session (the package stays for the cosmic
+  arm, whose only agent is the autostart-found mate one), and until the
   handoff the transition was two agents meeting polkitd's one-agent-per-
   session rule: the shell held the slot while mate's agent ran, and
   logged a warning every 5s saying so.
@@ -19,8 +19,8 @@
 - **The launcher honors the show-in pair.** Every conforming launcher
   hides blueman-adapters outside XFCE and MATE; ours listed it, because
   the desktop-entry parser read NoDisplay and not OnlyShowIn/NotShowIn.
-  The filter rides the shared load — launcher panel, dock, the per-app
-  volume rows — with glib's exact semantics: case-sensitive comparison,
+  The filter rides the shared load (launcher panel, dock, the per-app
+  volume rows) with glib's exact semantics: case-sensitive comparison,
   the unset case shows, NoDisplay still wins outright, and `Hidden` joins
   the pair, the spec's "user deleted this entry" key the greeter's
   session list already honored.
@@ -30,40 +30,40 @@
   already on the image: zen is the browser (Calculator's arithmetic
   lives in the launcher's eval), Koguma opens the images it renders and
   the pdf, whose viewer counts pages with pdfinfo and rasters them with
-  pdftocairo — `poppler-utils` joins the package list, which never
+  pdftocairo; `poppler-utils` joins the package list, which never
   carried it: Papers rendered in-process through libpoppler-glib, and
   every dev host hid the gap through the toolbox's copy. The baked
   defaults follow the claims: the http/https/html entries name zen, the
   image and pdf entries name Koguma (zen claims them all as browsers
   do, so the pins are the tie-breakers they were under firefox), and
-  avif and svg+xml resolve unaided — Loupe's exit left zen their sole
+  avif and svg+xml resolve unaided: Loupe's exit left zen their sole
   claimant, and Koguma's surface doesn't render them.
 
-- **The terminal is kuma's own.** kitty leaves the image and kuma-term —
-  kumaui's terminal, baked beside the shell and Koguma rather than
-  packaged — takes the seat: niri's stock alacritty bind is seded onto
+- **The terminal is kuma's own.** kitty leaves the image and kuma-term
+  (kumaui's terminal, baked beside the shell and Koguma rather than
+  packaged) takes the seat: niri's stock alacritty bind is seded onto
   it as before, and kuma-launch's verb runner resolves
   `kuma-term cosmic-term` and holds the desktop's verbs inside it. Its
   desktop entry and icon ride from the kumaui tree beside the binary,
   under the same validate-Exec-icon guard Koguma's entry answers to.
-  kitty.conf — the one static theme file, build-validated by kitty's
-  own loader — retires with it; the shell had stopped needing a
+  kitty.conf (the one static theme file, build-validated by kitty's
+  own loader) retires with it; the shell had stopped needing a
   terminal's config when the terminal became kuma's.
 
 - **A lag-window freeworld can no longer poison the image.** Fedora pushed
   mesa 26.2.3 to the mirrors hours before rpmfusion's matching freeworld
   build, and every compose inside that window downgraded mesa to the older
-  build — 26.0.3-4, whose LLVM 22.1 shader JIT kills SelectionDAG's type
+  build, 26.0.3-4, whose LLVM 22.1 shader JIT kills SelectionDAG's type
   legalizer on the greeter's fragment shader: the greeter, or the shell
-  behind it, died sig=11 at first draw, probabilistically — six runner
+  behind it, died sig=11 at first draw, probabilistically (six runner
   boots lost to it in one afternoon while the morning's boots won, and the
-  same image booted green on a real GPU all day. The core, pulled from a
+  same image booted green on a real GPU all day). The core, pulled from a
   vgem-only mount namespace replicating the runner's DRM-less shape, named
   the stack: `gallivm_jit_function` under `llvmpipe_update_fs` under
   `lvp_execute_cmd_buffer` (kumaOS#36). The freeworld step now asks the
   candidate's version before installing: a build matching Fedora's mesa
   installs as before; a lag-window build is skipped with a loud note and
-  the image composes alive — VA-API decode falls back to CPU, which is a
+  the image composes alive: VA-API decode falls back to CPU, which is a
   regression of degree, where a greeter that cannot boot is a regression
   of kind. A metadata failure still fails the build rather than composing
   blind.
@@ -71,7 +71,7 @@
 - **The image carries the full libav build.** kuma-files' video support
   (the previews and player riding the 44.7.0 kumaui pin) decodes
   in-process through libav, and Fedora's free build strips the codecs
-  people actually hold — H.264, H.265, AAC — the same patent story the
+  people actually hold (H.264, H.265, AAC), the same patent story the
   freeworld block answers one layer down at the VA-API driver. rpmfusion's
   `ffmpeg-libs` replaces the stripped libs under the same sonames (both
   sides on ffmpeg 8.1), so everything that linked the free build keeps
@@ -84,7 +84,7 @@
 
 - **Color emoji paints in kuma's own renderers.** The shell, the greeter,
   Koguma and kuma-term rasterize glyphs through swash, which paints bitmap
-  (CBDT/CBLC) emoji but cannot rasterize COLRv1 — and Fedora's noto-emoji
+  (CBDT/CBLC) emoji but cannot rasterize COLRv1, and Fedora's noto-emoji
   packaging switched to COLRv1 in April 2025, so the packaged color face
   drew every emoji as an empty box and the packaged `google-noto-emoji-fonts`
   has been monochrome since. No Fedora package ships the bitmap build any
@@ -93,7 +93,7 @@
   `assets/CREDITS.md`), baked at
   `/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf` on the niri arm
   beside the packaged faces, which stay for every renderer that is not
-  swash-based — the kumaui font loader evicts letter-less faces it cannot
+  swash-based: the kumaui font loader evicts letter-less faces it cannot
   pull a color bitmap from, so the two faces sort themselves out. A test
   pins the vendored bytes to their upstream sha256; the packaged faces
   ride the same set unchanged.
@@ -105,35 +105,35 @@
   kuma-term itself is not baked: it installs user-side, beside the font
   it needs.
 
-- **Koguma, kuma's own file manager, is the image's file manager —
+- **Koguma, kuma's own file manager, is the image's file manager,
   default and only.** The third kumaui binary rides the same road as
   the shell and the greeter: built at the pinned kumaui commit, staged
   beside the kuma binary, baked in at `/usr/bin/kuma-files`, with the
-  desktop entry and icon shipped from the kumaui tree beside it — so
+  desktop entry and icon shipped from the kumaui tree beside it, so
   the launcher lists it under its own name, keywords and all, and the
   mimeapps default hands it `inode/directory` outright. Thunar and its
   archive plugin leave the set in the same release, and the XFCE tail
-  that rode in as their dependencies — exo, garcon, xfconf, tumbler,
-  the libxfce pair, the panel straggler, ~32 MB installed — leaves
+  that rode in as their dependencies (exo, garcon, xfconf, tumbler,
+  the libxfce pair, the panel straggler, ~32 MB installed) leaves
   with them. file-roller stays: it is Koguma's extract catch-all, the
   end of the ladder tar, unzip and the single-file decompressors
-  cannot finish (7z/rar). The plan's original order — ship Koguma
-  installed-not-default, ride it for a release, drop Thunar after —
+  cannot finish (7z/rar). The plan's original order (ship Koguma
+  installed-not-default, ride it for a release, drop Thunar after)
   was collapsed by the owner's call, 2026-10-06: the ride runs on the
   drop, on the dev machine, with no net. The smoke launches Koguma in
   the guest through the session's own user manager and holds it to its
-  activation socket — a shipped app that cannot launch is exactly the
+  activation socket: a shipped app that cannot launch is exactly the
   thing a smoke exists to catch, and a default that cannot launch is
   a desktop with no file manager at all.
 
-- **Samba browsing arrives — and every gvfs mount gains a plain POSIX
+- **Samba browsing arrives, and every gvfs mount gains a plain POSIX
   path.** `gvfs-smb` puts the samba backend in the image for the first
   time: any gvfs consumer can browse `smb://`. And `gvfs-fuse` puts
   the daemon that exposes every active gvfs mount as plain files under
-  `/run/user/$UID/gvfs` into the composed image at last — a bare-metal
+  `/run/user/$UID/gvfs` into the composed image at last: a bare-metal
   install always pulled it in as a weak dependency, the composed image
   did not, so gvfs mounts existed without ever being reachable as
-  files. Koguma — the file manager this release makes the default —
+  files. Koguma (the file manager this release makes the default)
   browses every gvfs mount, samba and MTP alike, through those paths
   alone; the image's GIO-native consumers never needed the FUSE
   daemon, which is why the gap could hide until now.
@@ -141,7 +141,7 @@
 - **A hardening floor, taken from secureblue's audited set and adapted
   to what kuma's gate can run.** Every image ships six new files:
   `/usr/lib/sysctl.d/70-kuma-hardening.conf` (the kernel's cheap
-  answers to the exploit classes that start in userspace — ptrace
+  answers to the exploit classes that start in userspace: ptrace
   restricted to your own descendants, kernel pointers gone from
   `/proc`, perf root-only, kexec disabled, SysRq off, coredumps to
   `/bin/false`, the TCP/ICMP set, and the rest),
@@ -155,21 +155,21 @@
   faillock at secureblue's numbers (50 failures, a day's lock) wired
   in through `authselect enable-feature`. The sysctl set subtracted
   everything the running kernel already defaults and everything with a
-  price a desktop would feel — `io_uring_disabled` and
-  `lockdown`/`nosmt` are named decisions that stay unmade — and the
+  price a desktop would feel (`io_uring_disabled` and
+  `lockdown`/`nosmt` are named decisions that stay unmade), and the
   kargs set subtracted the three kargs the kernel's config already
   carries. The sshd story is the change's spine: the boot smoke and
   `kuma vm` reach the guest over ssh and the install lap reaches it
   with a password, so the unit stays enabled and the closure moves to
   the firewall, which is where the world's route in actually was. The
-  public zone keeps a rich rule admitting ssh from 10.0.2.2 alone —
-  qemu's user-net gateway, the address `kuma vm`'s 127.0.0.1 bind
-  already assumes — and names its price in the zone description: a
+  public zone keeps a rich rule admitting ssh from 10.0.2.2 alone
+  (qemu's user-net gateway, the address `kuma vm`'s 127.0.0.1 bind
+  already assumes) and names its price in the zone description: a
   network numbered 10.0.2.0/24 would reach sshd, which is the cost of
   the test lane living in the shipped zone instead of a fixture. The
   boot smoke gained a hardening lap that asserts the sysctl values,
   the kargs on `/proc/cmdline`, the zone's shape from the running
-  firewall, NTS sources, faillock's wiring, and the MAC conf — the
+  firewall, NTS sources, faillock's wiring, and the MAC conf: the
   floor's quiet regression reports itself, and the kargs merge through
   bootc's kargs.d gets its measurement on the next lap. What the user
   feels: `strace -p` and perf on host processes want root, ping goes
@@ -180,7 +180,7 @@
   as pam's dependency, because the floor's flip is kuma's dependency
   to own.
 
-- **`kuma-nostr export` — the backup that makes `destroy` survivable on
+- **`kuma-nostr export`: the backup that makes `destroy` survivable on
   purpose.** The daemon wraps the vault's key fresh under a passphrase
   the person chose and answers the `ncryptsec1` string the import
   surface already reads, so an imported nostr identity can be walked
@@ -191,46 +191,46 @@
   The CLI asks for the passphrase twice at a terminal (once on a
   pipe), refuses weak ones through the same tested gate the
   independent-passphrase vault mode will inherit, writes the file 0600
-  at creation and checked after, and never overwrites — a second
+  at creation and checked after, and never overwrites: a second
   export names the collision instead of silently replacing the older
   backup. The CLI still reads no keys: the passphrase rides the 0600
   loopback socket the import's secret rides in on, and the wrapping
-  happens daemon-side against the in-memory key — a locked vault
-  refuses. The docs gained the truth the code always had: the bunker's
-  key is whichever road you took at setup — a generated key is
-  disposable by design, an imported identity is not replaceable at all
-  — and two stale claims that an imported identity never signs (a
+  happens daemon-side against the in-memory key (a locked vault
+  refuses). The docs gained the truth the code always had: the bunker's
+  key is whichever road you took at setup (a generated key is
+  disposable by design, an imported identity is not replaceable at all),
+  and two stale claims that an imported identity never signs (a
   bunker comment, a nostr.md sentence) are corrected. The nostr-relay
   escrow from the issue's option list is declined: new infrastructure
   and a published backup's metadata signature for what a file and the
   `[backup]` restic repository already solve.
 
 - **A blossom `delete` authorization asks, the way any deletion asks.**
-  Kind 24242 rode the safe list whole — every blossom authorization
+  Kind 24242 rode the safe list whole: every blossom authorization
   signed unattended at Basic, blind to which verb the auth carried, and
   a delete authorization is a deletion wearing another kind. The
   policy layer now reads the auth's `t` tag (BUD-01's own field):
-  `get`, `upload` and `list` keep riding Basic, `delete` prompts — the
+  `get`, `upload` and `list` keep riding Basic, `delete` prompts (the
   mute-list precedent, that a write which reshapes the user's content
-  is the person's to answer — and so does an auth whose verb cannot be
+  is the person's to answer), and so does an auth whose verb cannot be
   read. The ask card speaks blossom now: the summary names the act
   ("Delete blobs (blossom auth)") where the number used to. No new
   bunker surface was needed for Koguma's blossom pane: the standard
   NIP-46 `sign_event` already carries kind 24242, and the blossom
-  server list is Koguma's own configuration, not the bunker's — an
+  server list is Koguma's own configuration, not the bunker's: an
   off-distro install holds its own list, so the bunker would fork the
   feature by hosting one (issues #27, #28).
 
 - **The focus ring stays an outline: translucent windows show the
   wallpaper when focused.** niri's default renders the focused window's
-  ring as a filled rectangle behind the window — its answer to
-  arbitrarily shaped client-side borders — and a translucent surface
+  ring as a filled rectangle behind the window (its answer to
+  arbitrarily shaped client-side borders), and a translucent surface
   composites over that fill, so a fully transparent kuma-term blended
   over a flat gray card instead of the wallpaper: pixel probes behind
   the focused terminal measured exactly the look block's active-color.
   The image's Kuma look window-rule now sets
   `draw-border-with-background false`, drawing the ring around the
-  window instead — the conventional look everywhere else (issue #31).
+  window instead, the conventional look everywhere else (issue #31).
   kuma-shell already writes a per-app copy of the rule into its
   local.kdl store for installs older than this image; the rules are
   additive and identical, so the shim is redundant here, not
@@ -238,15 +238,15 @@
 
 - **New installs land on the finished desktop: the shipped defaults are
   now the setup daily use converged on.** The compiled defaults were
-  first-draft scaffolding — workspaces and window title on the bar,
-  xterm's VGA primaries in the terminal, Koguma at 100% zoom — and a
+  first-draft scaffolding (workspaces and window title on the bar,
+  xterm's VGA primaries in the terminal, Koguma at 100% zoom) and a
   fresh machine opened onto them unchanged. The three surfaces now ship
   the owner's lived-in arrangement: the bar gains the apps launcher
   beside workspaces on the left, moves the clock to center, and fills
   the right cluster with tray, notifications, volume, internet and
   battery (the gear stays as the bar's fixed last element), at the
-  shipped geometry — 32px, two thirds, centered, xl radius, square top
-  corners — with the wallpaper-derived theme on and the dock off (one
+  shipped geometry (32px, two thirds, centered, xl radius, square top
+  corners) with the wallpaper-derived theme on and the dock off (one
   setting away, first-run pins intact). kuma-term's built-in theme
   replaces the VGA fallback with the noctalia pastels, ANSI 16 and
   chrome both, so a box with no conf renders the shipped look, and the
@@ -258,18 +258,18 @@
   the boxes that never expressed one.
 
 - **The fastfetch card reads like the distro's business card.** The
-  bare module list — a stock fetch with the bear beside it — is
+  bare module list (a stock fetch with the bear beside it) is
   replaced with a shaped one: keys in the shipped palette's periwinkle,
   usage bars on memory, disk and battery, the window manager shortened
   to WM, and the disk pinned to `/var`, because the bootc root is a
   read-only overlay that reported itself as a full disk. The wordmark
   under the bear went: the OS line beside her already says kumaOS. The
-  bear stays, and now sits centered against the info block — fastfetch
+  bear stays, and now sits centered against the info block (fastfetch
   has no vertical centering, so the logo's top padding carries the
-  arithmetic. The keys draw instead of spell: Font Awesome 6 glyphs,
+  arithmetic). The keys draw instead of spell: Font Awesome 6 glyphs,
   written as JSON `\u` escapes and resolved by the terminal's own
   fontconfig fallback into the fonts `fontawesome-fonts-all` already
-  ships — no font package joins the image for a fetch line. Version and
+  ships: no font package joins the image for a fetch line. Version and
   signer state left the card entirely: `kuma --version` answers in the
   CLI, the signer's state in `systemctl`, and a business card repeats
   neither.
@@ -279,7 +279,7 @@
 - **The image carries its OCI version, and bootloader-update stops
   failing on every boot.** bootc's install writes the installed
   image's OCI version into `/sysroot/.bootc-aleph.json`, and bootupd's
-  reader requires it as a plain string — a null fails
+  reader requires it as a plain string (a null fails
   `bootloader-update.service` on every boot. Nothing in kuma's
   pipeline supplied one, so every image kuma has ever built installed
   with `"version": null` and the failed unit, invisible until the boot
@@ -293,7 +293,7 @@
 - **The desktop appears ~5 seconds sooner after logging in.** greetd
   gives the greeter session 5 seconds to exit on its own after a
   successful login before it kills it, and the greeter session was
-  `exec niri -- kuma-greeter` — a compositor that never exits when its
+  `exec niri -- kuma-greeter`: a compositor that never exits when its
   child does. Every login paid the full patience window (measured: ~6 s
   between password accept and the user session starting). The greeter
   session is now a supervisor that runs niri in the background and exits
@@ -301,17 +301,17 @@
   second; the session starts as soon as greetd sees the exit.
 - **Doctor's nostr trust warning is one line, not one per app.** Three
   apps holding Trust graded three identical warnings; one warning now
-  names the whole pile. Nothing about the grants changed — only how
+  names the whole pile. Nothing about the grants changed, only how
   the doctor counts them.
 - **`kuma clean` names what prune could not take.** A dangling image a
   container still holds is skipped by `podman image prune`, so the
   doctor warned "1 stranded build image" while `kuma clean` answered
-  "Nothing to reclaim" — both true, together a lie. Clean now says
+  "Nothing to reclaim": both true, together a lie. Clean now says
   which container holds which image, so reclaiming it is one `podman
   rm` away.
 - **The shell logs where its startup milliseconds go.** The startup
-  path now logs each boot phase — entering gpui, app closure, session
-  connected, settings loaded, surfaces up — with elapsed
+  path now logs each boot phase (entering gpui, app closure, session
+  connected, settings loaded, surfaces up) with elapsed
   milliseconds, so a slow login can be priced from the journal
   (`journalctl --user -u kuma-shell -b | grep 'boot:'`) instead of
   guessed at. First warm login on the record prices the whole
@@ -319,14 +319,14 @@
   handoff chain, not the shell.
 - **The doctor's idle check asks the running shell, not the boot.**
   The check read the whole boot's journal for an idle-watcher
-  failure, and success is silent — so a shell that exited mid-boot
+  failure, and success is silent, so a shell that exited mid-boot
   (a logout teardown, a crash `Restart=always` recovered) left its
   watcher's death on record, and every later check that boot graded
   the live shell by its predecessor's corpse. Found on motherbox the
   same day the boot-phase logs landed: a logout/login verification
   run failed the idle lock with a broken pipe from the pre-logout
   instance. The journal read is scoped to the unit's main PID now;
-  nothing a reader does differently — a failure it reports is the
+  nothing a reader does differently: a failure it reports is the
   running shell's own.
 
 Entries land with the change they describe; the next tag takes this section
@@ -343,7 +343,7 @@ differently. Why it changed belongs in the commit that made it.
   user before login) and takes free-text usernames; PAM goes through
   greetd unchanged. A `Restart=on-failure` drop-in brings greetd back
   in two seconds if the greeter ever dies, and the tuigreet line stays
-  in `/etc/greetd/config.toml` as a comment — reverting is a comment
+  in `/etc/greetd/config.toml` as a comment: reverting is a comment
   swap from a TTY. Upgrades get all of it through the usual `/etc`
   merge: an unmodified `/etc/greetd/config.toml` takes the new default
   on upgrade, while a locally edited one keeps winning over the image
@@ -354,7 +354,7 @@ differently. Why it changed belongs in the commit that made it.
 
 - **Doctor's idle check knows about the settings.** The check still
   fails when the shell's idle watcher is down, but its text no longer
-  claims the timeouts are compiled into the shell — they are the
+  claims the timeouts are compiled into the shell; they are the
   defaults, changed in the settings panel or
   `~/.config/kuma-shell/config.toml`'s `[idle]` keys, and the check now
   reads the same file: it reports the machine's actual timeouts rather
@@ -382,16 +382,16 @@ differently. Why it changed belongs in the commit that made it.
 - **The greeter refused a good password for half a minute after the
   sleep guard ended a session.** The guard terminates the session's
   scope, but the compositor and the shell are user units outside that
-  scope — niri.service outlived its session by 28 seconds, and every
+  scope: niri.service outlived its session by 28 seconds, and every
   password typed at the greeter in that window was answered by
   niri-session's own "A niri session is already running." check. The
-  guard now stops `graphical-session.target` after the terminate —
-  the same teardown niri-session performs — under a timeout, so a
+  guard now stops `graphical-session.target` after the terminate
+  (the same teardown niri-session performs) under a timeout, so a
   wedged stop cannot stall the sleep it runs under.
 - **A laptop got its battery warning from every session it ever
   opened.** `kuma-battery-watch` is spawned by niri's
   `spawn-at-startup`, which re-runs whenever niri's config reloads,
-  and a session's end never reaches the loop it starts — so each
+  and a session's end never reaches the loop it starts, so each
   reload and each re-login added another copy, all polling and all
   notifying. Four copies were alive on one machine. The script now
   takes an flock in the user's runtime directory and a second copy
@@ -418,8 +418,8 @@ differently. Why it changed belongs in the commit that made it.
   idle contract is the swayidle line kuma has run since before
   noctalia, compiled in rather than configured: lock after 15 minutes
   of stillness, power the monitors off a minute later, and lock when
-  the machine is about to sleep. Idleness is the compositor's to say —
-  ext-idle-notify-v1 — so a video playing or a download's progress bar
+  the machine is about to sleep. Idleness is the compositor's to say
+  (ext-idle-notify-v1), so a video playing or a download's progress bar
   counts as the activity it is, which an input-polling blanker cannot
   see. All three clauses land in the same lock path logind's `Lock`
   signal drives: one lock screen, one password field, one PAM chain,
@@ -439,7 +439,7 @@ differently. Why it changed belongs in the commit that made it.
   newest-first, and the Pair pane with the vault's gates. Two things
   the plugin could not do are in: avatars on ask cards and the app
   list (fetched over https, cached in your state directory, an
-  identicon when an app has none), and copy-to-clipboard pairing —
+  identicon when an app has none), and copy-to-clipboard pairing:
   the fresh URI lands in the clipboard with a mint-and-copy button
   instead of a QR code to scan with the device you are holding.
 
@@ -454,15 +454,15 @@ differently. Why it changed belongs in the commit that made it.
 ### Changed
 
 - **The desktop shell is kuma-shell.** noctalia 5.2.0 leaves the image
-  and the shell built from the kumaui tree takes its place — one
+  and the shell built from the kumaui tree takes its place: one
   process for the bar, notifications, wallpaper, idle, lock, control
   centre and the Nostr Signer, supervised by `kuma-shell.service` as
   before, with the binary staged into the build context beside kuma
   the way the nostr binaries ride. The keybinds follow: `Mod+D` opens
   the shell's launcher, the media and brightness keys go through its
   msg interface (the same sysmon the bar's widgets read, so key and
-  widget cannot disagree), and `Super+Alt+L` targets logind —
-  `loginctl lock-session` — which is the same road the idle timeout
+  widget cannot disagree), and `Super+Alt+L` targets logind
+  (`loginctl lock-session`), which is the same road the idle timeout
   and sleep take, so the one lock screen answers all of them.
   `Mod+Ctrl+N` opens the Nostr Signer, and the `nostrconnect://`
   scheme handler lands in it with the offer. Two binds left and did
@@ -470,12 +470,12 @@ differently. Why it changed belongs in the commit that made it.
   (wallpaper) opened panels the shell does not have, and a bind that
   advertises a dead panel is worse than no bind; the shell's control
   centre and the Nostr Signer are new work away, not part of the
-  switch. The kitty palette is static now — chosen once, shipped in
-  the image — because the wallpaper-derived render died with noctalia.
+  switch. The kitty palette is static now (chosen once, shipped in
+  the image) because the wallpaper-derived render died with noctalia.
   `kuma doctor` follows the shell: the environ check grades the cursor
   pair the unit must hand it, the idle check grades the watcher's own
   journal line instead of a config's promises, and the shell-config
-  drift check is gone — the image's policy is in the binary, so there
+  drift check is gone: the image's policy is in the binary, so there
   is no baked config for a machine to drift from. The sleep guard
   checks the process by name and no longer pings a session bus the
   shell never owned. Install note: the release's `kuma-shell` binary
@@ -485,19 +485,19 @@ differently. Why it changed belongs in the commit that made it.
 ### Added
 
 - **The lock screen authenticates under its own name.** The image
-  ships `/etc/pam.d/kuma-lock`, the locker-shaped stack — auth riding
-  `system-auth`, account auto-permitting — that makes the first entry
+  ships `/etc/pam.d/kuma-lock`, the locker-shaped stack (auth riding
+  `system-auth`, account auto-permitting) that makes the first entry
   of the desktop shell's `kuma-lock` → swaylock → vlock chain real
   instead of borrowing kbd's vlock file. No password or session
   modules, on purpose: the shell never opens a PAM session, and
   keeping pam_unix out of the account phase keeps its setuid journal
   noise out of every unlock. Unlock attempts are named `kuma-lock` in
-  the journal, and nothing to do differently either way —
+  the journal, and nothing to do differently either way:
   `loginctl unlock-session` stays the backdoor.
 
 - **The activity log persists, and the panel reads it.** What was
-  asked, by whom, and how it went now survives daemon restarts —
-  `log.json` beside the pairings, capped at the last 500 entries —
+  asked, by whom, and how it went now survives daemon restarts
+  (`log.json` beside the pairings, capped at the last 500 entries),
   and `kuma-nostr log` reads it. The panel grows an Activity tab
   where the same entries render newest-first, named by app and time.
 - **A retried ask joins the first.** A client that retries the same
@@ -507,7 +507,7 @@ differently. Why it changed belongs in the commit that made it.
   each through its own response id.
 
 - **Asks and pairings speak the client's name, in Signet's words.**
-  The pairing record's name is the client's own handshake metadata —
+  The pairing record's name is the client's own handshake metadata:
   the spec's optional connect fields (perms, name, image) ride the
   `bunker://` flow now exactly as they ride `nostrconnect://`, read
   as display hints and never as authorization, with an off-spec
@@ -515,12 +515,12 @@ differently. Why it changed belongs in the commit that made it.
   brace. An app that stays anonymous shows as a pubkey fragment, and
   the panel's avatar fetch is https-only with an identicon fallback.
   The paired-apps list reads like Signet's: two lines of fact per
-  app — name, level badge, paired/how many asks/last used — and a
+  app: name, level badge, paired/how many asks/last used; a
   tap opens the app's own view where the acts (level, revoke, delete)
   live, because a list is not a control panel.
 - **Ask prompts read like decisions.** A signature ask says what the
-  event would do in words — "Sign a note", "Send DM", "Update relay
-  list" — with the kind and its name, the content whole, and a
+  event would do in words ("Sign a note", "Send DM", "Update relay
+  list") with the kind and its name, the content whole, and a
   sensitive-action cue on the kinds that change identity, spend
   privacy or carry weight. The strict event parse that turned every
   odd-shaped event into "sign an unreadable event" is retired: the
@@ -530,10 +530,10 @@ differently. Why it changed belongs in the commit that made it.
 
 - **`kuma-nostr delete <app>` removes a paired app outright.** The
   record and its standing answers go, the live session goes with them,
-  and a freshly minted URI pairs the same app again — no un-revoke,
+  and a freshly minted URI pairs the same app again: no un-revoke,
   because deletion forgot rather than banned. Revoke stays the ban:
   the tombstone an app cannot cross until `unrevoke`. The panel offers
-  both — trash deletes, shield revokes — on live and revoked cards
+  both (trash deletes, shield revokes) on live and revoked cards
   alike.
 
 - **The nostr layer.** A declaration with `[nostr]` enabled turns on a
@@ -542,22 +542,22 @@ differently. Why it changed belongs in the commit that made it.
   the CLI (`setup`, `generate`, `import`, `unlock`, `lock`, `touch`,
   `status`, `bunker --qr`, `connect`, `prompts`, `approve`, `deny`,
   `apps`, `revoke`, `unrevoke`, `level`, `rotate`, `destroy`); and the
-  face in the shell — the bar glyph that counts pending asks and the
+  face in the shell: the bar glyph that counts pending asks and the
   approval panel behind it (see the Nostr Signer entry above, which is
   where that face lives now). A freshly paired app can ask for
   everything and signs nothing until a person answers; relaxing an app
-  to Basic signs only the kinds an explicit safe list vouches for —
-  notes, reposts, reactions, long-form, the everyday social surface —
+  to Basic signs only the kinds an explicit safe list vouches for
+  (notes, reposts, reactions, long-form, the everyday social surface),
   and every kind it does not name asks, the decrypts, NIP-04
   encryption, and NIP-44's general-purpose encryption riding like an
   everyday sign; Trust signs everything and `kuma doctor` grades it
   Warn by name. An approved ask can be remembered for an hour at most,
-  and an unanswered one times out after five minutes — the app gets its
+  and an unanswered one times out after five minutes: the app gets its
   refusal, and the log records the expiry. The pairings survive daemon
   restarts and lock/unlock cycles; a prompt approved is a prompt that
   executes in its window, not one that waited a week. Nothing to do
-  differently unless the layer is wanted — absent or off, the image
-  ships none of it — and a toggle never destroys anything: the key
+  differently unless the layer is wanted (absent or off, the image
+  ships none of it), and a toggle never destroys anything: the key
   lives in your keyring, user state no image update touches, so a
   disable is reversible. The release carries the layer's two binaries
   beside kuma, because a nostr-enabled image stages them from beside
@@ -567,27 +567,27 @@ differently. Why it changed belongs in the commit that made it.
 - **The full NIP-46 method surface.** A paired app can ask the bunker
   to `nip04_encrypt`, `nip04_decrypt`, `nip44_encrypt`, or
   `nip44_decrypt` for a third party; ask which relays it answers on
-  (`switch_relays`); and end its own pairing (`logout` — the goodbye
+  (`switch_relays`); and end its own pairing (`logout`: the goodbye
   removes the record, the session, and the standing grants, and cannot
   reach any other app).
 
-- **Both pairing flows.** `bunker://` — the daemon mints the URI, the
-  app connects — and `nostrconnect://` — the client's own invite,
+- **Both pairing flows.** `bunker://` (the daemon mints the URI, the
+  app connects) and `nostrconnect://` (the client's own invite,
   pasted into `kuma-nostr connect <uri>` or the panel, whose paste is
   the approval: the handshake goes out on the client's own relays and
   the URI's secret echoes back as the result the client validates
   against spoofing. Every pairing URI carries a one-time secret, and
-  the connect that uses it burns it — a URI pairs one app once, and a
+  the connect that uses it burns it: a URI pairs one app once, and a
   second connect with the same secret is refused; `kuma-nostr bunker`
   mints a fresh URI per call, and `rotate` still invalidates every
   outstanding secret at a stroke. The client's name and its requested
   permissions ride the pairing record as display hints, never
-  authorization; every URI refusal names itself — a missing secret, no
-  relay, a plaintext relay to a non-loopback host.
+  authorization; every URI refusal names itself (a missing secret, no
+  relay, a plaintext relay to a non-loopback host).
 
-- **Revocation is a state.** `revoke` tombstones the pairing — the
+- **Revocation is a state.** `revoke` tombstones the pairing: the
   app's connect is refused whatever it carries, the tombstone survives
-  restarts — and `unrevoke` clears it; the way back in is still a
+  restarts, and `unrevoke` clears it; the way back in is still a
   freshly minted URI, because the app's original secret burned at its
   first connect. The pairing is the bond: a known app's own reconnect
   re-verifies by identity, so a client that restarted itself needs no
@@ -597,20 +597,20 @@ differently. Why it changed belongs in the commit that made it.
   redelivering its kind-24133 backlog changes nothing: an event id is
   answered at most once per window, a request implausibly old or
   future-dated drops, and one travelling backwards in its sender's own
-  time drops with it. A token bucket per sender — ten a second
-  refilling, thirty of burst headroom — sheds over-budget requests
+  time drops with it. A token bucket per sender (ten a second
+  refilling, thirty of burst headroom) sheds over-budget requests
   with no response, recording the shed in the activity log, so one app
   cannot spend the shared relays for every other.
 
 - **An answer travels the road its p-tag names.** Each relay road is
   its own queue, and an answer goes to the declared set plus whichever
-  app's relays its p-tag names — a nostrconnect handshake travels only
+  app's relays its p-tag names: a nostrconnect handshake travels only
   its URI's relays. Revoking an app tears its relay roads down; one
   app's relay going down never touches the others'.
 
 - **The inactivity switch.** Opt-in: the declaration's
   `inactivity_lock_secs` (or `kuma-nostrd --inactivity-lock-secs`)
-  locks the vault — the same lock the panel's verb runs — after that
+  locks the vault (the same lock the panel's verb runs) after that
   long with no unlock and no keep-alive (`kuma-nostr touch` resets it
   without unlocking). The floor is one hour, 0 or absent is off, and
   off is the default: the desktop daemon's posture is the PAM-open
@@ -619,8 +619,8 @@ differently. Why it changed belongs in the commit that made it.
   and `kuma doctor` grades the armed state in words a person reads.
 
 - **A local relay, and the tailnet mode.** Opt-in
-  (`[nostr.relay] enable = true`): a relay on the machine itself —
-  `nip46-relay`, ported from the Go original and carrying only kind
+  (`[nostr.relay] enable = true`): a relay on the machine itself
+  (`nip46-relay`, ported from the Go original and carrying only kind
   24133/24135 traffic, in-memory, evicted after ten minutes, bound to
   loopback. When enabled, the daemon's relay list is local first, the
   declared fallbacks after, and declaring relays never removes the
@@ -628,7 +628,7 @@ differently. Why it changed belongs in the commit that made it.
   relay alone, which is what makes a fresh install pairable from
   anywhere with nothing configured. When the declaration runs
   `tailscaled.service`, a converge script exposes the local relay to
-  the tailnet under the machine's ts.net name — the relay is then
+  the tailnet under the machine's ts.net name: the relay is then
   reachable by a paired phone with no third party at all. Absent
   tailscale nothing is refused: the bunker is local-only, and doctor
   says so.
@@ -638,7 +638,7 @@ differently. Why it changed belongs in the commit that made it.
 - **The bunker survives a sleep.** A relay connection that died while
   the machine was suspended stayed dead forever: the socket sat
   ESTABLISHED, the read timed out on the beat and nothing probed the
-  wire, so after waking the daemon was deaf — your phone's asks
+  wire, so after waking the daemon was deaf: your phone's asks
   answered by nobody until the next reboot, the status surfaces told
   nothing. The road now pings a quiet wire every thirty seconds and
   walks off after three pings with no answer, landing in the backoff
@@ -647,14 +647,14 @@ differently. Why it changed belongs in the commit that made it.
 - **The nostr panel answers while it is open.** An ask arriving while
   you are reading the panel now shows up in it: the panel polls while
   open (the frame tick, asked for on open and given back on close)
-  instead of refreshing only on open and on its own acts — which is
+  instead of refreshing only on open and on its own acts, which is
   why the bar's ask count moved and the panel's list did not.
-- **A failed panel act says so.** A verb the CLI cannot land — a dead
-  socket, a daemon refusal — now surfaces its error instead of
+- **A failed panel act says so.** A verb the CLI cannot land (a dead
+  socket, a daemon refusal) now surfaces its error instead of
   repainting in silence, which is what once made a working revoke
   look broken.
 - **`bunker --json` prints the document again.** It printed the bare
-  URI, which no JSON parser can read — the panel's Copy fresh URI
+  URI, which no JSON parser can read: the panel's Copy fresh URI
   decoded `nil`, copied nothing, and the clipboard kept whatever was
   there before. Every verb's `--json` now prints the same shape, the
   one `docs/agents.md` always promised (`uri` in the document), and
@@ -662,14 +662,14 @@ differently. Why it changed belongs in the commit that made it.
 
 ### Changed
 
-- **The system calls itself kumaOS.** The display name — os-release `NAME`
+- **The system calls itself kumaOS.** The display name (os-release `NAME`
   and `PRETTY_NAME`, so the GRUB menu, fastfetch, and `hostnamectl` all
-  follow — the login greeter's greeting, the fedora-release shim, and the
+  follow), the login greeter's greeting, the fedora-release shim, and the
   fastfetch wordmark say kumaOS; the default hostname for new installs is
   `kumaos`. The binary, the crate, `ID=kuma`, and every machine-facing
   identifier stay `kuma`, and existing machines keep whatever hostname they
   already have. The repository is `Letdown2491/kumaos`; GitHub redirects the
-  old address, and the cosign identity regexp in SECURITY.md moves with it —
+  old address, and the cosign identity regexp in SECURITY.md moves with it:
   verifications of releases tagged after the rename must use the new path.
 
 ## v44.3.0 (2026-09-27)
@@ -680,7 +680,7 @@ differently. Why it changed belongs in the commit that made it.
   install script trimmed the filesystem before throwing anything away:
   the store subvolume holding the image blobs and tmp's staged copies
   were still allocated at trim time, and deleting them afterwards frees
-  space without discarding any — so the `qemu-img convert` that makes
+  space without discarding any, so the `qemu-img convert` that makes
   the qcow2 copied up to two gigabytes of nothing into the artifact.
   The trim now runs in the cleanup trap, after the store subvolume and
   tmp are gone and while the filesystem can still hear it; the ordering
@@ -692,8 +692,8 @@ differently. Why it changed belongs in the commit that made it.
   The toml crate's parse errors point at the mistake by quoting the line
   they span, and a `password_hash` with one wrong character in it is
   exactly such a line. That error text is the string kuma builds to be
-  pasted — `kuma --json` carries it as the config fact and the edit
-  affordance carries it as the reason — so the probe keeps the position
+  pasted: `kuma --json` carries it as the config fact and the edit
+  affordance carries it as the reason, so the probe keeps the position
   and the verdict and drops the quoting, and `kuma check`'s
   not-a-crypt-hash message names the key instead of echoing the value.
   `doctor --report` already redacted; now everything that pastes does.
@@ -705,8 +705,8 @@ differently. Why it changed belongs in the commit that made it.
   `\r`, the shell reader keeps that byte and the env-file reader does
   not, and the two log into the repository with different passwords. The
   check reads the raw text now and refuses any line whose trimmed form
-  differs — CRLF endings, leading whitespace, a space before the `=`,
-  trailing spaces on the value — naming the key either way. `kuma
+  differs (CRLF endings, leading whitespace, a space before the `=`,
+  trailing spaces on the value), naming the key either way. `kuma
   backup`, `kuma install --restore` and `kuma doctor` all run the same
   check; a file that was fine stays fine, and one that came off a stick
   through Windows says what is wrong with it instead of failing at the
@@ -722,23 +722,23 @@ differently. Why it changed belongs in the commit that made it.
 
 - **Boot convergence stops where the declaration ends.** The units that
   converge flatpaks and brew at boot also updated every application on
-  the machine and pruned unused runtimes — unscoped, ungated, on every
+  the machine and pruned unused runtimes (unscoped, ungated, on every
   boot, so a laptop on a metered connection paid a Flathub visit every
   morning to learn nothing had changed. Boot now answers the
   declaration's question only: what is named gets installed, what kuma
   installed and the declaration dropped is removed, and a machine that
-  already matches its file runs nothing at all — no process, no vendor,
+  already matches its file runs nothing at all: no process, no vendor,
   no network. Keeping applications current, declared or ad-hoc, is the
   daily timer's job behind the battery-and-metered gate 44.1.0 added,
   which is where the docs already put it. `kuma sync` starts the boot
   unit and converges without updating. What to do differently: only if
-  you relied on reboots to update applications you installed yourself —
+  you relied on reboots to update applications you installed yourself:
   then the daily timer does what it was always for, or `flatpak update`
   by hand does it now.
 
 - **Converged boots stop remounting /boot for nothing.** On every boot,
   `kuma-boot-health-sync` remounted /boot read-write, grepped two files,
-  and remounted it back — including on the converged path where it
+  and remounted it back, including on the converged path where it
   writes nothing, which after the first boot is every boot. The greps
   run on the read-only mount now, and the remount happens only on the
   paths that write. Nothing to do differently; the boot journal is two
@@ -758,9 +758,9 @@ differently. Why it changed belongs in the commit that made it.
   filesystem types the device tree carries, and `LVM2_member` or
   `linux_raid_member` anywhere in it is an objection named in the
   refusal, before the plan prints and before a password is asked. An
-  unopened LUKS container is deliberately not objected to — reinstalling
+  unopened LUKS container is deliberately not objected to (reinstalling
   over an old kuma machine is the ordinary case, and its container
-  endangers only itself.
+  endangers only itself).
 
 ## v44.2.0 (2026-09-26)
 
@@ -772,7 +772,7 @@ differently. Why it changed belongs in the commit that made it.
   instead installs it the way `kuma install` installs a machine: the same
   partition layout, the same script, against a sparse raw file reached
   through a loop device, converted to qcow2 at the same
-  `qcow2/disk.qcow2` path as before. Nothing to do differently — the
+  `qcow2/disk.qcow2` path as before. Nothing to do differently: the
   verb, its flags and the output location are unchanged. What a reader
   gets: a VM disk that is laid out like the machine `kuma install` writes
   instead of an ext4 image, so the daily boot checks exercise the same
@@ -780,7 +780,7 @@ differently. Why it changed belongs in the commit that made it.
   last load-bearing use of the frozen container is gone from disk builds
   (its pinned image still builds the deprecated `kuma iso` default, which
   flips to `--live` in 45.0.0). The convenience account on the console is
-  unchanged — name and password `kuma`, wheel — and still trusts the
+  unchanged: name and password `kuma`, wheel, and still trusts the
   host's ssh key, now delivered through the account file the first-boot
   converger reads rather than a bib blueprint.
 
@@ -793,7 +793,7 @@ differently. Why it changed belongs in the commit that made it.
   three-partition model. It keeps working all through 44.x, warning in
   its output; the default flips to `--live` in 45.0.0. What to use
   instead: `kuma iso --live`. The one real trade-off: a live install
-  pulls the image over the network by design — an offline installer
+  pulls the image over the network by design; an offline installer
   would be a new flag, not this default.
 
 ## v44.1.0 (2026-09-25)
@@ -801,15 +801,15 @@ differently. Why it changed belongs in the commit that made it.
 ### Added
 
 - **An install records its own provenance on the machine.** Every install
-  — `kuma install` from a host or live media, and a `kuma vm` disk, which
-  installs by the same path — writes `/var/lib/kuma/install.json` beside
+  (`kuma install` from a host or live media, and a `kuma vm` disk, which
+  installs by the same path) writes `/var/lib/kuma/install.json` beside
   the account and hostname: which kuma ran the install, when, from what
   media, the declaration it was driven from (hashed), the base digest the
   lock had resolved, and the image that landed. bootc records its own
   facts at the same root; this is the kuma half of the story, and the two
   answer different questions. `kuma doctor` says it back as an
-  informational check, and stays silent on machines that have no record —
-  every machine updated into this release is one, and absence is
+  informational check, and stays silent on machines that have no record
+  (every machine updated into this release is one, and absence is
   ambiguous, so nothing is graded on it.
 - **The daily convergence timer waits for power and a real connection.**
   The timer that carries flatpak and brew installs fired on a sleeping
@@ -820,7 +820,7 @@ differently. Why it changed belongs in the commit that made it.
   machines get it for free) and waits below 20% battery. A skipped run
   is a decision the machine reports, not a failure: the day's timer
   stays green, nothing installs, and `kuma doctor` says how many runs
-  were skipped and why. Nothing to do differently — and the gate belongs
+  were skipped and why. Nothing to do differently, and the gate belongs
   to the timer only: converging at boot is the promise, and `kuma sync`
   always runs when asked.
 
@@ -828,15 +828,15 @@ differently. Why it changed belongs in the commit that made it.
   takes `~/.config/niri/config.kdl` instead of `/etc/niri/config.kdl`
   rather than merging, so one copied file unpins every bind, startup
   service and window rule the image ships, and the copy goes stale the
-  moment an image update rewrites the config it was copied from —
-  measured on a machine whose media keys still spawned the binary from
+  moment an image update rewrites the config it was copied from
+  (measured on a machine whose media keys still spawned the binary from
   before the last rename, where doctor had nothing to say while the keys
   did nothing. The check reads each account's shadow only to resolve the
   absolute paths its binds spawn: one naming a program the image does
   not ship is a Fail that names it, a shadow whose every spawn resolves
   is a Warn, and a machine running the image's config is Ok. Bare-name
-  spawns and `spawn-sh` lines are deliberately unreadable from doctor —
-  its PATH is not the session's — so the check misses those rather than
+  spawns and `spawn-sh` lines are deliberately unreadable from doctor
+  (its PATH is not the session's), so the check misses those rather than
   cry wolf about keys that work. The fix it suggests moves the copy
   aside, which is enough because the image's config ends with an include
   of the account's `local.kdl`: the machine's own deltas survive.
@@ -849,9 +849,9 @@ differently. Why it changed belongs in the commit that made it.
   "none"`: a machine whose person never mentioned weather still
   geolocated itself by IP, called api.open-meteo.com on every login and
   retried every thirty seconds while the network was still coming up,
-  and git-fetched two plugin repositories from github.com at startup —
-  eight warnings in the first minute of a fresh offline session,
-  measured. This is the same argument the community-template setting
+  and git-fetched two plugin repositories from github.com at startup
+  (eight warnings in the first minute of a fresh offline session,
+  measured). This is the same argument the community-template setting
   already makes, applied to the shell's other startup calls: a desktop
   that works offline should not call a vendor to render nothing, and an
   image-declared desktop does not auto-run third-party git repos without
@@ -868,12 +868,12 @@ differently. Why it changed belongs in the commit that made it.
 - **The volume and brightness keys draw the OSD again.** The binds used
   to spawn a `kuma-osd` script that adjusted with `wpctl` and
   `brightnessctl`, on a comment's claim that the shell watched the
-  changes and drew its own OSD from a `[osd.kinds]` config key — and no
+  changes and drew its own OSD from a `[osd.kinds]` config key, and no
   noctalia has ever had the key or the watcher. Nothing called the OSD,
   so for the whole life of that script the keys adjusted silently, and
   the visible half of a volume key was missing. The binds go through the
-  shell's own `msg` interface now — `noctalia msg volume-up` and friends
-  adjust and draw in one step — `kuma-osd` leaves the image, and the
+  shell's own `msg` interface now: `noctalia msg volume-up` and friends
+  adjust and draw in one step, `kuma-osd` leaves the image, and the
   mute and mic-mute keys ride the same interface. Nothing a reader has
   to do changes; a machine that updates sees the OSD on the next
   keypress.
@@ -881,15 +881,15 @@ differently. Why it changed belongs in the commit that made it.
 - **The nightly's S3 stopped being MinIO, and the wake-race recovery
   can finally recover.** Two nightly failures, three nights running,
   neither from a change on main. First, MinIO locked its community
-  registries — quay, docker.io and ghcr answer unauthorized on every
-  tag and digest now, measured — so the dead-disk stage's S3 is Garage,
+  registries: quay, docker.io and ghcr answer unauthorized on every
+  tag and digest now, measured, so the dead-disk stage's S3 is Garage,
   pinned by digest (the v2.4.1 multi-arch index), with the fixture
   staging the layout, bucket and key itself and the generated key
   becoming what the guest signs with. Second, the suspend-then-hibernate
   recovery shipped in 44.0.1 could never have fired: it keys on the
   guest reporting zero hibernation images after a wake, but it read that
   count through a retry that judges by exit code, and `grep -c` answers
-  zero by printing 0 and exiting 1 — so the honest zero burned the whole
+  zero by printing 0 and exiting 1, so the honest zero burned the whole
   retry budget, came back empty, and every lost race landed on the fail
   line instead. The zero is a successful answer now; a lost ssh still
   retries. Nothing a reader has to do changes; the nightly is where both
@@ -904,7 +904,7 @@ differently. Why it changed belongs in the commit that made it.
   `quay.io/centos-bootc/bootc-image-builder:latest`, whose repository
   was archived on 2026-06-18 and merged into osbuild/image-builder: the
   tag answers pulls but has been frozen at that date ever since, and a
-  frozen tag on a frozen repo is still a moving pin -- one push over it
+  frozen tag on a frozen repo is still a moving pin: one push over it
   and every later build silently takes whatever arrived. The image is
   pinned by digest now (the multi-arch index, verified 2026-09-22), so
   the bytes kuma builds against cannot change without a change to kuma.
@@ -915,7 +915,7 @@ differently. Why it changed belongs in the commit that made it.
 - **The keyring assert survives Fedora's PAM stacks moving.** The
   build-time check that a desktop's greeter stack still calls
   `pam_gnome_keyring` grepped `/etc/pam.d/<greeter>` only, which is
-  where Fedora 44 ships those files -- and Fedora 45 moves them to
+  where Fedora 44 ships those files, and Fedora 45 moves them to
   `/usr/lib/pam.d`, where the assert would fail every desktop build
   during the next base rebase. The assert now greps both directories
   and is satisfied by either, which on today's images is the same
@@ -926,8 +926,8 @@ differently. Why it changed belongs in the commit that made it.
 - **The nightly hibernate fixture no longer loses the wake-alarm race, or
   ten minutes to it.** The suspend-then-hibernate cycle can wake on the
   alarm with the guest's clock a fraction of a second behind the
-  hibernate deadline, and systemd -- never contradicted, with no battery
-  to consult -- takes the wake for a manual one and returns without
+  hibernate deadline, and systemd (never contradicted, with no battery
+  to consult) takes the wake for a manual one and returns without
   hibernating. The cycle retried that once, and from 2026-09-16 the race
   lost both attempts on five nights in seven, each red night spending
   ten minutes in two 300s waits for a poweroff the machine had already
@@ -963,7 +963,7 @@ differently. Why it changed belongs in the commit that made it.
   check printed its findings document and then the central
   `{"ok": false, "error": …}` failure document after it, and
   `kuma check --json` on an invalid declaration did the same: stdout was
-  two JSON documents back to back, which no caller can parse — the
+  two JSON documents back to back, which no caller can parse: the
   cross-version job's first sight of an upgraded machine failed on
   exactly that, reading a doctor answer that was neither document. Both
   verbs now end in the one document, with `ok` carrying the verdict and
@@ -976,13 +976,13 @@ differently. Why it changed belongs in the commit that made it.
   appended the re-download beside the cached bytes, dnf5 refused the
   result ("not a rpm") and then never re-downloaded it, so every build
   through a shared cache mount after a successful one failed at the mesa
-  step — `kuma update`, and the CI image job on the same cache. The mesa
+  step: `kuma update`, and the CI image job on the same cache. The mesa
   step clears the commandline cache before the URL install now, at the
   cost of re-downloading 11.5 KiB per build. Nothing a reader has to do
   changes.
 - `kuma install` no longer dies inside its own one-layer build when
-  root's podman storage has only ever loaded the image — a fresh CI
-  runner, mostly. The sync that hands the image to root's store now
+  root's podman storage has only ever loaded the image (a fresh CI
+  runner, mostly). The sync that hands the image to root's store now
   materializes its layer directories, where the first COPY used to fail
   inside an overlay mount ("no such file or directory"). Nothing a
   reader has to do changes.
@@ -1004,7 +1004,7 @@ differently. Why it changed belongs in the commit that made it.
   states what kuma 44.0 promises, what later releases may add, and what
   44.0 declines to do, with the reasons. Every 0.x release was an alpha or
   a beta; from the next release the major version names the Fedora base a
-  release builds on -- 44.x tracks Fedora 44, 45.x will track Fedora 45 --
+  release builds on (44.x tracks Fedora 44, 45.x will track Fedora 45),
   and the major is not a promise boundary: the promises carry through
   every release, and one that ends a promise announces itself beforehand
   through deprecations. README links the contract and SECURITY.md names it
@@ -1068,13 +1068,13 @@ differently. Why it changed belongs in the commit that made it.
   exporter that answers for them; it grades ok now, because a
   personalization is not a diagnosis. The state file is a full
   snapshot, so a kuma release that changes the image's default for a
-  key it covers does not reach a machine whose state file predates it
-  -- this check is where that difference is named, and the shell's own
+  key it covers does not reach a machine whose state file predates it:
+  this check is where that difference is named, and the shell's own
   settings are the way to accept a new default. The state file wins
   over the image's config exactly as before.
 - `kuma doctor`'s shell config line now reads "the desktop runs 1 of the
   image's settings differently", which is correct at one key and scopes the
-  claim to the keys the image sets -- the rest of a person's desktop
+  claim to the keys the image sets: the rest of a person's desktop
   settings were never the image's to report. The state-file sentence and
   the compare action's description are one clause shorter each. Nothing a
   reader has to do changes.

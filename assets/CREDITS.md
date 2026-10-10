@@ -58,7 +58,7 @@ Google's **Noto Color Emoji** face, the CBDT/CBLC bitmap build from the
 - Why vendored at all: no Fedora package ships this format any more. The
   noto-emoji packaging switched to the COLRv1 build on 2025-04-09, and
   COLRv1 is beyond the swash rasterizer every kuma GPUI renderer paints
-  through — the packaged color face draws blank boxes in the shell,
+  through: the packaged color face draws blank boxes in the shell,
   greeter, Koguma and kuma-term, and the packaged `google-noto-emoji-fonts`
   has been monochrome since the same switch. The image installs the vendored
   face at `/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf` beside the

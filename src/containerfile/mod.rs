@@ -977,11 +977,11 @@ mod tests {
         assert!(FIREWALLD_PUBLIC_ZONE.contains("10.0.2.2/32"), "the slirp lane");
         assert!(
             !FIREWALLD_PUBLIC_ZONE.contains("\n  <service name=\"ssh\"/>"),
-            "ssh is a top-level service again — the world's route is back"
+            "ssh is a top-level service again: the world's route is back"
         );
         assert!(
             FIREWALLD_PUBLIC_ZONE.contains("\n    <service name=\"ssh\"/>"),
-            "the rule's own ssh element vanished — the gate's lane went with it"
+            "the rule's own ssh element vanished, and the gate's lane went with it"
         );
         // The values that motivated the whole change, pinned at the
         // const so a well-meant renumber cannot hollow the floor.

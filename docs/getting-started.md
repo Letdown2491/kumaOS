@@ -343,9 +343,9 @@ prints one document with the findings, which image is booted, and the
 declaration the machine was built from. That is what to attach to a bug
 report. Your password hash is removed before it prints.
 
-The reasoning behind the loop — why drift is a proposal rather than an
+The reasoning behind the loop (why drift is a proposal rather than an
 error, what the signature on an update refuses, how a bad update rolls
-itself back without you — is [how kuma behaves](concepts.md), which is
+itself back without you) is [how kuma behaves](concepts.md), which is
 where to go when something surprises you.
 
 ## Recovering a machine

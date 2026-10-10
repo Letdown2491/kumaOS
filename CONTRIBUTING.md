@@ -4,6 +4,17 @@ This is about working on kuma itself. For using it, start at
 [getting started](docs/getting-started.md); for why it behaves the way it
 does, [how kuma behaves](docs/concepts.md).
 
+**Writing.** Prose a reader meets does not use the em dash: the docs, the
+changelog, and the strings kuma prints. To a growing share of readers the
+mark reads as machine-written before it reads as punctuation, and the
+constructions it stands in for are the house voice's own: parentheses, a
+colon, a comma, or a sentence of its own. Take the marks out per sentence,
+choosing whichever of those the sentence actually wanted; there is no
+mechanical replacement, which is why the rule names the character and not
+the workload. Internal comments and notes are free to keep theirs. A
+hyphen is untouched: compound words and numeric ranges keep the short mark
+they always had.
+
 **Smoke tests.** `scripts/smoke.sh` builds every committed example and, on
 request, installs or boots it. Five stages: `check` validates the
 declaration, `image` builds it and inspects what a successful build doesn't
@@ -105,8 +116,8 @@ what an image carries: the generator is pinned by goldens. Five
 declarations' worth of Containerfile text and staged-file manifests live in
 `src/containerfile/goldens/`, and any change to what an image ships shows
 up as a diff against them. The fifth of them, `secrets`, exists so the
-staging of the two values that get special handling — a password hash and
-a CA anchor, both public fixtures there — is pinned by bytes like the
+staging of the two values that get special handling (a password hash and
+a CA anchor, both public fixtures there) is pinned by bytes like the
 rest, not left to a unit test a refactor could outlive. That diff is the
 review of your change: read
 it, don't just regenerate past it. When the change is deliberate, run

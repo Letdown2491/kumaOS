@@ -1852,7 +1852,7 @@ fn check_niri_shadow_at(
                 "niri config",
                 format!(
                     "{user}'s niri config shadows the image's, so image updates to the \
-                     session — new binds, startup services, window rules — do not reach \
+                     session (new binds, startup services, window rules) do not reach \
                      this desktop"
                 ),
                 Some(Action::new(
@@ -2103,8 +2103,8 @@ fn check_shell(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
                     Grade::Fail,
                     "idle lock",
                     format!(
-                        "the shell's idle watcher is not running — its journal says \
-                         \"{line}\" — so this desktop does not lock itself on idle"
+                        "the shell's idle watcher is not running (its journal says \
+                         \"{line}\"), so this desktop does not lock itself on idle"
                     ),
                     Some(Action::new(
                         "read",
@@ -2119,7 +2119,7 @@ fn check_shell(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
                     "idle lock",
                     format!(
                         "idle locking is disabled by config ([idle] lock_timeout = 0), so \
-                         the watcher's failure — \"{line}\" — breaks nothing this machine \
+                         the watcher's failure (\"{line}\") breaks nothing this machine \
                          asked for"
                     ),
                     None,

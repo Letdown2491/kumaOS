@@ -213,29 +213,29 @@ Below the `[services]` line sits a set of security settings that no
 declaration can turn off. It is taken from secureblue's audited
 hardening, adapted to what kuma can test. Six files ship in every image:
 
-- `/usr/lib/sysctl.d/70-kuma-hardening.conf` — one file of kernel
-  settings: programs may only debug their own children, kernel pointers
+- `/usr/lib/sysctl.d/70-kuma-hardening.conf` (one file of kernel
+  settings): programs may only debug their own children, kernel pointers
   are hidden in `/proc`, perf is root-only, kexec is disabled, SysRq is
   off, coredumps are dropped, address-space randomization gets the
   maximum entropy, and the machine no longer answers ping
   (`icmp_echo_ignore_all`; `sysctl -w` brings it back for the session).
-- `/usr/lib/bootc/kargs.d/05-kuma-hardening.toml` — kernel arguments:
-  memory is zeroed on free (`init_on_free`, the one setting with a real
+- `/usr/lib/bootc/kargs.d/05-kuma-hardening.toml`: kernel arguments.
+  Memory is zeroed on free (`init_on_free`, the one setting with a real
   performance cost, a few percent), page allocation is shuffled,
   legacy `vsyscall` and 32-bit `vdso` are off, module signature
   enforcement is on, the initramfs offers no shell and halts instead of
   an emergency prompt, `systemd`'s ssh keygen-on-boot is off, and the
   kernel does not trust the CPU's random number generator.
-- `/etc/firewalld/zones/public.xml` — the firewall zone described above.
-- `/etc/chrony.conf` — time comes from two independent vendors over
+- `/etc/firewalld/zones/public.xml`: the firewall zone described above.
+- `/etc/chrony.conf`: time comes from two independent vendors over
   NTS, an authenticated protocol, replacing the unsigned pool. Time
   matters more than it looks: certificate validation, log ordering, and
   kerberos expiry all depend on it.
-- `/etc/NetworkManager/conf.d/kuma-mac.conf` — wifi gets a random MAC
+- `/etc/NetworkManager/conf.d/kuma-mac.conf`: wifi gets a random MAC
   per network, but the same one every time you join. The access point
   sees a different address on each network; your router's DHCP
   reservation follows the new address once.
-- `/etc/security/faillock.conf` — the lockout described above.
+- `/etc/security/faillock.conf`: the lockout described above.
 
 For completeness, what secureblue ships that kuma does not, and why: the
 settings Fedora's kernel already defaults (like `slab_nomerge`);
@@ -710,7 +710,7 @@ prompts you answered), device pairings, and units you enabled in your own
 `systemd --user` manager. `[services]` is system scope only.
 
 **Display settings.** Mode, scale, and position belong to this machine's
-monitors, not to the system — two machines built from one declaration have
+monitors, not to the system; two machines built from one declaration have
 different screens, the same reason timezone stays out. The shell applies
 your changes live and persists the difference to
 `~/.config/niri/local.kdl`, the delta file the image's niri config

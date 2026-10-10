@@ -1074,14 +1074,14 @@ fn build_image_pinned(config_path: &Path, tag: &str, pin: Pin) -> Result<Option<
             (Pin::Follow, Some(_), true) => {
                 note(
                     "The composed base in storage no longer matches the lock; \
-                     building from what's there — the lock will record the move.",
+                     building from what's there (the lock will record the move).",
                 );
                 pinned_digest = None;
             }
             (Pin::Follow, Some(_), false) => {
                 note(
                     "The locked composed base is gone from image storage; \
-                     composing fresh — the lock will record the move.",
+                     composing fresh (the lock will record the move).",
                 );
                 compose::compose(&config, &declared_base)?;
                 pinned_digest = None;
@@ -2126,7 +2126,7 @@ fn clean(config_path: &Path, json: bool) -> Result<()> {
         .collect();
     if !held.is_empty() {
         say(format!(
-            "{} dangling image(s) not reclaimed, held by containers — remove the containers to reclaim them: {}",
+            "{} dangling image(s) not reclaimed, held by containers; remove the containers to reclaim them: {}",
             held.len(),
             held.join(", ")
         ));

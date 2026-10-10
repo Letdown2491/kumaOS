@@ -573,7 +573,7 @@ impl Config {
             if self.system.base.is_some() {
                 bail!(
                     "system.firmware trims kuma's composed base; it means nothing \
-                     when system.base names an image — remove one of the two"
+                     when system.base names an image: remove one of the two"
                 );
             }
             for pkg in firmware {

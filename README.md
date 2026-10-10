@@ -5,8 +5,8 @@
 **Your system is one file.**
 
 kumaOS turns a short text file into a working Linux system. You write
-down what the machine should have — a desktop, some applications, a few
-command line tools — and kuma builds that description into a complete
+down what the machine should have (a desktop, some applications, a few
+command line tools) and kuma builds that description into a complete
 system image. Installing a machine, and every update after it, comes
 from that file.
 

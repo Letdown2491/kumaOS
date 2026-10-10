@@ -14,7 +14,7 @@ on a timer; snapshots survive a mistake, backups survive the disk.
 signing requests from paired apps. The nostr layer runs one per session;
 see [the nostr layer](nostr.md).
 
-**Pairing URI.** The one-time invite a client or the bunker mints —
+**Pairing URI.** The one-time invite a client or the bunker mints:
 `bunker://` from the bunker, `nostrconnect://` from the client. It
 carries its own secret, and the connect that presents it burns it: one
 URI pairs one app once.
@@ -33,8 +33,8 @@ a container image and rolls it back; kuma's job is to produce the image,
 bootc's is to boot it.
 
 **Capture.** The verb that acts on drift: `kuma capture` proposes declaring
-what the machine already runs — flatpaks, brew leaves, unnamed flatpak
-permissions — and writes nothing until `--yes`.
+what the machine already runs (flatpaks, brew leaves, unnamed flatpak
+permissions) and writes nothing until `--yes`.
 
 **Container image.** A packaged filesystem, the format that runs containers;
 a bootc machine boots one instead, so "image" here means the whole operating
@@ -96,7 +96,7 @@ stored next to the key, so the wrap adds no second secret; it exists so
 a vault with an independent passphrase later needs no migration.
 
 **Machine state.** What is true of one machine rather than of the system it
-runs — hostname, timezone, which wifi network, the volume. kuma
+runs: hostname, timezone, which wifi network, the volume. kuma
 deliberately keeps it out of the declaration; the opposite of **system
 definition**.
 
@@ -138,7 +138,7 @@ battery demands it, which is what closing the lid does on a machine with a
 swapfile.
 
 **System definition.** What is true of every machine built from a
-declaration — packages, desktop, firmware, shell; changing it means a build
+declaration: packages, desktop, firmware, shell; changing it means a build
 and a reboot. The opposite of **machine state**.
 
 **Tag.** A moving name for an image, like `:44`, which is why a build
