@@ -96,8 +96,15 @@ pub(crate) const NIRI_PACKAGES: &[&str] = &[
     // 2026-10-06: the ride runs on the drop, with no XFCE file manager
     // behind it. file-roller stays: it is Koguma's extract catch-all,
     // the end of the ladder tar, unzip and the single-file
-    // decompressors cannot finish (7z/rar).
+    // decompressors cannot finish (7z/rar). poppler-utils is the pdf
+    // claim's floor: Koguma's viewer counts pages with pdfinfo and
+    // rasters them with pdftocairo, degrading to nothing when the
+    // tools are absent — and Papers, which rendered in-process through
+    // libpoppler-glib, leaves in the same release that hands the pdf
+    // claim over. Never rode the image before: dev hosts carry the
+    // toolbox's copy, which is exactly how a missing tool hides.
     "file-roller",
+    "poppler-utils",
     "gvfs",
     "gvfs-mtp",
     // gvfs-fuse: the daemon that exposes every gvfs mount as plain POSIX
