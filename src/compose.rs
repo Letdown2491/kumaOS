@@ -192,6 +192,34 @@ pub fn image_exists(reference: &str) -> bool {
 /// heavily cached: the named volume keeps downloaded packages across
 /// composes, and callers skip the whole thing when the tag exists.
 pub fn compose(config: &Config, tag: &str) -> Result<()> {
+    // The runner's ground moves under a green CI, and this is the third
+    // time the house has measured it: GitHub's ubuntu-26.04 snapshot
+    // rollout of 20261010 tightened the AppArmor unprivileged-userns
+    // restriction, and bwrap - which rpm-ostree wraps around
+    // systemd-sysusers during compose - can no longer open the base's
+    // 0000-mode /etc/gshadow from inside its user namespace. Same base,
+    // same repos: the compose is green on the 20261002.596 snapshot,
+    // green on a Fedora host between the two reds, and deterministic
+    // red on the new snapshot. The sysctl is Ubuntu's recorded knob for
+    // exactly this; writing it is best-effort, because most machines
+    // this runs on do not have the knob (Fedora's kernel carries
+    // SELinux, not the AppArmor userns gate) and a machine with an
+    // opinion about its own userns policy is allowed to keep it.
+    let knob = "kernel.apparmor_restrict_unprivileged_userns";
+    let read = std::process::Command::new("cat").arg(format!("/proc/sys/{knob}")).output();
+    if let Ok(out) = read {
+        if out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "1" {
+            note("Runner ground: relaxing the AppArmor userns restriction for the compose sandbox...");
+            match std::process::Command::new("sudo")
+                .args(["sysctl", "-q", "-w", &format!("{knob}=0")])
+                .status()
+            {
+                Ok(s) if s.success() => {}
+                _ => note("the sysctl write did not take; if the compose dies on /etc/gshadow, this is why"),
+            }
+        }
+    }
+
     let dir = tempfile::tempdir().context("cannot create compose directory")?;
     let work = dir.path();
     std::fs::write(work.join("kuma-base.yaml"), manifest(config))
