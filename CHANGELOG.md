@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## v44.7.0 (2026-10-10)
+
+- **The desktop's claims follow its surfaces.** The example declarations
+  replace firefox, Loupe, Papers and Calculator with zen and the tools
+  already on the image: zen is the browser (Calculator's arithmetic
+  lives in the launcher's eval), Koguma opens the images it renders and
+  the pdf, whose viewer counts pages with pdfinfo and rasters them with
+  pdftocairo — `poppler-utils` joins the package list, which never
+  carried it: Papers rendered in-process through libpoppler-glib, and
+  every dev host hid the gap through the toolbox's copy. The baked
+  defaults follow the claims: the http/https/html entries name zen, the
+  image and pdf entries name Koguma (zen claims them all as browsers
+  do, so the pins are the tie-breakers they were under firefox), and
+  avif and svg+xml resolve unaided — Loupe's exit left zen their sole
+  claimant, and Koguma's surface doesn't render them.
+
 - **The terminal is kuma's own.** kitty leaves the image and kuma-term —
   kumaui's terminal, baked beside the shell and Koguma rather than
   packaged — takes the seat: niri's stock alacritty bind is seded onto

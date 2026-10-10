@@ -231,7 +231,7 @@ jobs:
   # base on purpose to stay fast, so the compose kuma performs by default,
   # which is the whole own-base architecture, had never run here once, and
   # neither had any desktop arm. Every `RUN test -x`, every portal grep,
-  # the kitty config validation and the greeter check now run on a push
+  # the desktop-entry guards and the greeter check now run on a push
   # instead of only when someone remembers to build locally.
   #
   # Cost is about ten minutes, and it does not scale with desktops: the
