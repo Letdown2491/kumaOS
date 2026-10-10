@@ -156,22 +156,36 @@ fi
 # together and is self-consistent at the old EVR -- so this check is a
 # floor, not the whole guard; the validation laps on a GPU-less runner
 # are what catches the rest, which is the promotion gate's job.
-mesa_all=$(rpm --root="$mnt" -qa --qf '%{NAME} %{EVR} %{SOURCERPM}\n' 2>/dev/null \
-    | awk '$3 ~ /^mesa-[0-9]/ {print $1, $2}')
-if [ -z "$mesa_all" ]; then
-    bad "no mesa-sourced packages in the rpmdb" \
-        "the freeworld guard cannot grade an image that does not ship them"
+#
+# The query runs the IMAGE's own rpm, not the build runner's: the
+# runner's apt rpm is 4.18, and 4.18's dbpath is the pre-4.20
+# /root/.rpmdb, so against a Fedora 44 image it answers "cannot open
+# Packages database" -- and under set -e + pipefail that failure exited
+# this audit wordlessly (2026-10-10's publish went red with a log that
+# ends at the last build-path ok). A query that cannot run says so by
+# name, which is also why its stderr is kept.
+mesa_raw=""
+if ! mesa_raw=$(podman run --rm --entrypoint /usr/bin/rpm "$image" -qa \
+        --qf '%{NAME} %{EVR} %{SOURCERPM}\n' 2>&1); then
+    bad "the image's own rpm could not read its rpmdb" \
+        "$(head -n1 <<< "$mesa_raw")"
 else
-    evrs=$(awk '{print $2}' <<< "$mesa_all" | sort -u | sort -V)
-    if [ "$(wc -l <<< "$evrs")" -eq 1 ]; then
-        ok "mesa stack and freeworld build at one EVR ($(head -n1 <<< "$evrs"))"
+    mesa_all=$(awk '$3 ~ /^mesa-[0-9]/ {print $1, $2}' <<< "$mesa_raw")
+    if [ -z "$mesa_all" ]; then
+        bad "no mesa-sourced packages in the rpmdb" \
+            "the freeworld guard cannot grade an image that does not ship them"
     else
-        newest=$(tail -n1 <<< "$evrs")
-        while read -r pkg evr; do
-            [ -n "$pkg" ] || continue
-            bad "$pkg $evr is older than the freeworld build's $newest" \
-                "the freeworld resolution dragged mesa down (issue #36); wait for rpmfusion to catch up and compose again"
-        done <<< "$(awk -v newest="$newest" '$2 != newest {print $1, $2}' <<< "$mesa_all")"
+        evrs=$(awk '{print $2}' <<< "$mesa_all" | sort -u | sort -V)
+        if [ "$(wc -l <<< "$evrs")" -eq 1 ]; then
+            ok "mesa stack and freeworld build at one EVR ($(head -n1 <<< "$evrs"))"
+        else
+            newest=$(tail -n1 <<< "$evrs")
+            while read -r pkg evr; do
+                [ -n "$pkg" ] || continue
+                bad "$pkg $evr is older than the freeworld build's $newest" \
+                    "the freeworld resolution dragged mesa down (issue #36); wait for rpmfusion to catch up and compose again"
+            done <<< "$(awk -v newest="$newest" '$2 != newest {print $1, $2}' <<< "$mesa_all")"
+        fi
     fi
 fi
 
