@@ -194,28 +194,44 @@ pub fn image_exists(reference: &str) -> bool {
 pub fn compose(config: &Config, tag: &str) -> Result<()> {
     // The runner's ground moves under a green CI, and this is the third
     // time the house has measured it: GitHub's ubuntu-26.04 snapshot
-    // rollout of 20261010 tightened the AppArmor unprivileged-userns
-    // restriction, and bwrap - which rpm-ostree wraps around
-    // systemd-sysusers during compose - can no longer open the base's
-    // 0000-mode /etc/gshadow from inside its user namespace. Same base,
-    // same repos: the compose is green on the 20261002.596 snapshot,
-    // green on a Fedora host between the two reds, and deterministic
-    // red on the new snapshot. The sysctl is Ubuntu's recorded knob for
-    // exactly this; writing it is best-effort, because most machines
-    // this runs on do not have the knob (Fedora's kernel carries
-    // SELinux, not the AppArmor userns gate) and a machine with an
-    // opinion about its own userns policy is allowed to keep it.
+    // rollout of 20261010 (kernel 7.0.0-1012-azure) hardened the
+    // AppArmor unprivileged-userns gate, and bwrap - which rpm-ostree
+    // wraps around systemd-sysusers during compose - can no longer open
+    // the base's 0000-mode /etc/gshadow from inside its user namespace.
+    // Same base, same repos: green on the 20261002.596 snapshot, green
+    // on a Fedora host between the two reds, deterministic red on the
+    // new one. The sysctl is Ubuntu's recorded knob for exactly this
+    // (it cleared the 2026-09-04 runner image's identical denial of
+    // podman's re-exec), but the first brace wrote it silently and the
+    // compose died anyway - the notes went to stdout, which the smoke's
+    // build call discards, so whether the write took is unknowable from
+    // the logs. This verse reports to stderr, verifies the read-back,
+    // and asks for the unconfined profile explicitly rather than
+    // trusting --privileged to imply it: on a host without AppArmor the
+    // flag is a no-op (measured on Fedora), and on the runner it
+    // removes the one layer the sandbox cannot be argued with.
     let knob = "kernel.apparmor_restrict_unprivileged_userns";
-    let read = std::process::Command::new("cat").arg(format!("/proc/sys/{knob}")).output();
-    if let Ok(out) = read {
-        if out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "1" {
-            note("Runner ground: relaxing the AppArmor userns restriction for the compose sandbox...");
-            match std::process::Command::new("sudo")
+    let report = |msg: &str| eprintln!("kuma compose: {msg}");
+    let read = || -> Option<String> {
+        std::fs::read_to_string(format!("/proc/sys/{knob}")).ok().map(|v| v.trim().to_string())
+    };
+    match read() {
+        None => report("no userns knob on this kernel; nothing to relax"),
+        Some(v) if v == "0" => {}
+        Some(v) => {
+            report(&format!("userns knob reads {v}; relaxing it for the compose sandbox"));
+            let wrote = std::process::Command::new("sudo")
                 .args(["sysctl", "-q", "-w", &format!("{knob}=0")])
-                .status()
-            {
-                Ok(s) if s.success() => {}
-                _ => note("the sysctl write did not take; if the compose dies on /etc/gshadow, this is why"),
+                .status();
+            let back = read().unwrap_or_else(|| "unreadable".into());
+            match wrote {
+                Ok(s) if s.success() && back == "0" => {
+                    report("knob relaxed; read-back says 0");
+                }
+                _ => report(&format!(
+                    "the write did not take (read-back: {back}); if the compose dies \
+                     on /etc/gshadow, the kernel's AppArmor gate survived the sysctl"
+                )),
             }
         }
     }
@@ -239,6 +255,13 @@ pub fn compose(config: &Config, tag: &str) -> Result<()> {
         "run",
         "--rm",
         "--privileged",
+        // The profile, asked for explicitly: --privileged has always
+        // meant unconfined, but the 20261010 snapshot's kernel denies
+        // bwrap's userns the DAC override the compose's sysusers needs
+        // even so. Name the profile rather than trust the implication;
+        // a host without AppArmor accepts it as the no-op it is.
+        "--security-opt",
+        "apparmor=unconfined",
         "-v",
         &format!("{work_str}:/work:z"),
         "-v",
