@@ -1463,11 +1463,27 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         std::fs::write(&launch, KUMA_LAUNCH).unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&launch, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let out = std::process::Command::new(&launch)
-            .arg("doctor")
-            .env("PATH", empty.to_str().unwrap())
-            .output()
-            .unwrap();
+        // The exec can lose a race with the file's own close on the
+        // 20261010 runner image's kernel (7.0.0-1012-azure): "Text file
+        // busy" (ETXTBSY, 26) for a file this thread wrote and closed -
+        // the 6.x kernels never raced it, and the denial clears within
+        // tens of milliseconds. Retry a few times so the test asserts
+        // the launch script's honesty instead of the kernel's timing.
+        let mut attempt = 0u64;
+        let out = loop {
+            match std::process::Command::new(&launch)
+                .arg("doctor")
+                .env("PATH", empty.to_str().unwrap())
+                .output()
+            {
+                Err(e) if e.raw_os_error() == Some(26) && attempt < 10 => {
+                    std::thread::sleep(std::time::Duration::from_millis(25 + 50 * attempt));
+                    attempt += 1;
+                }
+                other => break other,
+            }
+        }
+        .unwrap();
         assert!(!out.status.success());
         assert!(
             String::from_utf8_lossy(&out.stderr).contains("no terminal"),
