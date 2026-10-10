@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Chromium apps stop painting their own titlebars.** `prefer-no-csd`
+  joins the image's niri config: niri draws no titlebars, so when an
+  app like Spotify (CEF) answers the decoration request by supplying
+  its own, the result was a hardcoded blue client-side bar on every
+  window. Refusing the CSD offer leaves the frame to the compositor,
+  which draws none.
+
 ## v44.7.0 (2026-10-10)
 
 - **The session answers its own privileged prompts.** kuma-shell registers
