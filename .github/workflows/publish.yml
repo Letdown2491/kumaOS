@@ -275,13 +275,19 @@ jobs:
   # the staging push triggers the validation rather than a person
   # remembering to. Every lap installs and boots the staged digest —
   # pinned by digest, so a concurrent publish re-staging the tag cannot
-  # put different bytes under this run's verdict. The REAL tags have not
-  # moved yet: a red lap here is a red run and no published change.
+  # put different bytes under this run's verdict. The pin is repo + digest,
+  # NOT tag + digest: containers/image -- skopeo, and the install's own
+  # reachability probe with it -- refuses a reference that carries both,
+  # so the tag form died at the install preflight before any VM booted
+  # (2026-10-10's third red publish; cosign's parser tolerates the form,
+  # which is why the publish job's own verify stayed green). The REAL
+  # tags have not moved yet: a red lap here is a red run and no published
+  # change.
   validate:
     needs: publish
     uses: ./.github/workflows/published.yml
     with:
-      image: ${{ needs.publish.outputs.staging }}@${{ needs.publish.outputs.digest }}
+      image: ${{ needs.publish.outputs.repo }}@${{ needs.publish.outputs.digest }}
 
   # The tags move here, and only here, and only by digest: `crane tag`
   # re-points a registry tag at a manifest that is already stored, which
