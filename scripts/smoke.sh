@@ -815,6 +815,14 @@ smoke_published() {
     local pass="smoke-account-password"
     local disk_pass="smoke-disk-passphrase"
     local sock="$dir/console.sock"
+    # The guest's memory and the hibernate swapfile are one decision, not
+    # two: the doctor grades hibernate by whether the file can hold the
+    # machine's image (a file under RAM grades `Short`, and this lap
+    # asserts `ok`), so the swap size derives from this number below
+    # rather than being written beside it. They drifted once: 3b9e010
+    # bumped every qemu line to 8192 and left the 4G behind, and the
+    # nightly went red for three days on an honest `Short`.
+    local vm_mem_mib=8192
 
     mkdir -p "$dir"
     rm -f "$raw"
@@ -864,14 +872,15 @@ smoke_published() {
         answers=$(printf '%s\n' "$pass")
     fi
 
-    # 4G against the guest's 4096 MiB, which is the size the installer
-    # would propose for itself: MemTotal reads a little under the RAM the
-    # machine was given, so a whole gibibyte above it is 4G. Passed rather
-    # than left to the interview because there is no terminal here, and
-    # asked for explicitly rather than defaulted so that a change to the
-    # default cannot silently make this stage test a different thing.
+    # Passed rather than left to the interview because there is no
+    # terminal here, and asked for explicitly rather than defaulted so
+    # that a change to the default cannot silently make this stage test
+    # a different thing. The size derives from vm_mem_mib above: a whole
+    # gibibyte above the RAM the guest was given, which is what the
+    # installer would propose for itself (MemTotal reads a little under
+    # the RAM the machine was given).
     local swap_args=()
-    [ $HIBERNATE -eq 1 ] && swap_args=(--swap 4G)
+    [ $HIBERNATE -eq 1 ] && swap_args=(--swap "$((vm_mem_mib / 1024))G")
 
     echo "   .. installing $image (needs sudo; this is the slow part)"
     printf '%s\n' "$answers" \
@@ -1023,7 +1032,7 @@ smoke_published() {
                      -global "ICH9-LPC.disable_s3=1")
         fi
         qemu-system-x86_64 \
-            -enable-kvm -cpu host -smp 4 -m 8192 \
+            -enable-kvm -cpu host -smp 4 -m "$vm_mem_mib" \
             "${machine[@]}" "${globals[@]}" \
             -drive "if=pflash,format=raw,readonly=on,file=$code" \
             -drive "if=pflash,format=raw,file=$vars" \
