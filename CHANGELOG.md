@@ -79,12 +79,14 @@
   `ffmpeg-libs` pins nothing of Fedora's packages, so there is no lag
   window to guard.
 
-- **The image's kumaui pin moves to `bd1aff6`.** The shell, greeter,
+- **The image's kumaui pin moves to `1c6d39e`.** The shell, greeter,
   Koguma and kuma-term the image bakes pick up the 0.2.0 work since
   the old pin: the app binaries answer `--version` and are stamped
   builds with an about page, Koguma gains a keybindings modal (and its
-  Network section always shows), and a markdown table with a multibyte
-  cell no longer crashes the preview.
+  Network section always shows), a markdown table with a multibyte
+  cell no longer crashes the preview, and an app installed mid-session
+  gets its icons now: the icon index re-walks on a miss and the dock
+  rescans when a window matches nothing.
 
 - **Chromium apps stop painting their own titlebars.** `prefer-no-csd`
   joins the image's niri config: niri draws no titlebars, so when an
