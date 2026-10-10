@@ -2,13 +2,6 @@
 
 ## Unreleased
 
-- **Chromium apps stop painting their own titlebars.** `prefer-no-csd`
-  joins the image's niri config: niri draws no titlebars, so when an
-  app like Spotify (CEF) answers the decoration request by supplying
-  its own, the result was a hardcoded blue client-side bar on every
-  window. Refusing the CSD offer leaves the frame to the compositor,
-  which draws none.
-
 ## v44.7.0 (2026-10-10)
 
 - **The session answers its own privileged prompts.** kuma-shell registers
@@ -93,14 +86,12 @@
   Network section always shows), and a markdown table with a multibyte
   cell no longer crashes the preview.
 
-- **Negotiating windows shed their client-drawn titlebar.** The image's
-  niri config now carries `prefer-no-csd`. Chromium/CEF and Electron apps
-  drew their own titlebar on Wayland in Chromium's hardcoded default blue
-  (rgb(93, 141, 218), measured on a Spotify flatpak), because the GTK
-  theme never feeds the frame there, and niri renders no titlebars for
-  windows that hand the job back. Apps that comply render bare under the
-  Kuma look's ring and rounding; apps that insist on CSD keep their
-  headerbars.
+- **Chromium apps stop painting their own titlebars.** `prefer-no-csd`
+  joins the image's niri config: niri draws no titlebars, so when an
+  app like Spotify (CEF) answers the decoration request by supplying
+  its own, the result was a hardcoded blue client-side bar on every
+  window. Refusing the CSD offer leaves the frame to the compositor,
+  which draws none.
 
 
 ## v44.6.0 (2026-10-09)
