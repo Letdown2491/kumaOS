@@ -1,8 +1,8 @@
 name: kuma-shell
 description: >-
-  Build kuma-shell, kuma-greeter, and kuma-files from the kumaui tree at
-  a pinned commit and stage them, with kuma-files' desktop entry and
-  icon, beside a kuma binary.
+  Build kuma-shell, kuma-greeter, kuma-files, and kuma-term from the
+  kumaui tree at a pinned commit and stage them, with the desktop
+  entries and icons for kuma-files and kuma-term, beside a kuma binary.
 
 # `kuma build` composes a desktop image only when kuma-shell sits beside
 # the kuma binary it runs: write_context copies the sibling into the build
@@ -112,31 +112,39 @@ runs:
         # a memory hog no session should be handed. There is no debug
         # shell to stage, here or anywhere.
         cd "$GITHUB_WORKSPACE/kumaui"
-        # Two packages, three binaries. kuma-greeter is kuma-shell's
+        # Three packages, four binaries. kuma-greeter is kuma-shell's
         # sibling bin (src/bin/kuma-greeter.rs), and the image's greetd
         # config points at both roads — the shell as the session, the
         # greeter behind niri on VT1. kuma-files is its own package and
         # its own app: Koguma, the file manager, the image's first
-        # user-facing kumaui program.
-        cargo build --locked --release -p kuma-shell -p kuma-files
+        # user-facing kumaui program. kuma-term is the terminal, baked
+        # rather than packaged — niri's stock alacritty bind is seded
+        # onto it.
+        cargo build --locked --release -p kuma-shell -p kuma-files -p kuma-term
         # Nothing on a runner can run a GUI binary, so "it works" here can
         # only mean both exist and are executable where the next step looks.
         [ -x "target/release/kuma-shell" ]
         [ -x "target/release/kuma-greeter" ]
         [ -x "target/release/kuma-files" ]
+        [ -x "target/release/kuma-term" ]
         mkdir -p "$GITHUB_WORKSPACE/${KUMA_DIR%/}"
-        # The desktop entry and the icon ride with the binary, because
-        # write_context stages them as siblings too: the app's identity —
-        # the launcher's entry and the icon it names — ships from the
-        # tree that builds the app, not regenerated in the image repo.
-        # The entry is the app tree's one template with one
-        # substitution here: the binary lands at /usr/bin in the image
-        # (the dev install is ~/.local/bin, same template, build.sh
-        # substitutes that), and the mimetype claims are whatever the
-        # app tree's open surface can render.
+        # The desktop entries and the icons ride with the binaries,
+        # because write_context stages them as siblings too: the app's
+        # identity — the launcher's entry and the icon it names — ships
+        # from the tree that builds the app, not regenerated in the
+        # image repo. Each entry is the app tree's one template with
+        # one substitution here: the binary lands at /usr/bin in the
+        # image (the dev install is ~/.local/bin, same template,
+        # build.sh substitutes that), and the mimetype claims are
+        # whatever the app tree's open surface can render — kuma-term
+        # opens no files, so its entry claims nothing.
         cp target/release/kuma-shell target/release/kuma-greeter target/release/kuma-files \
-           kuma-files/packaging/kuma-files.png \
+           target/release/kuma-term \
+           kuma-files/packaging/kuma-files.png kuma-term/packaging/kuma-term.png \
            "$GITHUB_WORKSPACE/${KUMA_DIR%/}/"
         sed "s|@BIN@|/usr/bin|" \
           kuma-files/packaging/kuma-files.desktop.in \
           > "$GITHUB_WORKSPACE/${KUMA_DIR%/}/kuma-files.desktop"
+        sed "s|@BIN@|/usr/bin|" \
+          kuma-term/packaging/kuma-term.desktop.in \
+          > "$GITHUB_WORKSPACE/${KUMA_DIR%/}/kuma-term.desktop"

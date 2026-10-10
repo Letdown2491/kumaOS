@@ -214,6 +214,33 @@ pub fn write_context(
                 kuma_binary.display()
             )
         })?;
+        // kuma-term is the same build's fourth binary and the image's
+        // terminal: the sed retargets niri's stock alacritty bind at it,
+        // and kuma-launch runs the desktop's verbs inside it.
+        let term_sibling = parent.join("kuma-term");
+        std::fs::copy(&term_sibling, dir.join("kuma-term")).with_context(|| {
+            format!(
+                "staging kuma-term: it is not beside the running kuma ({}); a \
+                 desktop image needs the release's binaries together",
+                kuma_binary.display()
+            )
+        })?;
+        let term_desktop = parent.join("kuma-term.desktop");
+        std::fs::copy(&term_desktop, dir.join("kuma-term.desktop")).with_context(|| {
+            format!(
+                "staging kuma-term.desktop: it is not beside the running kuma ({}) — \
+                 the terminal's entry ships from the kumaui tree beside its binary",
+                kuma_binary.display()
+            )
+        })?;
+        let term_icon = parent.join("kuma-term.png");
+        std::fs::copy(&term_icon, dir.join("kuma-term.png")).with_context(|| {
+            format!(
+                "staging kuma-term.png: it is not beside the running kuma ({}) — \
+                 the entry names this icon, so the icon rides with it",
+                kuma_binary.display()
+            )
+        })?;
     }
     if config.nostr.enable {
         let mut names = vec!["kuma-nostrd", "kuma-nostr"];
@@ -281,6 +308,11 @@ mod tests {
         std::fs::write(bin_home.path().join("kuma-files.desktop"), "not really kuma-files\n")
             .unwrap();
         std::fs::write(bin_home.path().join("kuma-files.png"), "not really kuma-files\n").unwrap();
+        // kuma-term's trio rides the same road: binary, entry, icon.
+        std::fs::write(bin_home.path().join("kuma-term"), "not really kuma-term\n").unwrap();
+        std::fs::write(bin_home.path().join("kuma-term.desktop"), "not really kuma-term\n")
+            .unwrap();
+        std::fs::write(bin_home.path().join("kuma-term.png"), "not really kuma-term\n").unwrap();
         if cfg.nostr.enable {
             let mut names = vec!["kuma-nostrd", "kuma-nostr"];
             if cfg.nostr.relay.enable {
@@ -783,28 +815,14 @@ mod tests {
         assert!(
             out.contains("COPY kuma-wallpaper.jpg /usr/share/backgrounds/kuma/kuma-wallpaper.jpg")
         );
-        // The shell's terminal config, in place of waybar's two files
-        // and mako's one.
-        assert!(out.contains("COPY kitty.conf /etc/xdg/kitty/kitty.conf"));
+        // The shell's terminal is baked kuma-term, not a packaged one:
+        // no config file rides here anymore.
+        assert!(!out.contains("kitty"));
         // system-wide, never /etc/skel — skel strands existing homes on
         // stale copies (the fuzzel-DPI lesson)
         assert!(!out.contains("/etc/skel"));
-        // an unparseable theme must fail the build, not ship unthemed —
-        // and unknown keys only ever reach stderr, so both halves matter
-        assert!(out.contains("kitty +runpy"));
-        assert!(out.contains("accumulate_bad_lines=bad"));
-        assert!(out.contains("grep -q 'unknown config key' /tmp/kitty.err"));
-        // The palette owns every colour the terminal shows, all sixteen
-        // ANSI slots included, and it is STATIC now: the wallpaper-
-        // derived render died with noctalia, so the palette's presence
-        // in the shipped file is the whole story.
-        assert!(KITTY_CONFIG.contains("background"));
-        assert!(KITTY_CONFIG.contains("color0"));
-        assert!(KITTY_CONFIG.contains("color15"));
-        // and no template placeholder survived into the static file
-        assert!(!KITTY_CONFIG.contains("{{"));
-        // the GTK3 half only themes anything with adw-gtk3 present, and
-        // GTK_THEME outranks gsettings, so all four names move together
+        // The palette owns every colour the GTK apps show, and it is
+        // carried by adw-gtk3-theme and the GTK settings, asserted below.
         assert!(NIRI_PACKAGES.contains(&"adw-gtk3-theme"));
         assert!(NIRI_EXTRAS.contains("GTK_THEME \"adw-gtk3-dark\""));
         assert!(DCONF_DARK.contains("gtk-theme='adw-gtk3-dark'"));
@@ -816,10 +834,10 @@ mod tests {
         // translucent surface composites over that fill instead of the
         // wallpaper (issue #31)
         assert!(NIRI_EXTRAS.contains("draw-border-with-background false"));
-        // upstream niri spawns alacritty; the image ships kitty, so the sed
+        // upstream niri spawns alacritty; the image ships kuma-term, so the sed
         // must rewrite the bind, and the grep guard must keep it honest
         assert!(out.contains("grep -q '\"alacritty\"' /usr/share/doc/niri/default-config.kdl"));
-        assert!(out.contains("sed -e 's/alacritty/kitty/g'"));
+        assert!(out.contains("sed -e 's/alacritty/kuma-term/g'"));
         // niri Recommends alacritty; without the exclude it ships anyway
         for excluded in NIRI_EXCLUDES {
             assert!(out.contains(&format!("--exclude={excluded}")), "{excluded} rides in");
@@ -851,10 +869,8 @@ mod tests {
     }
 
     #[test]
-    fn desktop_defaults_to_dark_and_bare_terminal() {
+    fn desktop_defaults_to_dark() {
         assert!(DCONF_DARK.contains("color-scheme='prefer-dark'"));
-        // a titlebar in a tiling compositor renders light Adwaita chrome
-        assert!(KITTY_CONFIG.contains("hide_window_decorations yes"));
     }
 
     #[test]
@@ -1375,10 +1391,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
-        // A fake kitty that prints each argument on its own line, so the
-        // boundaries between them are visible in the output.
+        // A fake kuma-term that prints each argument on its own line, so
+        // the boundaries between them are visible in the output.
         std::fs::write(
-            bin.join("kitty"),
+            bin.join("kuma-term"),
             "#!/usr/bin/bash
 for a in \"$@\"; do printf '%s\\n' \"$a\"; done
 ",
@@ -1386,7 +1402,7 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         .unwrap();
         let launch = dir.path().join("kuma-launch");
         std::fs::write(&launch, KUMA_LAUNCH).unwrap();
-        for path in [bin.join("kitty"), launch.clone()] {
+        for path in [bin.join("kuma-term"), launch.clone()] {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
@@ -1606,7 +1622,6 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         assert!(dir.path().join("kuma-clipboard-bridge").exists());
         let greetd = std::fs::read_to_string(dir.path().join("greetd-config.toml")).unwrap();
         assert!(greetd.contains("Welcome to kumaOS"));
-        assert!(dir.path().join("kitty.conf").exists());
         let ff = std::fs::read_to_string(dir.path().join("fastfetch-config.jsonc")).unwrap();
         assert!(ff.contains("/usr/lib/kuma/fastfetch-logo.txt"));
         assert!(dir.path().join("fastfetch-logo.txt").exists());

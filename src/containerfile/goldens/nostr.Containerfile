@@ -2,7 +2,7 @@
 FROM localhost/kuma-base:m4f2229bac93b
 
 RUN --mount=type=cache,target=/var/cache/libdnf5 \
-    dnf -y install --setopt=keepcache=1 --exclude=alacritty --exclude=waybar --exclude=swaylock --exclude=fuzzel flatpak niri xwayland-satellite greetd tuigreet kitty pipewire pipewire-pulseaudio wireplumber xdg-desktop-portal-gtk xdg-desktop-portal-gnome dconf gnome-keyring gnome-keyring-pam polkit mesa-dri-drivers mesa-vulkan-drivers vulkan-loader default-fonts-core-sans default-fonts-core-mono fontawesome-fonts-all glibc-langpack-en NetworkManager-wifi adwaita-icon-theme adw-gtk3-theme desktop-file-utils NetworkManager-tui wpa_supplicant brightnessctl power-profiles-daemon pavucontrol nm-connection-editor bluez blueman file-roller gvfs gvfs-mtp gvfs-fuse gvfs-smb wf-recorder zram-generator-defaults avahi nss-mdns libnotify cups system-config-printer wl-clipboard xsettingsd spice-vdagent xdg-user-dirs default-fonts-core-emoji mate-polkit firewalld grim slurp swappy playerctl udiskie 7zip unar google-noto-sans-cjk-vf-fonts fastfetch
+    dnf -y install --setopt=keepcache=1 --exclude=alacritty --exclude=waybar --exclude=swaylock --exclude=fuzzel flatpak niri xwayland-satellite greetd tuigreet pipewire pipewire-pulseaudio wireplumber xdg-desktop-portal-gtk xdg-desktop-portal-gnome dconf gnome-keyring gnome-keyring-pam polkit mesa-dri-drivers mesa-vulkan-drivers vulkan-loader default-fonts-core-sans default-fonts-core-mono fontawesome-fonts-all glibc-langpack-en NetworkManager-wifi adwaita-icon-theme adw-gtk3-theme desktop-file-utils NetworkManager-tui wpa_supplicant brightnessctl power-profiles-daemon pavucontrol nm-connection-editor bluez blueman file-roller gvfs gvfs-mtp gvfs-fuse gvfs-smb wf-recorder zram-generator-defaults avahi nss-mdns libnotify cups system-config-printer wl-clipboard xsettingsd spice-vdagent xdg-user-dirs default-fonts-core-emoji mate-polkit firewalld grim slurp swappy playerctl udiskie 7zip unar google-noto-sans-cjk-vf-fonts fastfetch
 RUN --mount=type=cache,target=/var/cache/libdnf5 \
     rm -rf /var/cache/libdnf5/@commandline-* \
     && dnf -y install --setopt=keepcache=1 "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
@@ -38,11 +38,12 @@ COPY kuma-files.png /usr/share/icons/hicolor/256x256/apps/kuma-files.png
 RUN desktop-file-validate /usr/share/applications/kuma-files.desktop \
     && test -x /usr/bin/kuma-files \
     && test -f /usr/share/icons/hicolor/256x256/apps/kuma-files.png
-COPY kitty.conf /etc/xdg/kitty/kitty.conf
-RUN rc=0; kitty +runpy "import sys; from kitty.config import load_config; bad = []; load_config('/etc/xdg/kitty/kitty.conf', accumulate_bad_lines=bad); sys.exit('malformed kitty.conf lines: %s' % bad if bad else 0)" 2>/tmp/kitty.err || rc=$?; \
-    cat /tmp/kitty.err >&2; \
-    if grep -q 'unknown config key' /tmp/kitty.err; then rc=1; fi; \
-    rm -f /tmp/kitty.err; exit $rc
+COPY --chmod=755 kuma-term /usr/bin/kuma-term
+COPY kuma-term.desktop /usr/share/applications/kuma-term.desktop
+COPY kuma-term.png /usr/share/icons/hicolor/256x256/apps/kuma-term.png
+RUN desktop-file-validate /usr/share/applications/kuma-term.desktop \
+    && test -x /usr/bin/kuma-term \
+    && test -f /usr/share/icons/hicolor/256x256/apps/kuma-term.png
 COPY --chmod=755 kuma-clipboard-bridge /usr/libexec/kuma-clipboard-bridge
 COPY fastfetch-config.jsonc /etc/xdg/fastfetch/config.jsonc
 COPY fastfetch-logo.txt /usr/lib/kuma/fastfetch-logo.txt
@@ -75,7 +76,7 @@ RUN grep -q '"alacritty"' /usr/share/doc/niri/default-config.kdl \
     && grep -qF '// skip-at-startup' /usr/share/doc/niri/default-config.kdl \
     && grep -q '^layout {' /usr/share/doc/niri/default-config.kdl \
     && mkdir -p /etc/niri \
-    && sed -e 's/alacritty/kitty/g' -e '/starts waybar/d' -e '/^spawn-at-startup "waybar"$/d' -e '/XF86Audio/d' -e '/XF86MonBrightness/d' -e 's|// skip-at-startup|skip-at-startup|' -e '/^layout {/a\    background-color "#11111B"' -e 's|Mod+D hotkey-overlay-title="Run an Application: fuzzel" { spawn "fuzzel"; }|Mod+D hotkey-overlay-title="Toggle Applications menu" { spawn "kuma-shell" "msg" "launcher-toggle"; }|' -e 's|Super+Alt+L hotkey-overlay-title="Lock the Screen: swaylock" { spawn "swaylock"; }|Super+Alt+L hotkey-overlay-title="Lock the Screen" { spawn "loginctl" "lock-session"; }|' -e '/pkill orca/d' -e '/^binds {/r /usr/lib/kuma/niri-binds.kdl' /usr/share/doc/niri/default-config.kdl > /etc/niri/config.kdl \
+    && sed -e 's/alacritty/kuma-term/g' -e '/starts waybar/d' -e '/^spawn-at-startup "waybar"$/d' -e '/XF86Audio/d' -e '/XF86MonBrightness/d' -e 's|// skip-at-startup|skip-at-startup|' -e '/^layout {/a\    background-color "#11111B"' -e 's|Mod+D hotkey-overlay-title="Run an Application: fuzzel" { spawn "fuzzel"; }|Mod+D hotkey-overlay-title="Toggle Applications menu" { spawn "kuma-shell" "msg" "launcher-toggle"; }|' -e 's|Super+Alt+L hotkey-overlay-title="Lock the Screen: swaylock" { spawn "swaylock"; }|Super+Alt+L hotkey-overlay-title="Lock the Screen" { spawn "loginctl" "lock-session"; }|' -e '/pkill orca/d' -e '/^binds {/r /usr/lib/kuma/niri-binds.kdl' /usr/share/doc/niri/default-config.kdl > /etc/niri/config.kdl \
     && cat /usr/lib/kuma/niri-extras.kdl >> /etc/niri/config.kdl \
     && niri validate --config /etc/niri/config.kdl
 RUN grep -q '^\[preferred\]' /usr/share/xdg-desktop-portal/niri-portals.conf \

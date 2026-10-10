@@ -65,6 +65,3 @@ Google's **Noto Color Emoji** face, the CBDT/CBLC bitmap build from the
   packaged faces, which stay for every renderer that is not swash-based.
 
 ## The rest
-
-`kitty.conf` is configuration written for kuma and carries the project's MIT
-license.

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **The terminal is kuma's own.** kitty leaves the image and kuma-term —
+  kumaui's terminal, baked beside the shell and Koguma rather than
+  packaged — takes the seat: niri's stock alacritty bind is seded onto
+  it as before, and kuma-launch's verb runner resolves
+  `kuma-term cosmic-term` and holds the desktop's verbs inside it. Its
+  desktop entry and icon ride from the kumaui tree beside the binary,
+  under the same validate-Exec-icon guard Koguma's entry answers to.
+  kitty.conf — the one static theme file, build-validated by kitty's
+  own loader — retires with it; the shell had stopped needing a
+  terminal's config when the terminal became kuma's.
+
 - **A lag-window freeworld can no longer poison the image.** Fedora pushed
   mesa 26.2.3 to the mirrors hours before rpmfusion's matching freeworld
   build, and every compose inside that window downgraded mesa to the older

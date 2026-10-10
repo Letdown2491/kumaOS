@@ -41,7 +41,7 @@ and nothing else.
 |---|---|
 | Session | `niri`, `xwayland-satellite`, `greetd`, `kuma-greeter` (tuigreet kept as the comment-swapped fallback) |
 | Shell | `kuma-shell` (bar, notifications, wallpaper, idle, lock, control centre, Nostr Signer) |
-| Terminal and files | `kitty`, `kuma-files` (Koguma, the file manager), `file-roller`, `gvfs` (+ fuse, mtp, smb), `udiskie`, `7zip`, `unar` |
+| Terminal and files | `kuma-files` (Koguma, the file manager), `file-roller`, `gvfs` (+ fuse, mtp, smb), `udiskie`, `7zip`, `unar` — the terminal is `kuma-term`, baked with the image, not packaged |
 | Portals | `xdg-desktop-portal-gtk`, `xdg-desktop-portal-gnome` |
 | Audio | `pipewire`, `pipewire-pulseaudio`, `wireplumber`, `pavucontrol` |
 | Graphics | `mesa-dri-drivers`, `mesa-vulkan-drivers`, `vulkan-loader` |
@@ -84,11 +84,11 @@ compiled in, and your choices live in `~/.config/kuma-shell/config.toml`.
 The shell reads that file; the image never writes it. What kuma bakes is
 the default, and what you change is yours.
 
-**The terminal follows the image's palette.** kitty's theme is a fixed
-palette in `/etc/xdg/kitty/kitty.conf`, shipped with the image, so the
-terminal, pavucontrol and the rest match the shell. The image also ships
-`adw-gtk3-theme` for GTK3 applications: stock Adwaita ignores the colour
-names a palette can set.
+**The terminal is baked, and the GTK apps follow the image's palette.**
+kuma-term ships inside the image beside the shell and Koguma. The
+terminal, pavucontrol and the rest match the shell's palette: the image
+also ships `adw-gtk3-theme` for GTK3 applications — stock Adwaita
+ignores the colour names a palette can set.
 
 GTK4 applications do not follow, which on a kuma machine mostly means
 flatpaks. libadwaita ignores a user stylesheet that redefines its

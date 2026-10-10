@@ -23,7 +23,6 @@ pub(crate) const NIRI_PACKAGES: &[&str] = &[
     // control centre and the nostr signer, which is why waybar, mako,
     // swaybg, swayidle, swaylock, wob and wlsunset are all gone from
     // this list. See the builder stage in generate().
-    "kitty",
     "pipewire",
     "pipewire-pulseaudio",
     "wireplumber",
@@ -2386,7 +2385,7 @@ pub(crate) fn autostart_off(name: &str) -> String {
 /// and COSMIC because the difference lives here instead of in them.
 ///
 /// The window is held open after the verb exits. A terminal launched as
-/// `kitty -e <command>` closes the instant the command returns; every
+/// `<terminal> -e <command>` closes the instant the command returns; every
 /// one of these prints something worth reading, and the ones that ask
 /// for a password are exactly the ones whose window would otherwise
 /// vanish as the password is finished.
@@ -2401,7 +2400,7 @@ fi
 # Not a fallback chain into xterm: an image either has the terminal its
 # desktop set installed or it has no graphical session to launch from.
 terminal=
-for candidate in kitty cosmic-term; do
+for candidate in kuma-term cosmic-term; do
     if command -v "$candidate" >/dev/null 2>&1; then
         terminal=$candidate
         break
@@ -2500,8 +2499,12 @@ pub(crate) const NIRI_MEDIA_BINDS: &str = r#"    XF86AudioRaiseVolume allow-when
 /// Firefox is why most of this list exists: it claims application/pdf,
 /// six image types, and four audio/video types, every one of which it
 /// would otherwise be free to take from Papers, Loupe, or Celluloid.
-/// The in-image contest is inode/directory: kitty-open.desktop claims
-/// it alongside Koguma, and the entry below says Koguma wins.
+/// The in-image entry is inode/directory: kitty-open.desktop used to
+/// claim it alongside Koguma, and the entry below still says Koguma
+/// wins — kitty's exit left the type uncontested, but the entry stays,
+/// both as the guard against a future claimant winning by resolver
+/// accident and because its winner is in the image, so the pin is free
+/// of the dependence on a declaration's install list.
 ///
 /// text/plain has no entry on purpose: nothing in the image claims it,
 /// so a declared editor wins unopposed, and an entry would only pin an
@@ -2749,16 +2752,11 @@ pub(crate) const FASTFETCH_CONFIG: &str = r#"{
 }
 "#;
 
-/// Theme files for the curated desktop. The kitty palette is the only
-/// copy: chosen once and shipped static, after the wallpaper-derived
-/// render died with noctalia. All system-wide (never /etc/skel): skel
-/// only reaches homes created after the image ships, so it strands
+/// Theme files for the curated desktop. All system-wide (never /etc/skel):
+/// skel only reaches homes created after the image ships, so it strands
 /// existing users on stale copies — image updates must retheme every
-/// account. User dotfiles still win everywhere:
-/// kitty merges /etc/xdg beneath the user's file (so a one-key override
-/// keeps the rest of this theme).
+/// account. User dotfiles still win everywhere.
 pub(crate) const WALLPAPER: &[u8] = include_bytes!("../../assets/kuma-wallpaper.jpg");
-pub(crate) const KITTY_CONFIG: &str = include_str!("../../assets/kitty.conf");
 
 /// The vendored plymouth theme (see assets/CREDITS.md), embedded by
 /// build.rs as `(filename, bytes)` pairs. Staged into the build context
@@ -2787,8 +2785,8 @@ pub(crate) const PLYMOUTH_THEME_DIR: &str = "spinner_alt";
 /// The COLRv1 face stays installed beside it on the niri arm, and that is
 /// not a conflict: the kumaui font loader evicts any letter-less face it
 /// cannot pull a color bitmap from, so the CBDT face is the one that
-/// survives for kuma's renderers while every other renderer (pango, GTK,
-/// kitty) keeps Fedora's default. See assets/CREDITS.md for the license
+/// survives for kuma's renderers while every other renderer (pango, GTK)
+/// keeps Fedora's default. See assets/CREDITS.md for the license
 /// record; re-vendor by diffing against the pinned upstream commit.
 pub(crate) const NOTO_COLOR_EMOJI: &[u8] =
     include_bytes!("../../assets/noto-emoji/NotoColorEmoji.ttf");
@@ -3120,7 +3118,6 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     // only when the declaration says so: the panel bind beside the
     // media binds, and the scheme handler line in the associations. A
     // user's own settings still win over every one of them.
-    let kitty = e.stage("kitty.conf", KITTY_CONFIG);
     let clipboard = e.stage("kuma-clipboard-bridge", clipboard_bridge());
     let xsettings = e.stage("kuma-xsettings", xsettings_launcher());
     let xsettingsd = e.stage("xsettingsd.conf", XSETTINGSD_CONF);
@@ -3176,8 +3173,9 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     e.raw("\n");
     // niri's weak deps, which ride in past the package list unless
     // they are named here. alacritty because kuma's terminal is
-    // kitty; waybar and swaylock because the shell replaced them and
-    // dropping them from NIRI_PACKAGES is not enough to remove them.
+    // kuma-term, baked beside the shell rather than packaged; waybar
+    // and swaylock because the shell replaced them and dropping them
+    // from NIRI_PACKAGES is not enough to remove them.
     // Measured: an image built without these excludes still had a bar
     // and a lock screen it never starts.
     e.raw(&dnf_install(&format!(
@@ -3242,24 +3240,22 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     e.raw(
         "RUN desktop-file-validate /usr/share/applications/kuma-files.desktop \\\n    && test -x /usr/bin/kuma-files \\\n    && test -f /usr/share/icons/hicolor/256x256/apps/kuma-files.png\n",
     );
-    e.copy(&kitty, "/etc/xdg/kitty/kitty.conf");
-    // kitty skips settings it doesn't recognise and starts anyway, so a
-    // renamed key ships a silently unthemed terminal — which is exactly
-    // how foot 1.27 voided this palette before kuma switched. Parse the
-    // file with kitty's own loader at build time, and treat BOTH of its
-    // complaints as fatal: accumulate_bad_lines catches malformed lines
-    // but NOT unknown keys, which are only ever logged to stderr (that
-    // asymmetry was verified by sabotage, so don't collapse this into
-    // the exit code alone). Grepping kitty's own log keeps the check
-    // free of an option allowlist to maintain.
+    // kuma-term, the terminal: the fourth kumaui binary, baked rather
+    // than packaged. The sed above retargets niri's stock alacritty
+    // bind at it, and kuma-launch resolves it as the first terminal
+    // candidate, so the entry needs no MimeType claim and no field
+    // code — the launcher finds it by name, the verbs run inside it.
+    // Entry and icon ride from the kumaui tree beside the binary,
+    // same as Koguma's, and the same three questions hold.
+    let term_bin = e.supplied("kuma-term");
+    e.copy_exec(&term_bin, "/usr/bin/kuma-term");
+    let term_desktop = e.supplied("kuma-term.desktop");
+    e.copy(&term_desktop, "/usr/share/applications/kuma-term.desktop");
+    let term_icon = e.supplied("kuma-term.png");
+    e.copy(&term_icon, "/usr/share/icons/hicolor/256x256/apps/kuma-term.png");
     e.raw(
-        "RUN rc=0; kitty +runpy \"import sys; from kitty.config import load_config; bad = []; load_config('/etc/xdg/kitty/kitty.conf', accumulate_bad_lines=bad); sys.exit('malformed kitty.conf lines: %s' % bad if bad else 0)\" 2>/tmp/kitty.err || rc=$?; \\\n    cat /tmp/kitty.err >&2; \\\n    if grep -q 'unknown config key' /tmp/kitty.err; then rc=1; fi; \\\n    rm -f /tmp/kitty.err; exit $rc\n",
+        "RUN desktop-file-validate /usr/share/applications/kuma-term.desktop \\\n    && test -x /usr/bin/kuma-term \\\n    && test -f /usr/share/icons/hicolor/256x256/apps/kuma-term.png\n",
     );
-    // The theme is a static palette in that file now — the sixteen ANSI
-    // slots and background/foreground/cursor, chosen once and shipped —
-    // because the wallpaper-derived render died with noctalia. The
-    // loader check above is what keeps it honest; there is no template
-    // left to render.
     e.copy_exec(&clipboard, "/usr/libexec/kuma-clipboard-bridge");
     e.copy(&fastfetch, "/etc/xdg/fastfetch/config.jsonc");
     e.copy(&fastfetch_logo, "/usr/lib/kuma/fastfetch-logo.txt");
@@ -3294,7 +3290,7 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     // config is that plus our session extras, validated at build time.
     // Fedora's default config already spawns waybar — drop that line (and
     // its comment) or the bar starts twice; Kuma's extras spawn it.
-    // Upstream's terminal is alacritty; Kuma ships kitty, so rewrite the
+    // Upstream's terminal is alacritty; Kuma ships kuma-term, so rewrite the
     // spawn (and its hotkey-overlay title). grep first: if a niri update
     // stops naming alacritty, fail the build instead of silently
     // shipping a Mod+T that spawns a terminal the image doesn't have.
@@ -3307,7 +3303,7 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     // second top-level `layout`/`hotkey-overlay` node, and the default
     // config already has both.
     e.raw(
-        &format!("RUN grep -q '\"alacritty\"' /usr/share/doc/niri/default-config.kdl \\\n    && grep -qF '{NIRI_STOCK_LAUNCHER}' /usr/share/doc/niri/default-config.kdl \\\n    && grep -qF '{NIRI_STOCK_LOCK}' /usr/share/doc/niri/default-config.kdl \\\n    && grep -qF '{NIRI_STOCK_ORCA}' /usr/share/doc/niri/default-config.kdl \\\n    && grep -qF '// skip-at-startup' /usr/share/doc/niri/default-config.kdl \\\n    && grep -q '^layout {{' /usr/share/doc/niri/default-config.kdl \\\n    && mkdir -p /etc/niri \\\n    && sed -e 's/alacritty/kitty/g' -e '/starts waybar/d' -e '/^spawn-at-startup \"waybar\"$/d' -e '/XF86Audio/d' -e '/XF86MonBrightness/d' -e 's|// skip-at-startup|skip-at-startup|' -e '/^layout {{/a\\    background-color \"#11111B\"' -e 's|{NIRI_STOCK_LAUNCHER}|{NIRI_MENU_BIND}|' -e 's|{NIRI_STOCK_LOCK}|{NIRI_LOCK_BIND}|' -e '/pkill orca/d' -e '/^binds {{/r /usr/lib/kuma/niri-binds.kdl' /usr/share/doc/niri/default-config.kdl > /etc/niri/config.kdl \\\n    && cat /usr/lib/kuma/niri-extras.kdl >> /etc/niri/config.kdl \\\n    && niri validate --config /etc/niri/config.kdl\n"),
+        &format!("RUN grep -q '\"alacritty\"' /usr/share/doc/niri/default-config.kdl \\\n    && grep -qF '{NIRI_STOCK_LAUNCHER}' /usr/share/doc/niri/default-config.kdl \\\n    && grep -qF '{NIRI_STOCK_LOCK}' /usr/share/doc/niri/default-config.kdl \\\n    && grep -qF '{NIRI_STOCK_ORCA}' /usr/share/doc/niri/default-config.kdl \\\n    && grep -qF '// skip-at-startup' /usr/share/doc/niri/default-config.kdl \\\n    && grep -q '^layout {{' /usr/share/doc/niri/default-config.kdl \\\n    && mkdir -p /etc/niri \\\n    && sed -e 's/alacritty/kuma-term/g' -e '/starts waybar/d' -e '/^spawn-at-startup \"waybar\"$/d' -e '/XF86Audio/d' -e '/XF86MonBrightness/d' -e 's|// skip-at-startup|skip-at-startup|' -e '/^layout {{/a\\    background-color \"#11111B\"' -e 's|{NIRI_STOCK_LAUNCHER}|{NIRI_MENU_BIND}|' -e 's|{NIRI_STOCK_LOCK}|{NIRI_LOCK_BIND}|' -e '/pkill orca/d' -e '/^binds {{/r /usr/lib/kuma/niri-binds.kdl' /usr/share/doc/niri/default-config.kdl > /etc/niri/config.kdl \\\n    && cat /usr/lib/kuma/niri-extras.kdl >> /etc/niri/config.kdl \\\n    && niri validate --config /etc/niri/config.kdl\n"),
     );
     // Every "attach a file" button in every app did nothing, silently.
     //
