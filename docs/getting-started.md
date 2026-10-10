@@ -163,7 +163,7 @@ shell = "fish"
 
 [packages]
 rpm = ["fish", "distrobox"]
-flatpak = ["org.mozilla.firefox"]
+flatpak = ["app.zen_browser.zen"]
 brew = ["ripgrep", "gh"]
 ```
 

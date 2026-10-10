@@ -39,7 +39,7 @@ shell = "fish"
 
 [packages]
 rpm = ["fish", "distrobox", "tailscale"]
-flatpak = ["org.mozilla.firefox"]   # applications, installed while it runs
+flatpak = ["app.zen_browser.zen"]   # applications, installed while it runs
 brew = ["ripgrep", "gh"]            # command line tools, no reboot needed
 
 [services]
@@ -48,7 +48,7 @@ enable = ["tailscaled.service"]
 [snapshots]
 enable = true   # hourly read-only btrfs snapshots of /var/home
 
-[overrides."org.mozilla.firefox"]
+[overrides."app.zen_browser.zen"]
 sockets = ["wayland", "!x11"]   # what an app may touch; "!" takes it away
 
 [backup]

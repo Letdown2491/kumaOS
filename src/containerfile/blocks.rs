@@ -2503,9 +2503,17 @@ pub(crate) const NIRI_MEDIA_BINDS: &str = r#"    XF86AudioRaiseVolume allow-when
 /// A `.desktop` file's MimeType= line says an app *can* open a type;
 /// this list says which one *wins*. So the entries worth having are the
 /// contested types — a type with one claimant resolves to it unaided.
-/// Firefox is why most of this list exists: it claims application/pdf,
-/// six image types, and four audio/video types, every one of which it
-/// would otherwise be free to take from Papers, Loupe, or Celluloid.
+/// The browser is why most of this list exists, and 44.7.0 changed only
+/// the browser's name: zen claims application/pdf, the raster image
+/// types, and the audio/video types exactly as firefox did, every one
+/// of which it would otherwise be free to take from Koguma or
+/// Celluloid. The http/https/html entries say zen wins its own — the
+/// one type xdg-open exists for, where the desktop's stated answer is
+/// worth the obligation it puts on a declaration (install a browser).
+/// Koguma's entries name the types its surface renders — pdf joined
+/// them in this release, with Papers leaving and poppler-utils joining
+/// NIRI_PACKAGES as the rasterizer it shells out to.
+///
 /// The in-image entry is inode/directory: kitty-open.desktop used to
 /// claim it alongside Koguma, and the entry below still says Koguma
 /// wins — kitty's exit left the type uncontested, but the entry stays,
@@ -2513,22 +2521,24 @@ pub(crate) const NIRI_MEDIA_BINDS: &str = r#"    XF86AudioRaiseVolume allow-when
 /// accident and because its winner is in the image, so the pin is free
 /// of the dependence on a declaration's install list.
 ///
+/// avif and svg+xml have no entry in this release: Loupe's exit left
+/// zen the sole claimant (Koguma's surface doesn't render them), and a
+/// type with one claimant resolves unaided.
+///
 /// text/plain has no entry on purpose: nothing in the image claims it,
 /// so a declared editor wins unopposed, and an entry would only pin an
 /// app that a declaration is free not to install.
 pub(crate) const MIMEAPPS: &str = r#"[Default Applications]
-x-scheme-handler/http=org.mozilla.firefox.desktop
-x-scheme-handler/https=org.mozilla.firefox.desktop
-text/html=org.mozilla.firefox.desktop
-application/pdf=org.gnome.Papers.desktop
+x-scheme-handler/http=app.zen_browser.zen.desktop
+x-scheme-handler/https=app.zen_browser.zen.desktop
+text/html=app.zen_browser.zen.desktop
+application/pdf=kuma-files.desktop
 inode/directory=kuma-files.desktop
-image/png=org.gnome.Loupe.desktop
-image/jpeg=org.gnome.Loupe.desktop
-image/webp=org.gnome.Loupe.desktop
-image/gif=org.gnome.Loupe.desktop
-image/avif=org.gnome.Loupe.desktop
-image/svg+xml=org.gnome.Loupe.desktop
-image/tiff=org.gnome.Loupe.desktop
+image/png=kuma-files.desktop
+image/jpeg=kuma-files.desktop
+image/webp=kuma-files.desktop
+image/gif=kuma-files.desktop
+image/tiff=kuma-files.desktop
 video/mp4=io.github.celluloid_player.Celluloid.desktop
 video/webm=io.github.celluloid_player.Celluloid.desktop
 video/ogg=io.github.celluloid_player.Celluloid.desktop

@@ -2971,7 +2971,7 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         }
         assert!(checked > 0, "nothing was checked: has MIMEAPPS changed shape?");
         // the handler that actually went stale once, still named explicitly
-        assert!(MIMEAPPS.contains("x-scheme-handler/https=org.mozilla.firefox.desktop"));
+        assert!(MIMEAPPS.contains("x-scheme-handler/https=app.zen_browser.zen.desktop"));
     }
 
     /// The example's `disable` line must not name a unit kuma's desktop
@@ -3019,7 +3019,7 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         // are free; a shell panel for either is new work.
         assert!(!NIRI_MEDIA_BINDS.contains(r#"panel-toggle" "clipboard"#));
         assert!(!NIRI_MEDIA_BINDS.contains(r#"panel-toggle" "wallpaper"#));
-        assert!(MIMEAPPS.contains("application/pdf=org.gnome.Papers.desktop"));
+        assert!(MIMEAPPS.contains("application/pdf=kuma-files.desktop"));
         assert!(MIMEAPPS.contains("inode/directory=kuma-files.desktop"));
         let out = generate(&config("schema_version = 1\n[system]\ndesktop = \"niri\"\n"));
         assert!(out.contains("COPY mimeapps.list /etc/xdg/mimeapps.list"));

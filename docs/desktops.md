@@ -41,7 +41,7 @@ and nothing else.
 |---|---|
 | Session | `niri`, `xwayland-satellite`, `greetd`, `kuma-greeter` (tuigreet kept as the comment-swapped fallback) |
 | Shell | `kuma-shell` (bar, notifications, wallpaper, idle, lock, control centre, Nostr Signer) |
-| Terminal and files | `kuma-files` (Koguma, the file manager), `file-roller`, `gvfs` (+ fuse, mtp, smb), `udiskie`, `7zip`, `unar` — the terminal is `kuma-term`, baked with the image, not packaged |
+| Terminal and files | `kuma-files` (Koguma, the file manager), `file-roller`, `poppler-utils` (the pdf claim's rasterizer), `gvfs` (+ fuse, mtp, smb), `udiskie`, `7zip`, `unar` — the terminal is `kuma-term`, baked with the image, not packaged |
 | Portals | `xdg-desktop-portal-gtk`, `xdg-desktop-portal-gnome` |
 | Audio | `pipewire`, `pipewire-pulseaudio`, `wireplumber`, `pavucontrol` |
 | Graphics | `mesa-dri-drivers`, `mesa-vulkan-drivers`, `vulkan-loader` |
