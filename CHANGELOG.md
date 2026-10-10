@@ -4,6 +4,27 @@
 
 ## v44.7.0 (2026-10-10)
 
+- **The session answers its own privileged prompts.** kuma-shell registers
+  as the polkit authentication agent (kumaui #65/#68): a prompt is the
+  lock screen's shape — one centered card, exclusive keyboard, the
+  ADR-0007 capture — the identity resolved from unix-user and unix-group,
+  and the helper exchange riding polkit 127's socket-activated helper,
+  whose per-connection sandbox replaces a permanent setuid binary.
+  mate-polkit leaves the niri session — the package stays for the cosmic
+  arm, whose only agent is the autostart-found mate one — and until the
+  handoff the transition was two agents meeting polkitd's one-agent-per-
+  session rule: the shell held the slot while mate's agent ran, and
+  logged a warning every 5s saying so.
+
+- **The launcher honors the show-in pair.** Every conforming launcher
+  hides blueman-adapters outside XFCE and MATE; ours listed it, because
+  the desktop-entry parser read NoDisplay and not OnlyShowIn/NotShowIn.
+  The filter rides the shared load — launcher panel, dock, the per-app
+  volume rows — with glib's exact semantics: case-sensitive comparison,
+  the unset case shows, NoDisplay still wins outright, and `Hidden` joins
+  the pair, the spec's "user deleted this entry" key the greeter's
+  session list already honored.
+
 - **The desktop's claims follow its surfaces.** The example declarations
   replace firefox, Loupe, Papers and Calculator with zen and the tools
   already on the image: zen is the browser (Calculator's arithmetic
