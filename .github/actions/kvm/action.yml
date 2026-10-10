@@ -23,6 +23,13 @@ runs:
         # console karg its QCOW2 needs. linux-modules-extra: the nbd and
         # vgem modules both live there, and the runner's azure kernel
         # ships without it (uname -r names the running flavor exactly).
+        # The lists are refreshed first, not out of habit: the 20261010
+        # snapshot's kernel (7.0.0-1012-azure) published after the
+        # snapshot's apt lists were baked, and every qemu lap died at
+        # this line ("Couldn't find any package by regex") for a package
+        # the archive carries. An update costs seconds and lets the
+        # archive answer instead of the snapshot's age.
+        sudo apt-get update -qq
         sudo apt-get install -y -qq qemu-system-x86 qemu-utils cryptsetup-bin ovmf \
             libegl1 libgl1 "linux-modules-extra-$(uname -r)" \
             ${{ inputs.sshpass == 'true' && 'sshpass' || '' }}
