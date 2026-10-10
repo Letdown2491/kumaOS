@@ -855,16 +855,27 @@ mod tests {
         assert!(DCONF_BLUEMAN.contains("'!StatusIcon'"));
         assert!(DCONF_BLUEMAN.contains("'!ShowConnected'"));
 
-        // Exactly one launch path for the two session services this image
+        // Exactly one launch path for the session service this image
         // both spawns and ships an autostart entry for. The pairing is
         // the point: an override here without the matching
         // spawn-at-startup would leave the machine with no bluetooth
-        // agent and no polkit agent, and the second of those is silent
-        // until somebody needs a password prompt.
+        // agent, and that is silent until somebody pairs a device.
+        //
+        // The polkit half of the old pairing retired under niri: the
+        // session's authentication agent is kuma-shell's own (pinned
+        // in the kuma-shell action, kumaui #65/#68), so the mate
+        // agent's spawn and its autostart off-switch are asserted gone
+        // while the package stays - the cosmic arm's agent lives in
+        // it. The helper rides the socket with the setuid bit dropped,
+        // and the fprintd reference leaves the authselect stack.
         assert!(out.contains("COPY autostart-blueman /etc/xdg/autostart/blueman.desktop"));
-        assert!(out.contains("/etc/xdg/autostart/polkit-mate-authentication-agent-1.desktop"));
+        assert!(out.contains("mate-polkit"));
+        assert!(!out.contains("/etc/xdg/autostart/polkit-mate"));
+        assert!(!NIRI_EXTRAS.contains("polkit"));
+        assert!(out.contains("systemctl enable polkit-agent-helper.socket"));
+        assert!(out.contains("chmod u-s /usr/lib/polkit-1/polkit-agent-helper-1"));
+        assert!(out.contains("sed -i '/pam_fprintd.so/d' /etc/authselect/system-auth"));
         assert!(NIRI_EXTRAS.contains("spawn-at-startup \"blueman-applet\""));
-        assert!(NIRI_EXTRAS.contains("polkit-mate-authentication-agent-1"));
         assert!(autostart_off("x").contains("Hidden=true"));
     }
 

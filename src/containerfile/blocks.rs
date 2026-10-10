@@ -142,6 +142,10 @@ pub(crate) const NIRI_PACKAGES: &[&str] = &[
     // face kuma's own renderers paint is vendored, see NOTO_COLOR_EMOJI.
     // Both faces stay: dropping either strand half the desktop.
     "default-fonts-core-emoji",
+    // The cosmic arm's polkit agent is mate's, and this package is the
+    // only place that arm gets an agent from. Under niri it is inert:
+    // the autostart entry is staged off, nothing spawns it, and the
+    // agent there is kuma-shell's own.
     "mate-polkit",
     "firewalld",
     // niri's built-in screenshot UI covers the Print keys; grim+slurp are
@@ -2081,7 +2085,6 @@ environment {
 }
 
 // Kuma session services
-spawn-at-startup "/usr/libexec/polkit-mate-authentication-agent-1"
 spawn-at-startup "/usr/libexec/kuma-clipboard-bridge"
 spawn-at-startup "/usr/libexec/kuma-xsettings"
 spawn-at-startup "blueman-applet"
@@ -2356,27 +2359,33 @@ plugin-list=['!StatusIcon', '!ShowConnected']
 ///
 /// `xdg-desktop-autostart.target` is active in this session, so systemd's
 /// xdg-autostart-generator turns every `/etc/xdg/autostart/*.desktop`
-/// into a unit. Fedora ships one for blueman and one for the mate polkit
-/// agent, and niri-extras.kdl *also* spawns both. They are single
-/// instance, so one launch wins and the other quietly loses, and which
-/// one wins is a race: measured on one boot, blueman came up under
-/// `app-blueman@autostart.service` while the polkit agent came up under
-/// niri's own scope. Nothing breaks, but a unit reads `dead` while its
-/// program is running, the loser can log noise, and which cgroup owns a
-/// process changes from boot to boot.
+/// into a unit. Fedora ships one for blueman, and niri-extras.kdl *also*
+/// spawns it. They are single instance, so one launch wins and the other
+/// quietly loses, and which one wins is a race: measured on one boot,
+/// blueman came up under `app-blueman@autostart.service` while the then-
+/// mate polkit agent came up under niri's own scope. Nothing breaks, but
+/// a unit reads `dead` while its program is running, the loser can log
+/// noise, and which cgroup owns a process changes from boot to boot.
 ///
 /// kuma's spawn is the one kept, because it is the one this image
 /// declares: the alternative depends on the session reaching
-/// `xdg-desktop-autostart.target`, and losing the polkit agent that way
-/// is invisible until somebody needs an authentication prompt.
+/// `xdg-desktop-autostart.target`, and losing a session service that way
+/// is invisible until somebody needs it.
 ///
 /// `Hidden=true` rather than masking the generated unit: the generator
-/// names the polkit unit
-/// `app-polkit\x2dmate\x2dauthentication\x2dagent\x2d1@autostart.service`,
-/// and reproducing that escaping in a symlink is a worse thing to depend
+/// names units after the desktop file with `\x2d` escaping for every
+/// dash — `app-polkit\x2dmate\x2dauthentication\x2dagent\x2d1@autostart.service`
+/// was the polkit agent's, back when the agent was mate's — and
+/// reproducing that escaping in a symlink is a worse thing to depend
 /// on than the spec's own "ignore this entry" key. Verified against the
 /// running generator, which reports the unit `not-found` with this in
 /// place.
+///
+/// The polkit half of this race has since retired whole: the session's
+/// authentication agent is kuma-shell's own (kumaui `polkit.rs`), so the
+/// mate-polkit package, its spawn-at-startup, and this staging's
+/// off-switch for its autostart entry went out together. Blueman is the
+/// machinery's last customer.
 pub(crate) fn autostart_off(name: &str) -> String {
     format!("[Desktop Entry]\nType=Application\nName={name}\nHidden=true\n")
 }
@@ -3162,8 +3171,6 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     let dconf_dark = e.stage("dconf-kuma-dark", DCONF_DARK);
     let dconf_blueman = e.stage("dconf-kuma-blueman", DCONF_BLUEMAN);
     let autostart_blueman = e.stage("autostart-blueman", autostart_off("Blueman Applet"));
-    let autostart_polkit =
-        e.stage("autostart-polkit-mate", autostart_off("PolicyKit Authentication Agent"));
     // Shared with the desktop-common staging in the greeter-seam
     // block, which this arm copies from: re-staged here for the handle,
     // same contents, and the walk's same-content assert holds the two
@@ -3302,7 +3309,6 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     e.copy(&dconf_blueman, "/etc/dconf/db/local.d/10-kuma-blueman");
     e.raw("RUN dconf update\n");
     e.copy(&autostart_blueman, "/etc/xdg/autostart/blueman.desktop");
-    e.copy(&autostart_polkit, "/etc/xdg/autostart/polkit-mate-authentication-agent-1.desktop");
     // The packaged default config is complete (all keybindings); Kuma's
     // config is that plus our session extras, validated at build time.
     // Fedora's default config already spawns waybar — drop that line (and
@@ -3362,6 +3368,25 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     );
     e.raw(
         "RUN systemctl set-default graphical.target && systemctl enable greetd.service firewalld.service power-profiles-daemon.service bluetooth.service cups.service avahi-daemon.service chronyd.service\n",
+    );
+    // polkit 127's direction: the helper arrives per connection as a
+    // sandboxed socket-activated oneshot instead of a permanent setuid
+    // binary. The shell prefers the socket when it is present, so the
+    // enablement flips its path, and the setuid bit goes with it - a
+    // fallback that cannot work is worse than no fallback, because it
+    // answers nothing and looks like it can. Cosmic keeps mate's agent
+    // and its setuid spawn; this is the arm that owns its agent.
+    //
+    // The PAM stack's fprintd reference leaves through authselect's own
+    // file: /etc/pam.d/system-auth is a symlink into /etc/authselect,
+    // and a sed -i on the link would fork a regular file out from under
+    // the manager. Measured: apply-changes --upgrade, which the boot
+    // service runs, preserves this edit today - but a profile update in
+    // a future authselect-libs would reapply it, so the boot lap
+    // asserts the absence and a resurrection is a red lap, not silent
+    // log noise on every authentication. This hardware has no reader.
+    e.raw(
+        "RUN systemctl enable polkit-agent-helper.socket \\\n    && chmod u-s /usr/lib/polkit-1/polkit-agent-helper-1 \\\n    && sed -i '/pam_fprintd.so/d' /etc/authselect/system-auth\n",
     );
 }
 

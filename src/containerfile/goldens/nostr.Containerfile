@@ -68,7 +68,6 @@ COPY dconf-kuma-dark /etc/dconf/db/local.d/10-kuma-dark
 COPY dconf-kuma-blueman /etc/dconf/db/local.d/10-kuma-blueman
 RUN dconf update
 COPY autostart-blueman /etc/xdg/autostart/blueman.desktop
-COPY autostart-polkit-mate /etc/xdg/autostart/polkit-mate-authentication-agent-1.desktop
 RUN grep -q '"alacritty"' /usr/share/doc/niri/default-config.kdl \
     && grep -qF 'Mod+D hotkey-overlay-title="Run an Application: fuzzel" { spawn "fuzzel"; }' /usr/share/doc/niri/default-config.kdl \
     && grep -qF 'Super+Alt+L hotkey-overlay-title="Lock the Screen: swaylock" { spawn "swaylock"; }' /usr/share/doc/niri/default-config.kdl \
@@ -86,6 +85,9 @@ RUN grep -q '^\[preferred\]' /usr/share/xdg-desktop-portal/niri-portals.conf \
 RUN grep -qx '    systemctl --user import-environment' /usr/bin/niri-session \
     && sed -i 's/^    systemctl --user import-environment$/    systemctl --user import-environment PATH XDG_SESSION_ID XDG_SEAT XDG_VTNR/' /usr/bin/niri-session
 RUN systemctl set-default graphical.target && systemctl enable greetd.service firewalld.service power-profiles-daemon.service bluetooth.service cups.service avahi-daemon.service chronyd.service
+RUN systemctl enable polkit-agent-helper.socket \
+    && chmod u-s /usr/lib/polkit-1/polkit-agent-helper-1 \
+    && sed -i '/pam_fprintd.so/d' /etc/authselect/system-auth
 RUN curl --fail -Lo /etc/flatpak/remotes.d/flathub.flatpakrepo https://dl.flathub.org/repo/flathub.flatpakrepo \
     && systemctl mask flatpak-add-fedora-repos.service
 COPY flatpaks /usr/lib/kuma/flatpaks

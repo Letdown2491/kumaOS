@@ -3398,6 +3398,20 @@ smoke_boot() {
         || bad "faillock.conf lost its deny count"
     ok "login brute force is capped"
 
+    # The polkit agent is the shell's, and its helper rides the socket:
+    # the setuid spawn path retired with mate-polkit under niri. The
+    # fprintd absence is a tripwire, not a feature: authselect's boot
+    # apply-changes preserves the removal today, but a profile update
+    # in a future authselect-libs would reapply the line, and PAM logs
+    # the missing module on every authentication.
+    guest 'systemctl is-enabled --quiet polkit-agent-helper.socket' \
+        || bad "polkit-agent-helper.socket is not enabled; the agent falls back to a setuid spawn"
+    guest 'test ! -u /usr/lib/polkit-1/polkit-agent-helper-1' \
+        || bad "the polkit helper is setuid again; the socket is not the only path"
+    guest '! grep -q pam_fprintd /etc/pam.d/system-auth' \
+        || bad "the fprintd reference came back to system-auth; authselect reapplied its profile"
+    ok "the polkit helper rides the socket, setuid-free, and PAM is quiet"
+
     # The Wi-Fi MAC conf is a file the VM cannot exercise (the lane is
     # ethernet), so the assert is the file's, which is still enough to
     # catch it not shipping.
