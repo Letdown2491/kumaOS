@@ -2682,6 +2682,14 @@ smoke_published() {
     kill $qemu 2>/dev/null || true
     wait $qemu 2>/dev/null || true
     trap - EXIT
+    # The console outlives its directory (issue #34's shape): the rm
+    # below is the sweep's cleanup arriving early, and the sweep's
+    # epilogue copy never runs on this stage -- it returns here. Copy
+    # what the lap left before deleting it; the caller's copy after a
+    # bad() exit covers the path that skips this one.
+    if [ -f "$log" ]; then
+        cp "$log" "vm-smoke/console-$name.log"
+    fi
     [ $KEEP -eq 1 ] || sudo rm -rf "$dir"
 }
 
@@ -3650,10 +3658,20 @@ fi
 
 if [ -n "$PUBLISHED" ]; then
     note "published: $PUBLISHED"
+    # A stale surviving copy must not impersonate this run's evidence
+    # (the same hygiene the example sweep keeps), and after a bad() exit
+    # this copy is the only one made: bad() leaves the lap dir in place
+    # and skips the copy in smoke_published's own tail, and this stage
+    # exits before the sweep's epilogue. ci's readers (ci.yml,
+    # published.yml) tail the copy, not the dir.
+    rm -f "vm-smoke/console-published.log"
     if (smoke_published "$PUBLISHED" published "$port"); then
         PASS+=("published")
     else
         FAIL+=("published")
+    fi
+    if [ -f "vm-smoke/published/console.log" ]; then
+        cp "vm-smoke/published/console.log" "vm-smoke/console-published.log"
     fi
     note "summary"
     [ ${#PASS[@]} -gt 0 ] && printf '   pass: %s\n' "${PASS[*]}"
