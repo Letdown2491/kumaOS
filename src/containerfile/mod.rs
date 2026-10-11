@@ -2308,9 +2308,8 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
     /// or the default resolves while every chooser offers zero apps.
     #[test]
     fn the_nostr_block_regenerates_the_desktop_cache_after_its_entry() {
-        let nostr = config(
-            "schema_version = 1\n[system]\ndesktop = \"niri\"\n[nostr]\nenable = true\n",
-        );
+        let nostr =
+            config("schema_version = 1\n[system]\ndesktop = \"niri\"\n[nostr]\nenable = true\n");
         let text = blocks::emitted(&nostr, "nostr");
         let copy = "COPY kuma-nostr-panel.desktop /usr/share/applications/kuma-nostr-panel.desktop";
         let run = "RUN update-desktop-database /usr/share/applications\n";
