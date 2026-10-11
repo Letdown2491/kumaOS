@@ -353,7 +353,7 @@ jobs:
       - name: guest console
         if: failure() || cancelled()
         run: tail -200 "vm-smoke/console-${{ matrix.example }}.log" || true
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: failure() || cancelled()
         with:
           name: console-${{ matrix.example }}
@@ -398,7 +398,7 @@ jobs:
       - name: guest console
         if: failure() || cancelled()
         run: tail -200 vm-smoke/console-published.log || true
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: failure() || cancelled()
         with:
           name: console-install
@@ -457,7 +457,7 @@ jobs:
       - name: guest console
         if: failure() || cancelled()
         run: tail -200 vm-smoke/console-published.log || true
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: failure() || cancelled()
         with:
           name: console-hibernate
@@ -499,7 +499,7 @@ jobs:
       - name: guest console
         if: failure() || cancelled()
         run: tail -200 vm-smoke/dead-disk/console.log || true
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: failure() || cancelled()
         with:
           name: console-dead-disk
@@ -565,7 +565,7 @@ jobs:
         if: failure() || cancelled()
         run: tail -200 vm-smoke/console-niri-iso.log || true
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: failure() || cancelled()
         with:
           name: iso-console
@@ -579,7 +579,7 @@ jobs:
       # distribution channel. Compression is off: the ISO is already a
       # solid zstd stream and re-compressing 1.8 GB buys nothing but
       # minutes.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: kuma-live-iso
           path: vm-smoke/niri-iso/KUMA.iso
