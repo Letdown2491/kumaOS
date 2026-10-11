@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **The base carries the tools operating a machine assumes.** The
+  composed base was Fedora's minimal manifest plus kuma's named adds,
+  and the named adds made the machine work without making it
+  operable: `ping`, `ip`, `ss`, `ssh` out and `less` were absent from
+  the composed image (measured on the tag, not assumed from the
+  manifest — NetworkManager does not require iproute), so a fresh
+  install could not answer its own first diagnostic question.
+  `iputils`, `iproute`, `procps-ng`, `openssh-clients`, `curl` and
+  `less` join the base package list — machine operation, not work, so
+  editors and toolchains stay in `[packages]`. procps-ng and curl were
+  present by inheritance; named so they are kuma's dependency, not
+  luck's. The manifest change flips the content tag, so the next
+  update recomposes the base once.
+
 ## v44.7.0 (2026-10-10)
 
 - **The session answers its own privileged prompts.** kuma-shell registers

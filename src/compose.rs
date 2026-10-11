@@ -158,6 +158,18 @@ packages:
   - plymouth plymouth-plugin-script plymouth-plugin-label dejavu-sans-fonts
   - fwupd           # LVFS firmware updates; security maintenance on real
                     # hardware, and nothing else in the image can do it
+
+  # operating tools: what a human at the machine's own prompt reaches
+  # for first. Machine operation, not work — editors and toolchains
+  # stay in [packages]. The base already carries procps-ng and curl by
+  # inheritance; named so they are kuma's dependency, not luck's.
+  - iputils           # ping, tracepath: "is the network up" is the first question
+  - iproute           # ip, ss; NetworkManager does not require it (measured on the
+                      # composed base: ip and ss were absent beside a live NM)
+  - procps-ng         # ps, free, uptime
+  - openssh-clients   # the server ships; a machine that cannot ssh out is half-wired
+  - curl              # fetch anything; fwupd already carries the library
+  - less              # the pager systemctl and every pipe over ssh assume
 "#
     )
 }
@@ -364,6 +376,29 @@ mod tests {
             ),
             "the plymouth set left the base package list"
         );
+    }
+
+    /// The base carries the tools a human operating the machine assumes
+    /// exist. Written out a second time on purpose, like the firmware
+    /// list above: a test that iterates the manifest's own list checks
+    /// it against itself and stays green through a deletion. The
+    /// presence of procps-ng and curl was measured on the composed tag
+    /// (inherited, not named) — which is exactly the luck this list
+    /// ends, per the authselect rule: name the dependency, don't
+    /// inherit it.
+    #[test]
+    fn the_base_carries_the_operating_tools_a_human_assumes() {
+        let out = manifest(&config("schema_version = 1"));
+        for pkg in [
+            "iputils",         // ping, tracepath
+            "iproute",         // ip, ss; NetworkManager does not require it
+            "procps-ng",       // ps, free, uptime
+            "openssh-clients", // ssh out, beside the server that ships
+            "curl",            // fetch anything
+            "less",            // the pager everything assumes
+        ] {
+            assert!(out.contains(&format!("- {pkg}")), "{pkg} left the base's operating tools");
+        }
     }
 
     #[test]
