@@ -4611,6 +4611,16 @@ fn nostr(e: &mut Emitter<'_>) {
     // panel — the panel itself lives in kuma-shell, which this block
     // never had to carry.
     e.copy(&panel_desktop, "/usr/share/applications/kuma-nostr-panel.desktop");
+    // The cache behind the pin: chooser enumeration (the portal's
+    // registered/recommended lists) is built from mimeinfo.cache, and
+    // every regeneration the build inherited ran in a dnf scriptlet —
+    // all of them before this COPY, the last desktop entry to land. The
+    // result was two lookups disagreeing: the default in mimeapps.list
+    // resolved, while every chooser offered zero apps. /usr is
+    // read-only at runtime, so the cache is a build-time fact, and
+    // nothing after this block writes /usr/share/applications — one run
+    // here covers every entry the image ships.
+    e.raw("RUN update-desktop-database /usr/share/applications\n");
 }
 
 /// The local relay's address, and the port it binds: the bunker's

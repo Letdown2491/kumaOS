@@ -211,6 +211,7 @@ RUN systemctl enable kuma-nostr-serve.service
 RUN systemctl --global enable kuma-nostrd.service nip46-relay.service
 RUN /usr/bin/kuma-nostrd --version
 COPY kuma-nostr-panel.desktop /usr/share/applications/kuma-nostr-panel.desktop
+RUN update-desktop-database /usr/share/applications
 
 COPY --chmod=755 kuma-vm-timezone /usr/libexec/kuma-vm-timezone
 COPY kuma-vm-timezone.service /usr/lib/systemd/system/kuma-vm-timezone.service

@@ -2301,6 +2301,26 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         assert!(!unit.contains("--inactivity-lock-secs"), "{unit}");
     }
 
+    /// The scheme handler's chooser road: the panel entry is the last
+    /// desktop file any block copies, and the cache the chooser
+    /// enumerates from is only regenerated at build time — so the block
+    /// that lands the entry runs the cache's own tool after it, once,
+    /// or the default resolves while every chooser offers zero apps.
+    #[test]
+    fn the_nostr_block_regenerates_the_desktop_cache_after_its_entry() {
+        let nostr = config(
+            "schema_version = 1\n[system]\ndesktop = \"niri\"\n[nostr]\nenable = true\n",
+        );
+        let text = blocks::emitted(&nostr, "nostr");
+        let copy = "COPY kuma-nostr-panel.desktop /usr/share/applications/kuma-nostr-panel.desktop";
+        let run = "RUN update-desktop-database /usr/share/applications\n";
+        assert_eq!(text.matches(run).count(), 1, "the cache runs once: {text}");
+        assert!(
+            text.find(copy).is_some() && text.rfind(run).unwrap() > text.find(copy).unwrap(),
+            "the cache regenerates after the entry lands, not before: {text}"
+        );
+    }
+
     /// Every kuma unit the image enables must declare, in the block
     /// that enables it, what it does on installer media — and the
     /// declaration must be honest: a `Conditioned` unit actually
