@@ -146,7 +146,10 @@ uses to build fedora-bootc.
 
 The starting point is Fedora's minimal bootc manifest, which is
 essentially kernel, systemd, bootc, and dnf. kuma adds what a real
-machine needs. Nothing is ever removed after the fact; the heavy stuff
+machine needs. What a real machine needs includes its operating tools:
+ping, ip, the ssh client, curl, and less ship in the base, so a fresh
+machine can diagnose itself and reach the world without declaring
+anything. Nothing is ever removed after the fact; the heavy stuff
 fedora-bootc carries for the general case simply never gets included.
 Fedora remains the package source for all of it. kuma builds no packages
 and no kernels.
@@ -219,6 +222,9 @@ hardening, adapted to what kuma can test. Six files ship in every image:
   off, coredumps are dropped, address-space randomization gets the
   maximum entropy, and the machine no longer answers ping
   (`icmp_echo_ignore_all`; `sysctl -w` brings it back for the session).
+  The base ships ping for dialing out, but a kuma machine never
+  answers one: ping silence is the floor working, not an outage. Probe
+  a kuma machine with ssh or `kuma doctor`.
 - `/usr/lib/bootc/kargs.d/05-kuma-hardening.toml`: kernel arguments.
   Memory is zeroed on free (`init_on_free`, the one setting with a real
   performance cost, a few percent), page allocation is shuffled,
