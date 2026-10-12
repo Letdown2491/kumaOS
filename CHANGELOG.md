@@ -16,6 +16,21 @@
   luck's. The manifest change flips the content tag, so the next
   update recomposes the base once.
 
+- **Videos and svg open in the machine's own viewer.** The MIMEAPPS
+  defaults repoint the five video types Koguma plays in-process
+  (`video/mp4`, `video/webm`, `video/x-matroska`, `video/quicktime`,
+  `video/x-msvideo`) at `kuma-files.desktop`, and hand it
+  `image/svg+xml` now that the viewer rasterizes in-process; the
+  audio types and `video/ogg` stay Celluloid's until the viewer grows
+  an audio-only pane, because a claim traded for a no-preview card is
+  a regression, not a flip. The floor under the claims is the shell
+  action's libav configure, which grows the demuxer and decoder words
+  the legacy encodings ride (`avi` demuxes; `mpeg4`, `vp8`, `vorbis`,
+  `mp3` and `mjpeg` decode): a MimeType= line the image cannot honor
+  is a lie with a UI. The kumaui pin moves to v0.3.0 in the same
+  change: the claim, the pane, and the entry's own MimeType line are
+  one build.
+
 ## v44.7.0 (2026-10-10)
 
 - **The session answers its own privileged prompts.** kuma-shell registers

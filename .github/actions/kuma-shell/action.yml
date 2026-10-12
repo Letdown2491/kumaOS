@@ -34,7 +34,7 @@ inputs:
     description: >-
       kumaui commit to build the shell from.
     required: false
-    default: 26af63ca6eb12d5fcfc99519c909435ed9e21772
+    default: 95076ef0ee507870cc180e4bb450e312607c870f # v0.3.0
 
 runs:
   using: composite
@@ -67,10 +67,15 @@ runs:
     # the snapshot under it broke the compose and the qemu laps both.
     # So the libs are built here, from the 8.0 sources, and the
     # contract stops inheriting from whichever distro the runner is
-    # rolling this week. Minimal configure - the demuxers and decoders
-    # a muted preview touches, no programs, no network, no docs - the
-    # build is a few minutes, and the sonames come from the source,
-    # not the snapshot.
+    # rolling this week. Minimal configure: the demuxers and decoders
+    # the claimed types' common content touches, and the list is the
+    # floor under kuma-files' MimeType= line (blocks.rs MIMEAPPS) —
+    # the five video types the viewer claims must demux and decode on
+    # this build, legacy encodings included (avi demuxes; mpeg4, vp8,
+    # vorbis, mp3 and mjpeg decode), because a claim the image cannot
+    # honor is a regression for every file of the type on the disk.
+    # No programs, no network, no docs; the build is a few minutes,
+    # and the sonames come from the source, not the snapshot.
     - name: build libav 8 against the soname the image ships
       shell: bash
       run: |
@@ -82,8 +87,8 @@ runs:
         ./configure --prefix=/usr/local \
           --disable-doc --disable-programs --disable-avdevice \
           --disable-network --disable-autodetect \
-          --enable-decoder=h264,hevc,vp9,av1,aac,opus,flac \
-          --enable-demuxer=mov,matroska,webm,ogg \
+          --enable-decoder=h264,hevc,vp9,av1,aac,opus,flac,mpeg4,vp8,vorbis,mp3,mjpeg \
+          --enable-demuxer=mov,matroska,webm,ogg,avi \
           --enable-protocol=file
         make -j"$(nproc)"
         sudo make install

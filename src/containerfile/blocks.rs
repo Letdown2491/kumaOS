@@ -2531,8 +2531,9 @@ pub(crate) const NIRI_MEDIA_BINDS: &str = r#"    XF86AudioRaiseVolume allow-when
 /// one type xdg-open exists for, where the desktop's stated answer is
 /// worth the obligation it puts on a declaration (install a browser).
 /// Koguma's entries name the types its surface renders — pdf joined
-/// them in this release, with Papers leaving and poppler-utils joining
-/// NIRI_PACKAGES as the rasterizer it shells out to.
+/// them in 44.7.0, with Papers leaving and poppler-utils joining
+/// NIRI_PACKAGES as the rasterizer it shells out to, and the svg and
+/// video entries join them now, rasterized and played in-process.
 ///
 /// The in-image entry is inode/directory: kitty-open.desktop used to
 /// claim it alongside Koguma, and the entry below still says Koguma
@@ -2541,9 +2542,25 @@ pub(crate) const NIRI_MEDIA_BINDS: &str = r#"    XF86AudioRaiseVolume allow-when
 /// accident and because its winner is in the image, so the pin is free
 /// of the dependence on a declaration's install list.
 ///
-/// avif and svg+xml have no entry in this release: Loupe's exit left
-/// zen the sole claimant (Koguma's surface doesn't render them), and a
-/// type with one claimant resolves unaided.
+/// avif has no entry: Loupe's exit left zen the sole claimant
+/// (Koguma's surface doesn't render it), and a type with one claimant
+/// resolves unaided. svg+xml is that story in reverse — it had no
+/// entry for the same reason, then the viewer grew an in-process
+/// raster, which made zen a contest it was winning by resolver
+/// accident; the entry below says the app that renders in the pane
+/// wins, like the raster images above it.
+///
+/// The video entries name the five types the viewer plays in-process
+/// through libav: the claim follows the surface, the same rule the
+/// image entries follow. video/ogg and the audio types stay
+/// Celluloid's on purpose — the pane plays sound inside a video, but
+/// there is no pane for a bare audio file, and a claim traded for a
+/// no-preview card is a regression, not a flip. The floor under the
+/// video claims is the shell action's libav configure, whose demuxer
+/// and decoder words (avi demuxes; mpeg4, vp8, vorbis, mp3 and mjpeg
+/// decode) make the MimeType= line true on the built image — a claim
+/// the image cannot honor is a lie with a UI, and the minimal build
+/// predates these claims.
 ///
 /// text/plain has no entry on purpose: nothing in the image claims it,
 /// so a declared editor wins unopposed, and an entry would only pin an
@@ -2559,10 +2576,13 @@ image/jpeg=kuma-files.desktop
 image/webp=kuma-files.desktop
 image/gif=kuma-files.desktop
 image/tiff=kuma-files.desktop
-video/mp4=io.github.celluloid_player.Celluloid.desktop
-video/webm=io.github.celluloid_player.Celluloid.desktop
+image/svg+xml=kuma-files.desktop
+video/mp4=kuma-files.desktop
+video/webm=kuma-files.desktop
+video/x-matroska=kuma-files.desktop
+video/quicktime=kuma-files.desktop
+video/x-msvideo=kuma-files.desktop
 video/ogg=io.github.celluloid_player.Celluloid.desktop
-video/x-matroska=io.github.celluloid_player.Celluloid.desktop
 audio/mpeg=io.github.celluloid_player.Celluloid.desktop
 audio/flac=io.github.celluloid_player.Celluloid.desktop
 audio/ogg=io.github.celluloid_player.Celluloid.desktop

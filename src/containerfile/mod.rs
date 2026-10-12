@@ -3020,6 +3020,45 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         assert!(MIMEAPPS.contains("x-scheme-handler/https=app.zen_browser.zen.desktop"));
     }
 
+    /// The claim flip the viewer's video pane earned, and the holds
+    /// that keep it honest. The five types the viewer plays
+    /// in-process open in Koguma, svg+xml rides the in-process raster
+    /// into the image set, and the holds are pinned as hard as the
+    /// flips: video/ogg and the audio types stay Celluloid's until
+    /// the viewer grows an audio-only pane, because a flip that
+    /// outran the pane would trade a working Celluloid open for a
+    /// no-preview card — a regression, not a claim.
+    #[test]
+    fn the_video_claims_move_with_the_viewer_and_the_holds_stay_pinned() {
+        for mime in [
+            "video/mp4",
+            "video/webm",
+            "video/x-matroska",
+            "video/quicktime",
+            "video/x-msvideo",
+            "image/svg+xml",
+        ] {
+            assert!(
+                MIMEAPPS.contains(&format!("{mime}=kuma-files.desktop")),
+                "{mime} should open in Koguma's viewer"
+            );
+        }
+        for mime in [
+            "video/ogg",
+            "audio/mpeg",
+            "audio/flac",
+            "audio/ogg",
+            "audio/webm",
+        ] {
+            assert!(
+                MIMEAPPS.contains(&format!(
+                    "{mime}=io.github.celluloid_player.Celluloid.desktop"
+                )),
+                "{mime} stays with Celluloid until the audio pane exists"
+            );
+        }
+    }
+
     /// The example's `disable` line must not name a unit kuma's desktop
     /// deliberately enables, or the file argues with the image it
     /// compiles to. It read `avahi-daemon.service` when this was written,
