@@ -241,6 +241,34 @@ pub fn write_context(
                 kuma_binary.display()
             )
         })?;
+        // Kamuy is the same build's fifth binary and the image's
+        // monitor: observation only — apps, not processes — so its
+        // entry claims no mimetype and the ride is binary, entry,
+        // icon, same as the terminal's.
+        let monitor_sibling = parent.join("kuma-monitor");
+        std::fs::copy(&monitor_sibling, dir.join("kuma-monitor")).with_context(|| {
+            format!(
+                "staging kuma-monitor: it is not beside the running kuma ({}); a \
+                 desktop image needs the release's binaries together",
+                kuma_binary.display()
+            )
+        })?;
+        let monitor_desktop = parent.join("kuma-monitor.desktop");
+        std::fs::copy(&monitor_desktop, dir.join("kuma-monitor.desktop")).with_context(|| {
+            format!(
+                "staging kuma-monitor.desktop: it is not beside the running kuma ({}) — \
+                 the monitor's entry ships from the kumaui tree beside its binary",
+                kuma_binary.display()
+            )
+        })?;
+        let monitor_icon = parent.join("kuma-monitor.png");
+        std::fs::copy(&monitor_icon, dir.join("kuma-monitor.png")).with_context(|| {
+            format!(
+                "staging kuma-monitor.png: it is not beside the running kuma ({}) — \
+                 the entry names this icon, so the icon rides with it",
+                kuma_binary.display()
+            )
+        })?;
     }
     if config.nostr.enable {
         let mut names = vec!["kuma-nostrd", "kuma-nostr"];
@@ -313,6 +341,16 @@ mod tests {
         std::fs::write(bin_home.path().join("kuma-term.desktop"), "not really kuma-term\n")
             .unwrap();
         std::fs::write(bin_home.path().join("kuma-term.png"), "not really kuma-term\n").unwrap();
+        // Kamuy's trio rides the same road as the terminal's, and is
+        // written for every case for the same reason.
+        std::fs::write(bin_home.path().join("kuma-monitor"), "not really kuma-monitor\n").unwrap();
+        std::fs::write(
+            bin_home.path().join("kuma-monitor.desktop"),
+            "not really kuma-monitor\n",
+        )
+        .unwrap();
+        std::fs::write(bin_home.path().join("kuma-monitor.png"), "not really kuma-monitor\n")
+            .unwrap();
         if cfg.nostr.enable {
             let mut names = vec!["kuma-nostrd", "kuma-nostr"];
             if cfg.nostr.relay.enable {

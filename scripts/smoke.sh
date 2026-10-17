@@ -1338,6 +1338,19 @@ smoke_published() {
             || bad "Koguma's icon did not land where the theme looks for it"
         ok "Koguma ships installed, entry and icon and all"
 
+        # Kamuy, the monitor, riding since 44.8.0's pin: the same three
+        # questions, asked of the fifth baked binary. Its entry claims
+        # no mimetype — observation only, apps not processes — so the
+        # entry, the binary and the icon are the whole ship, and there
+        # is no mimeapps question to ride with them.
+        guest 'test -f /usr/share/applications/kuma-monitor.desktop' \
+            || bad "Kamuy ships no desktop entry on the booted machine"
+        guest 'command -v kuma-monitor >/dev/null' \
+            || bad "Kamuy's entry names kuma-monitor, which is not in the image"
+        guest 'test -f /usr/share/icons/hicolor/256x256/apps/kuma-monitor.png' \
+            || bad "Kamuy's icon did not land where the theme looks for it"
+        ok "Kamuy ships installed, entry and icon and all"
+
         # The shell, asked the only way this stage can ask.
         #
         # THERE IS NO SESSION HERE. The installed machine declares no
@@ -3546,8 +3559,11 @@ smoke_boot() {
     # here has ever run it. ldd reads the verdict out of the loader —
     # and it exits 0 with libraries missing on several ld.so versions,
     # so the output is the verdict, not the status.
+    # kuma-term joined the loop late (44.8.0 completes 44.7.0's ride:
+    # its baked terminal shipped without ever being ldd'd here), and
+    # kuma-monitor rides from birth.
     local bin missing
-    for bin in kuma-shell kuma-greeter kuma-files; do
+    for bin in kuma-shell kuma-greeter kuma-files kuma-term kuma-monitor; do
         guest "test -x /usr/bin/$bin" || continue
         missing=$(guest "ldd /usr/bin/$bin" | grep "not found")
         [ -z "$missing" ] \

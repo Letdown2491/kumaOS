@@ -3311,6 +3311,22 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     e.raw(
         "RUN desktop-file-validate /usr/share/applications/kuma-term.desktop \\\n    && test -x /usr/bin/kuma-term \\\n    && test -f /usr/share/icons/hicolor/256x256/apps/kuma-term.png\n",
     );
+    // Kamuy, the monitor: the fifth kumaui binary, riding the first
+    // release whose own build.sh installs the same trio this stages —
+    // v0.4.0 graduated the packaging, so the image is no longer
+    // hand-placing anything the tree does not produce. The entry
+    // claims no MimeType (observation only: apps, not processes) and
+    // no field code, so there is no mimeapps question, and the same
+    // three questions hold.
+    let monitor_bin = e.supplied("kuma-monitor");
+    e.copy_exec(&monitor_bin, "/usr/bin/kuma-monitor");
+    let monitor_desktop = e.supplied("kuma-monitor.desktop");
+    e.copy(&monitor_desktop, "/usr/share/applications/kuma-monitor.desktop");
+    let monitor_icon = e.supplied("kuma-monitor.png");
+    e.copy(&monitor_icon, "/usr/share/icons/hicolor/256x256/apps/kuma-monitor.png");
+    e.raw(
+        "RUN desktop-file-validate /usr/share/applications/kuma-monitor.desktop \\\n    && test -x /usr/bin/kuma-monitor \\\n    && test -f /usr/share/icons/hicolor/256x256/apps/kuma-monitor.png\n",
+    );
     e.copy_exec(&clipboard, "/usr/libexec/kuma-clipboard-bridge");
     e.copy(&fastfetch, "/etc/xdg/fastfetch/config.jsonc");
     e.copy(&fastfetch_logo, "/usr/lib/kuma/fastfetch-logo.txt");
