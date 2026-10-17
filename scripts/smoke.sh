@@ -2177,6 +2177,21 @@ smoke_published() {
                 # marked.
                 gsudo "touch /run/kuma-resumed" >/dev/null 2>&1 || true
 
+                # The journal's own count of this boot's suspend exits,
+                # read while the machine is demonstrably healthy (it just
+                # answered the boot_id and uptime reads above): the
+                # baseline the wait loop's journal road compares against.
+                # A count, not a mark, because the journal has no byte
+                # offset to slice -- and because attempt 2 shares this
+                # boot with attempt 1, whose exit is still in the ring;
+                # anything over the baseline is THIS attempt's wake.
+                # grep -c prints 0 and fails on no match, so the guest
+                # side carries its own || true -- the same trap the
+                # classification's image count already documents.
+                local s2h_journal_base
+                s2h_journal_base=$(guest_retry 'journalctl -b -k --no-pager | grep -c "PM: suspend exit" || true' || true)
+                s2h_journal_base=${s2h_journal_base:-0}
+
                 # Same unit-starting trick as the plain cycle: logind's polkit
                 # is not in the way of the manager, and --no-block because the
                 # suspend is about to take the ssh session with it.
@@ -2189,24 +2204,62 @@ smoke_published() {
                 # 300s ceiling covers suspend, wake, a direct hibernate and
                 # the write, with room to spare.
                 #
-                # The wake is read off the console rather than waited out:
-                # a resumed kernel prints "PM: suspend exit" within seconds,
-                # the mark bounds the read to this attempt, and a wake seen
-                # while qemu is still alive answers the race now instead of
-                # at the ceiling.
+                # The wake is read, not waited out: a resumed kernel
+                # prints "PM: suspend exit" within seconds, a wake seen
+                # while qemu is still alive answers the race now instead
+                # of at the ceiling, and the read bounds itself to this
+                # attempt. It is read off TWO roads, because the console
+                # proved unreliable on exactly this path: run
+                # 39019495974's lap (2026-10-17, issue #33) shows a guest
+                # that suspended, woke on the alarm and sat answering ssh
+                # -- tailscaled's clock-jump line and the ata3.00 resume
+                # check both in evidence -- while its serial log never
+                # grew past the login prompt, and the journal carried
+                # kernel output the wire never did. The S3 resume kills
+                # ttyS0 where the S4 cycle's fresh boot never does. So
+                # the console stays the fast path, and the guest's own
+                # journal, read over the ssh road the classification
+                # block already trusts, is the road that does not die:
+                # the same line, from the ring the kernel demonstrably
+                # kept writing.
                 local s2h_console_mark s2h_woke=0 s2h_state="" s2h_image=""
                 s2h_console_mark=$(( $(stat -c %s "$log" 2>/dev/null || echo 0) + 1 ))
+                local s2h_t0
+                s2h_t0=$SECONDS
                 s2h_waited=0
                 while kill -0 "$qemu" 2>/dev/null && [ "$s2h_waited" -lt 300 ]; do
                     sleep 5
-                    s2h_waited=$((s2h_waited + 5))
+                    # Wall-clock, not the loop's +5: a journal poll
+                    # against a suspended guest costs a connect timeout
+                    # and a server-alive window, and a ceiling that
+                    # only counted sleeps would quietly become a
+                    # multiple of itself in wall time.
+                    s2h_waited=$((SECONDS - s2h_t0))
                     if ! kill -0 "$qemu" 2>/dev/null; then
                         s2h_done=1
                         break
                     fi
-                    if [ "$s2h_woke" -eq 0 ] \
-                        && tail -c "+$s2h_console_mark" "$log" 2>/dev/null \
-                            | grep -q 'PM: suspend exit'; then
+                    local s2h_seen=""
+                    if tail -c "+$s2h_console_mark" "$log" 2>/dev/null \
+                        | grep -q 'PM: suspend exit'; then
+                        s2h_seen=1
+                    elif [ "$s2h_waited" -ge 15 ]; then
+                        # The journal road, held until the suspend is
+                        # certainly underway. One guest attempt per
+                        # poll, not a guest_retry: a retry's own 90s
+                        # deadline would let one poll against a hung
+                        # suspend outlive this loop's ceiling, where a
+                        # single attempt is bounded by the connect
+                        # timeout and the server-alive window (~20s,
+                        # measured as the shape of an ssh to a machine
+                        # mid-suspend). A failed read comes back empty
+                        # and counts as not-yet; the loop simply polls
+                        # again.
+                        local s2h_exits
+                        s2h_exits=$(guest 'journalctl -b -k --no-pager | grep -c "PM: suspend exit" || true' || true)
+                        [ -n "$s2h_exits" ] && [ "$s2h_exits" -gt "$s2h_journal_base" ] && s2h_seen=1
+                    fi
+                    if [ "$s2h_woke" -eq 0 ] && [ -n "$s2h_seen" ]; then
                         s2h_woke=1
                         # The guest is awake, and one ssh round trip
                         # separates the race from everything it could be
@@ -2288,7 +2341,7 @@ smoke_published() {
                     bad "the guest reset itself after the wake on both attempts, which no alarm race explains. Console at $log"
                 fi
                 if [ "$s2h_woke" -eq 0 ]; then
-                    bad "no wake on the console inside 300s of suspend-then-hibernate: the machine neither woke nor powered off, which no retry of the alarm answers. Console at $log"
+                    bad "no wake on the console or in the guest's journal inside 300s of suspend-then-hibernate: the machine neither woke nor powered off, which no retry of the alarm answers. Console at $log"
                 fi
                 bad "still running 300s into suspend-then-hibernate on attempt $s2h_attempt with the wake already seen: the unit reads ${s2h_state:-unknown} with ${s2h_image:-unknown} hibernation images this boot, so the direct hibernate never powered the machine off. Console at $log"
             done
