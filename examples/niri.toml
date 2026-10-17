@@ -85,7 +85,7 @@ flatpak = [
 # CLI tools that move faster than a rebuild-and-reboot cycle. Converged
 # like flatpaks; ad-hoc `brew install` stays yours, and `kuma capture`
 # offers to write it down here when you decide to keep it.
-brew = ["ripgrep", "fd", "jq", "gh", "lazygit", "btop"]
+brew = ["ripgrep", "fd", "jq", "gh", "lazygit"]
 
 # Your additions only. A desktop already enables what it needs (greeter,
 # firewalld, bluetooth, cups, avahi for .local names and driverless
