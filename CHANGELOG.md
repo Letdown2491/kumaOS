@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## v44.8.0 (2026-10-17)
 
 - **Kamuy, the monitor, ships: the image's kumaui pin moves to v0.4.0
