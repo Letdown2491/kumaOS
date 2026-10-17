@@ -344,11 +344,8 @@ mod tests {
         // Kamuy's trio rides the same road as the terminal's, and is
         // written for every case for the same reason.
         std::fs::write(bin_home.path().join("kuma-monitor"), "not really kuma-monitor\n").unwrap();
-        std::fs::write(
-            bin_home.path().join("kuma-monitor.desktop"),
-            "not really kuma-monitor\n",
-        )
-        .unwrap();
+        std::fs::write(bin_home.path().join("kuma-monitor.desktop"), "not really kuma-monitor\n")
+            .unwrap();
         std::fs::write(bin_home.path().join("kuma-monitor.png"), "not really kuma-monitor\n")
             .unwrap();
         if cfg.nostr.enable {
@@ -3081,17 +3078,9 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
                 "{mime} should open in Koguma's viewer"
             );
         }
-        for mime in [
-            "video/ogg",
-            "audio/mpeg",
-            "audio/flac",
-            "audio/ogg",
-            "audio/webm",
-        ] {
+        for mime in ["video/ogg", "audio/mpeg", "audio/flac", "audio/ogg", "audio/webm"] {
             assert!(
-                MIMEAPPS.contains(&format!(
-                    "{mime}=io.github.celluloid_player.Celluloid.desktop"
-                )),
+                MIMEAPPS.contains(&format!("{mime}=io.github.celluloid_player.Celluloid.desktop")),
                 "{mime} stays with Celluloid until the audio pane exists"
             );
         }
