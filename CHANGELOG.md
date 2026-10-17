@@ -1,6 +1,34 @@
 # Changelog
 
-## Unreleased
+## v44.8.0 (2026-10-17)
+
+- **Kamuy, the monitor, ships: the image's kumaui pin moves to v0.4.0
+  and the family's fourth app rides it.** The build stages a fifth
+  baked binary on the same road as the terminal's: binary, desktop
+  entry, icon, and nothing else, because Kamuy claims no mimetype
+  (observation only, apps not processes), so there is no mimeapps
+  question. The ride is honest about the tree it comes from: v0.4.0
+  graduated the monitor's packaging, so the image no longer
+  hand-places anything kumaui does not produce. The boot lap asks the
+  new binary the three questions it asks of Koguma (entry, binary,
+  icon), and the ldd loop over the baked binaries completes 44.7.0's
+  ride: kuma-term shipped without ever being ldd'd here, and joins
+  with kuma-monitor from birth.
+
+- **The hibernate lap reads the wake off the guest's journal when the
+  serial dies.** The suspend-then-hibernate cycle failed every night
+  since Oct 11 on "no wake on the console inside 300s", and the run
+  artifacts acquit the wake chain: the guest suspends, wakes on the
+  alarm and answers ssh throughout, while its console log never grows
+  past the resumed boot's login prompt. The S3 resume kills ttyS0
+  where the S4 cycle's fresh boot never does. The console grep stays
+  as the fast path; the journal, read over the ssh road the
+  classification already trusts, is the road that does not die.
+  (issue #33)
+
+- **rustls rides to 0.23.46.** Four RUSTSEC advisories against
+  0.23.45 turned the audit job red, and a red audit gate is a publish
+  run refusing to start; one patch-level bump, lock-only.
 
 - **The base carries the tools operating a machine assumes.** The
   composed base was Fedora's minimal manifest plus kuma's named adds,

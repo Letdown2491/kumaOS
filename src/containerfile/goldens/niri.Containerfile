@@ -44,6 +44,12 @@ COPY kuma-term.png /usr/share/icons/hicolor/256x256/apps/kuma-term.png
 RUN desktop-file-validate /usr/share/applications/kuma-term.desktop \
     && test -x /usr/bin/kuma-term \
     && test -f /usr/share/icons/hicolor/256x256/apps/kuma-term.png
+COPY --chmod=755 kuma-monitor /usr/bin/kuma-monitor
+COPY kuma-monitor.desktop /usr/share/applications/kuma-monitor.desktop
+COPY kuma-monitor.png /usr/share/icons/hicolor/256x256/apps/kuma-monitor.png
+RUN desktop-file-validate /usr/share/applications/kuma-monitor.desktop \
+    && test -x /usr/bin/kuma-monitor \
+    && test -f /usr/share/icons/hicolor/256x256/apps/kuma-monitor.png
 COPY --chmod=755 kuma-clipboard-bridge /usr/libexec/kuma-clipboard-bridge
 COPY fastfetch-config.jsonc /etc/xdg/fastfetch/config.jsonc
 COPY fastfetch-logo.txt /usr/lib/kuma/fastfetch-logo.txt
@@ -195,8 +201,8 @@ RUN . /usr/lib/os-release \
     esac \
     && sed -i \
         -e 's|^NAME=.*|NAME="kumaOS"|' \
-        -e "s|^PRETTY_NAME=.*|PRETTY_NAME=\"kumaOS 44.7.0${CODENAME:+ ($CODENAME)}\"|" \
-        -e "s|^VERSION=.*|VERSION=\"44.7.0${CODENAME:+ ($CODENAME)}\"|" \
+        -e "s|^PRETTY_NAME=.*|PRETTY_NAME=\"kumaOS 44.8.0${CODENAME:+ ($CODENAME)}\"|" \
+        -e "s|^VERSION=.*|VERSION=\"44.8.0${CODENAME:+ ($CODENAME)}\"|" \
         -e 's|^ID=.*|ID=kuma|' \
         -e 's|^DEFAULT_HOSTNAME=.*|DEFAULT_HOSTNAME="kumaos"|' \
         -e 's|^ANSI_COLOR=.*|ANSI_COLOR="0;38;2;126;224;168"|' \
@@ -214,7 +220,7 @@ COPY kuma.toml /usr/lib/kuma/kuma.toml
 
 LABEL io.kuma.image="1"
 LABEL io.kuma.builder=<version-and-commit>
-LABEL org.opencontainers.image.version="44.7.0"
+LABEL org.opencontainers.image.version="44.8.0"
 
 RUN find /run /tmp -mindepth 1 -delete; \
     find /var/log -type f -delete; \
