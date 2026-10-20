@@ -336,8 +336,14 @@ pub(crate) fn registries_d() -> String {
 /// 11.5 KiB download per build and keeps the step off the resume path
 /// entirely. The repo packages the second dnf installs are checksummed
 /// and stay cached as before.
-/// The repo packages the second dnf installs are checksummed
-/// and stay cached as before.
+///
+/// The release RPM's URL names download1, not the mirrors redirector:
+/// on 2026-10-20 the redirector kept handing out repos.eggycrew.com, a
+/// mirror whose DNS entry is gone (unresolvable from the runners and
+/// from a local box alike), and four CI jobs died in librepo's retries
+/// against the same dead host across two runs. download1 is
+/// rpmfusion's own canonical host — no mirror roulette between the ask
+/// and the file.
 ///
 /// The install must never DRAG mesa back: rpmfusion's freeworld build
 /// is versioned with Fedora's mesa and requires the matching one, so a
@@ -357,7 +363,7 @@ pub(crate) fn registries_d() -> String {
 /// the build rather than composing blind.
 pub(crate) fn mesa_freeworld() -> String {
     dnf_layer(
-        "rm -rf /var/cache/libdnf5/@commandline-* \\\n    && dnf -y install --setopt=keepcache=1 \"https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm\" \\\n    && v_mesa=$(rpm -q --qf '%{version}' mesa-libEGL) \\\n    && v_free=$(dnf -q repoquery --latest-limit=1 --qf '%{version}' mesa-va-drivers-freeworld) \\\n    && { if [ -z \"$v_free\" ]; then \\\n        echo \"repoquery found no mesa-va-drivers-freeworld candidate - cannot tell whether the freeworld build lags Fedora's mesa; failing rather than composing blind\" >&2; \\\n        exit 1; \\\n    elif [ \"$v_free\" = \"$v_mesa\" ]; then \\\n        dnf -y install --setopt=keepcache=1 --allowerasing mesa-va-drivers-freeworld; \\\n    else \\\n        echo \"note: mesa-freeworld's build ($v_free) lags Fedora's mesa ($v_mesa) - installing it would downgrade mesa to the build whose LLVM JIT crashes the greeter (kumaOS#36)\" >&2; \\\n        echo \"skipping the freeworld install: VA-API decode falls back to CPU until rpmfusion's rebuild catches up\" >&2; \\\n    fi; }",
+        "rm -rf /var/cache/libdnf5/@commandline-* \\\n    && dnf -y install --setopt=keepcache=1 \"https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm\" \\\n    && v_mesa=$(rpm -q --qf '%{version}' mesa-libEGL) \\\n    && v_free=$(dnf -q repoquery --latest-limit=1 --qf '%{version}' mesa-va-drivers-freeworld) \\\n    && { if [ -z \"$v_free\" ]; then \\\n        echo \"repoquery found no mesa-va-drivers-freeworld candidate - cannot tell whether the freeworld build lags Fedora's mesa; failing rather than composing blind\" >&2; \\\n        exit 1; \\\n    elif [ \"$v_free\" = \"$v_mesa\" ]; then \\\n        dnf -y install --setopt=keepcache=1 --allowerasing mesa-va-drivers-freeworld; \\\n    else \\\n        echo \"note: mesa-freeworld's build ($v_free) lags Fedora's mesa ($v_mesa) - installing it would downgrade mesa to the build whose LLVM JIT crashes the greeter (kumaOS#36)\" >&2; \\\n        echo \"skipping the freeworld install: VA-API decode falls back to CPU until rpmfusion's rebuild catches up\" >&2; \\\n    fi; }",
     )
 }
 

@@ -5,7 +5,7 @@ RUN --mount=type=cache,target=/var/cache/libdnf5 \
     dnf -y install --setopt=keepcache=1 cosmic-session cosmic-edit flatpak fastfetch gnome-keyring gnome-keyring-pam pipewire pipewire-pulseaudio wireplumber mesa-dri-drivers mesa-vulkan-drivers vulkan-loader glibc-langpack-en NetworkManager-wifi wpa_supplicant power-profiles-daemon bluez firewalld zram-generator-defaults avahi nss-mdns cups system-config-printer spice-vdagent udisks2 default-fonts-core-emoji google-noto-sans-cjk-vf-fonts adwaita-icon-theme desktop-file-utils
 RUN --mount=type=cache,target=/var/cache/libdnf5 \
     rm -rf /var/cache/libdnf5/@commandline-* \
-    && dnf -y install --setopt=keepcache=1 "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+    && dnf -y install --setopt=keepcache=1 "https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
     && v_mesa=$(rpm -q --qf '%{version}' mesa-libEGL) \
     && v_free=$(dnf -q repoquery --latest-limit=1 --qf '%{version}' mesa-va-drivers-freeworld) \
     && { if [ -z "$v_free" ]; then \
