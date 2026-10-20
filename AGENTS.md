@@ -32,8 +32,10 @@ running binary should always be a commit you can name.
 
 Commits are the agent's to make — the tree stays clean and every change
 is named by a commit — but `git push`, branch or tag, moves only on an
-explicit go: a tag is a release trigger and a branch push starts a
-35-minute battery, and neither is the agent's call to spend.
+explicit go: a branch push starts a 35-minute battery, and a `v*` tag
+starts the release road — the release page, then both image publishes
+(niri, cosmic) with their validation batteries, sequential — and neither
+is the agent's call to spend.
 
 ## The nostr layer's dev loop (44.4.0)
 

@@ -146,6 +146,13 @@ infers from the declared desktop (`niri` tracks the published `niri` tag,
 `cosmic` the `cosmic` tag). `kuma upgrade --check` costs one registry
 metadata read and builds nothing.
 
+The moving tag moves when the release does: pushing a `v*` tag publishes
+both tiers through the staging/prove/promote pipeline (each tier's image
+is boot-validated from the registry before its tag moves), so a release
+and its fetchable images are the same event. A red leg fails the tag
+run with the moving tags untouched — an upgrade on the previous release
+keeps reading the last image that booted, never a half-published one.
+
 
 ## Boot health and automatic rollback
 

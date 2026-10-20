@@ -1,10 +1,12 @@
 # Publish a kuma image to ghcr.
 #
-# Manual only, on purpose. A published image is the one artifact here that
-# strangers pull and boot, and the first ones should go out when somebody
-# decides to, not as a side effect of a tag. Tag-triggered publishing is
-# the eventual shape and costs one `on: push: tags:` block when the flow
-# has been run a few times by hand.
+# One image per run: dispatch it by hand for a one-off re-publish of a
+# single tier, or cut a release tag — publish-tag.yml dispatches it once
+# per tier (niri, then cosmic), signed always, and fails the tag run if
+# either leg does. The two roads share a concurrency group, because the
+# one race this pipeline cannot survive is two promotes moving the
+# moving tags at the same time; a run that arrives while another holds
+# the group queues, it does not cancel.
 #
 # What this buys, and it is worth being clear that it is the cheap half:
 # somebody already on an atomic Fedora can `bootc switch` to this image
@@ -54,6 +56,13 @@ on:
 permissions:
   contents: read
   packages: write
+
+# Serialized against publish-tag.yml's legs and any manual dispatch:
+# the staging tags are per-example, but the moving tags are global, and
+# two promotes in flight is the one state this pipeline cannot survive.
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 jobs:
   # Compose and stage. The real tags (the moving `:niri` and the pinned
