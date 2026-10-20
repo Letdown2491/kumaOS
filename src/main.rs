@@ -103,6 +103,12 @@ pub(crate) const VERSION: &str = concat!(
     ")"
 );
 
+/// The version number alone, no stamp: what the OCI version label
+/// carries, what os-release's VERSION opens with, and what a delta's
+/// `io.kuma.delta` records. No spaces, so an inspect template can slot
+/// it between other fields and a splitn keeps it whole.
+pub(crate) const KUMA_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Parser)]
 #[command(name = "kuma", version = VERSION, about = "Your system is one file.")]
 struct Cli {
@@ -288,7 +294,7 @@ enum Cmd {
     /// already validated. Machines whose origin names the published
     /// registry image fetch the release (bootc is the engine); machines
     /// running a local build delta-build from the release image with
-    /// their declaration compiled in (kumaOS#44, phase 2).
+    /// their declaration compiled in (kumaOS#44).
     Upgrade {
         /// Ask whether a newer release exists, and change nothing. One
         /// registry metadata read via bootc; no pull, no build, no staging.
@@ -1143,34 +1149,9 @@ fn build_image_pinned(config_path: &Path, tag: &str, pin: Pin) -> Result<Option<
     ])?;
 
     // The tag just moved, stranding the previous build as a dangling
-    // <none> (~3.5 GB each — they once piled up to 150 GB).
-    //
-    // This used to be `podman image prune -f --filter label=io.kuma.image`,
-    // which is a sweep of the whole store and MEASURED AT 4.6 TO 5.1
-    // SECONDS ON EVERY BUILD, including a first build with nothing to
-    // reclaim. A bare prune was 3.8s and listing by label alone 2.1s, so
-    // the cost is podman walking storage rather than the filter or the
-    // size of the pile. One targeted delete is milliseconds.
-    //
-    // Reclaiming what is already lying around is `kuma clean`'s job and
-    // it is documented as such; what belongs here is only the stray this
-    // build just made.
-    //
-    // Two guards, and both have a real machine behind them. A rebuild
-    // that changes nothing leaves the tag on the SAME image, so deleting
-    // "the previous one" unguarded deletes what was just built. And an
-    // image that still carries another tag is not stranded: a machine
-    // that keeps a second `localhost/kuma-*` tag pointing at the same
-    // image is ordinary, and removing by ID there would either fail on
-    // multiple tags or take one somebody wanted.
-    if let (Some(before), Ok(after)) = (previous, image_id(tag)) {
-        if before != after
-            && has_no_tags(&before)
-            && host_output(&["podman", "rmi", &before]).is_ok()
-        {
-            note("Reclaimed the previous build.");
-        }
-    }
+    // <none> (~3.5 GB each — they once piled up to 150 GB). One targeted
+    // delete, milliseconds; the guards live on the helper.
+    reclaim_stranded(tag, previous);
     // A build that followed a pin built from exactly that digest, so
     // there is nothing to resolve; one that refreshed asks the tag it
     // just pulled what it resolved to.
@@ -1187,6 +1168,26 @@ fn build_image_pinned(config_path: &Path, tag: &str, pin: Pin) -> Result<Option<
     // The record is taken from the image that just came out, so it says
     // what shipped rather than what was asked for.
     Ok(lock::record(config_path, &declared_base, digest, tag))
+}
+
+/// Reclaim the build a tag move just stranded. A rebuild that changes
+/// nothing leaves the tag on the SAME image, so deleting "the previous
+/// one" unguarded deletes what was just built; and an image that still
+/// carries another tag is not stranded — a machine that keeps a second
+/// `localhost/kuma-*` tag pointing at the same image is ordinary, and
+/// removing by ID there would either fail on multiple tags or take one
+/// somebody wanted. Reclaiming what is already lying around is `kuma
+/// clean`'s job and it is documented as such; what belongs here is only
+/// the stray this build just made.
+fn reclaim_stranded(tag: &str, previous: Option<String>) {
+    if let (Some(before), Ok(after)) = (previous, image_id(tag)) {
+        if before != after
+            && has_no_tags(&before)
+            && host_output(&["podman", "rmi", &before]).is_ok()
+        {
+            note("Reclaimed the previous build.");
+        }
+    }
 }
 
 /// Where a disk image is mounted, if anything has it open through a loop
@@ -1549,24 +1550,17 @@ fn update_staged_response(
     }
 }
 
-fn upgrade_preview_response(origin: &str, actions: &[Action]) -> response::Response {
+fn upgrade_preview_response(origin: &str, actions: &[Action], lane: &str) -> response::Response {
     response::Response::new()
         .dry_run()
-        .field("lane", "fetch")
+        .field("lane", lane)
         .field("origin", origin)
-        .actions(actions)
-}
-
-fn upgrade_delta_response(inferred: &str, actions: &[Action]) -> response::Response {
-    response::Response::new()
-        .field("lane", "delta")
-        .field("delta_builds", false)
-        .field("inferred_release", inferred)
         .actions(actions)
 }
 
 fn upgrade_check_response(
     origin: &str,
+    fetch: bool,
     running_version: Option<String>,
     running_digest: Option<String>,
     release_version: Option<String>,
@@ -1575,7 +1569,7 @@ fn upgrade_check_response(
 ) -> response::Response {
     response::Response::new()
         .field("check", true)
-        .field("lane", "fetch")
+        .field("lane", if fetch { "fetch" } else { "delta" })
         .field("origin", origin)
         .field("running", serde_json::json!({
             "version": running_version, "digest": running_digest,
@@ -1774,28 +1768,37 @@ fn upgrade(config_path: &Path, check: bool, yes: bool, json: bool) -> Result<()>
              tier exists for it. `kuma update` rebuilds from the declaration."
         ),
         UpgradeLane::Delta { inferred } => {
-            let actions =
-                vec![Action::new("update", "kuma update", "rebuild from the declaration")];
-            let prose = format!(
-                "This machine's release enters from a local build; releases are inferred\n\
-                 from this machine's desktop: {inferred}.\n\n\
-                 The delta build that would carry this declaration onto the release\n\
-                 (declaration compiled in, base exchanged) is phase 2 of the release-as-\n\
-                 ingredient plan (kumaOS#44) and is not built yet. Until it lands, `kuma\n\
-                 update` rebuilds from the declaration, and the ceiling holds: the OS\n\
-                 moves only as far as the recipe the running kuma compiled.\n"
-            );
-            if json {
-                upgrade_delta_response(&inferred, &actions).print(json, "");
+            if check {
+                upgrade_check(&deps, &inferred, false, json)
+            } else if yes {
+                upgrade_delta_apply(
+                    config_path,
+                    &config,
+                    &inferred,
+                    deps.booted.digest.as_deref(),
+                    json,
+                )
             } else {
-                println!("{prose}");
-                print_actions(&actions);
+                let actions = vec![Action::new(
+                    "check",
+                    "kuma upgrade --check",
+                    "ask the release tag whether a newer kumaOS exists",
+                )];
+                let prose = format!(
+                    "Release lane (delta): this machine's release enters from local builds;\n\
+                     the release tier is inferred from the declaration's desktop: {inferred}.\n\n\
+                     Run `kuma upgrade --check` to ask the registry (no pull, no build), or\n\
+                     `kuma upgrade --yes` to delta-build this declaration onto the release\n\
+                     and stage it. Fields the delta compiler cannot carry (an account, a\n\
+                     backup, a timezone) refuse loudly and say `kuma update`.\n"
+                );
+                upgrade_preview_response(&inferred, &actions, "delta").print(json, &prose);
+                Ok(())
             }
-            Ok(())
         }
         UpgradeLane::Fetch { origin } => {
             if check {
-                upgrade_check(&deps, &origin, json)
+                upgrade_check(&deps, &origin, true, json)
             } else if yes {
                 upgrade_fetch(&origin, json)
             } else {
@@ -1810,7 +1813,7 @@ fn upgrade(config_path: &Path, check: bool, yes: bool, json: bool) -> Result<()>
                      Run `kuma upgrade --check` to ask the registry (no pull, no build), or\n\
                      `kuma upgrade --yes` to fetch and stage directly.\n"
                 );
-                upgrade_preview_response(&origin, &actions).print(json, &prose);
+                upgrade_preview_response(&origin, &actions, "fetch").print(json, &prose);
                 Ok(())
             }
         }
@@ -1832,8 +1835,8 @@ enum UpgradeLane {
     /// the origin tag.
     Fetch { origin: String },
     /// Local-build origin with a desktop: the release is inferred from
-    /// the declared desktop, and delta-built with the declaration
-    /// compiled in. Phase 2 of #44 — the delta compiler is not built yet.
+    /// the declared desktop, and the declaration is delta-compiled
+    /// onto the release digest (see `containerfile::delta`).
     Delta { inferred: String },
     /// No desktop: no release image exists to fetch.
     Headless,
@@ -1852,7 +1855,7 @@ fn upgrade_lane(desktop: config::Desktop, booted: &deployment::Slot) -> UpgradeL
     UpgradeLane::Delta { inferred: format!("{}:{tag}", published_repo()) }
 }
 
-fn upgrade_check(deps: &deployment::Deployments, origin: &str, json: bool) -> Result<()> {
+fn upgrade_check(deps: &deployment::Deployments, origin: &str, fetch: bool, json: bool) -> Result<()> {
     note("Asking the registry what the release tag holds...");
     // A metadata-only read: no layers, and the baked signature policy
     // applies (skopeo enforces /etc/containers/policy.json), so an
@@ -1883,12 +1886,17 @@ fn upgrade_check(deps: &deployment::Deployments, origin: &str, json: bool) -> Re
         vec![Action::new(
             "upgrade",
             "kuma upgrade --yes",
-            "fetch the release and stage it (applies on reboot)",
+            if fetch {
+                "fetch the release and stage it (applies on reboot)"
+            } else {
+                "delta-build this declaration onto the release and stage it (applies on reboot)"
+            },
         )]
     };
     if json {
         upgrade_check_response(
             origin,
+            fetch,
             deps.booted.version.clone(),
             deps.booted.digest.clone(),
             release_version,
@@ -1910,20 +1918,161 @@ fn upgrade_check(deps: &deployment::Deployments, origin: &str, json: bool) -> Re
         );
     } else {
         println!(
-            "Release lane: fetching from the bootc origin ({origin}).\n\
+            "Release lane: {} the release tag ({origin}).\n\
              Running:   {running_version} ({}...)\n\
              Released:  {} ({})\n\n\
-             Re-run with --yes to fetch and stage. The change takes effect on next boot;\n\
+             Re-run with --yes to {}. The change takes effect on next boot;\n\
              the previous deployment stays available for `kuma rollback`.",
+            if fetch { "fetching from" } else { "delta-building onto" },
             deps.booted.digest.as_deref().unwrap_or("no digest recorded").chars().take(14).collect::<String>(),
             release_version.as_deref().unwrap_or("an unlabeled image"),
             digest.chars().take(14).collect::<String>(),
+            if fetch {
+                "fetch and stage"
+            } else {
+                "delta-build this declaration onto it and stage it"
+            },
         );
     }
     if !actions.is_empty() {
         println!();
         print_actions(&actions);
     }
+    Ok(())
+}
+
+/// The delta lane's apply: resolve the release, read the declaration
+/// baked into it, compile this machine's divergences as deltas, build
+/// FROM the release digest, and stage. The machine's declaration wins —
+/// everything the compiler carries rides; everything else refuses
+/// loudly (see the compiler). The lock's release slot records the
+/// resolution, beside the base story the full builds write.
+fn upgrade_delta_apply(
+    config_path: &Path,
+    config: &Config,
+    inferred: &str,
+    booted_digest: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    note("Asking the registry what the release tag holds...");
+    // Metadata-only: no layers, baked signature policy enforced. The
+    // digest is what the machine shares with the fleet; the version
+    // label is what the delta image reports (and bootupd reads).
+    let raw = host_output(&["sudo", "skopeo", "inspect", &format!("docker://{inferred}")])?;
+    let inspect: serde_json::Value =
+        serde_json::from_str(raw.trim()).context("skopeo inspect returned nothing readable")?;
+    let digest = inspect
+        .get("Digest")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .context("skopeo inspect answered without a digest")?;
+    let version = inspect
+        .pointer("/Labels/org.opencontainers.image.version")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .context("the release image carries no version label; the delta cannot report what it stages")?;
+    if booted_digest == Some(digest.as_str()) {
+        let prose = format!("Already current: {inferred} holds what is booted.\n");
+        upgrade_current_response(inferred).print(json, &prose);
+        return Ok(());
+    }
+    if !lock::is_digest(&digest) {
+        bail!("the release tag resolved to a malformed digest; refusing to build from it");
+    }
+
+    // The pull is user-space: the delta build FROMs the digest out of
+    // this user's storage, and stage() syncs the RESULT into root's.
+    note(&format!("Pulling the release image ({version})..."));
+    let pinned = lock::pinned_ref(inferred, &digest);
+    run_host(&["podman", "pull", &format!("docker://{pinned}")])?;
+
+    note("Reading the release's baked declaration...");
+    let base_text = host_output(&[
+        "podman",
+        "run",
+        "--rm",
+        "--entrypoint",
+        "cat",
+        &pinned,
+        "/usr/lib/kuma/kuma.toml",
+    ])
+    .with_context(|| {
+        format!("the release image carries no baked declaration at /usr/lib/kuma/kuma.toml")
+    })?;
+    // The nostr layer's presence is probed, not assumed: a 44.9.0-shaped
+    // base shipped it only when its example armed it, and the delta
+    // must refuse arming an absent unit rather than fail a build that
+    // names a unit file that is not there.
+    let listing = host_output(&[
+        "podman",
+        "run",
+        "--rm",
+        "--entrypoint",
+        "sh",
+        &pinned,
+        "-c",
+        "ls /usr/lib/systemd/user/kuma-nostrd.service /usr/lib/systemd/user/nip46-relay.service /usr/lib/systemd/system/kuma-nostr-serve.service 2>/dev/null",
+    ])
+    .unwrap_or_default();
+    let present = |name: &str| listing.lines().any(|l| l.trim().ends_with(name));
+    let units = containerfile::delta::BaseUnits {
+        nostrd: present("kuma-nostrd.service"),
+        relay: present("nip46-relay.service"),
+        serve: present("kuma-nostr-serve.service"),
+    };
+
+    note("Compiling the declaration's deltas...");
+    let config_text = std::fs::read_to_string(config_path)
+        .with_context(|| format!("cannot read {}", config_path.display()))?;
+    let dir = tempfile::tempdir().context("cannot create build directory")?;
+    containerfile::delta::write_context(
+        config,
+        &base_text,
+        &containerfile::delta::Release {
+            reference: inferred.to_string(),
+            digest: digest.clone(),
+            version: version.clone(),
+        },
+        units,
+        &config_text,
+        dir.path(),
+    )?;
+
+    note("Building the delta image...");
+    let previous = image_id(DEFAULT_TAG).ok();
+    run_host(&[
+        "podman",
+        "build",
+        "--tag",
+        DEFAULT_TAG,
+        dir.path().to_str().context("non-UTF-8 temp path")?,
+    ])?;
+    reclaim_stranded(DEFAULT_TAG, previous);
+
+    note("Staging the delta image...");
+    if !stage(DEFAULT_TAG)? {
+        bail!("nothing staged; the system already runs this image");
+    }
+    lock::record_release(
+        config_path,
+        lock::Release { reference: inferred.to_string(), digest: digest.clone(), version: Some(version.clone()) },
+    );
+
+    let reboot = reboot_action();
+    if json {
+        upgrade_staged_response(Some(version.clone()), Some(digest.clone()), reboot).print(json, "");
+        return Ok(());
+    }
+    println!(
+        "Delta built: this declaration compiled onto kumaOS {version} ({}).\n\
+         Staged; the change takes effect on next boot. The previous deployment\n\
+         stays available for `kuma rollback`. What the delta does not carry —\n\
+         the release's own new curated packages, its converger scripts — rides\n\
+         the next `kuma update` full rebuild.",
+        digest.chars().take(14).collect::<String>(),
+    );
+    println!();
+    print_actions(&[reboot]);
     Ok(())
 }
 

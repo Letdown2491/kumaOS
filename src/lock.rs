@@ -38,7 +38,27 @@ pub struct Lock {
     /// but a lockfile that can't tell you how old it is is annoying.
     pub locked_at: String,
     pub base: Base,
+    /// The release the last `kuma upgrade` carried this declaration
+    /// onto — recorded by the delta lane only; a full build has no
+    /// release input, and its lock carries no release slot. Beside
+    /// `base` so `git diff kuma.lock` tells both stories: the Fedora
+    /// base move (`kuma update`) and the release move (`kuma upgrade`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release: Option<Release>,
     pub resolved: Resolved,
+}
+
+/// One release resolution: the moving tag the machine tracks, the
+/// digest that tag held when the delta compiled against it, and the
+/// release image's own version label. The reference and digest are the
+/// same shape [`Base`] carries — what a build FROM'd — and the version
+/// is what the machine reports as its kumaOS release after reboot.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Release {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub digest: String,
+    pub version: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -202,7 +222,7 @@ fn index_digest(repo_digests: &[&str], manifest: &str, reference: &str) -> Strin
 /// `sha256:` and exactly 64 lowercase hex digits, which is the only shape
 /// a manifest digest takes. Checked on load rather than on use, so there
 /// is one gate rather than one per interpolation site.
-fn is_digest(value: &str) -> bool {
+pub(crate) fn is_digest(value: &str) -> bool {
     match value.strip_prefix("sha256:") {
         Some(hex) => {
             hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
@@ -422,9 +442,49 @@ pub fn record(config_path: &Path, declared_base: &str, digest: String, tag: &str
         schema_version: CURRENT_SCHEMA,
         locked_at: utc_now(),
         base: Base { reference: declared_base.to_string(), digest },
+        release: None,
         resolved: Resolved { rpm },
     };
     let path = path_for(config_path);
+    if let Err(err) = lock.save(&path) {
+        eprintln!("{err:#}; continuing without a lock");
+        return None;
+    }
+    Some(lock)
+}
+
+/// Record a delta build's release resolution. The delta build composes
+/// no Fedora base and resolves no rpm EVRs, so `base` and `resolved`
+/// are left exactly as the last full build wrote them — the base story
+/// in `git diff` stays the full build's; the release story moves here.
+/// A machine with no lock at all (it never ran a full `kuma build`)
+/// gets a fresh one whose base is the release image itself, which is
+/// the honest statement: that image is what the last build FROM'd.
+///
+/// The digest is validated like [`for_config`] validates a hand-edited
+/// one: it is interpolated into a FROM line, which is an injection
+/// surface like any other.
+pub fn record_release(config_path: &Path, release: Release) -> Option<Lock> {
+    if !is_digest(&release.digest) {
+        eprintln!("release digest {:?} is malformed; no lock written", release.digest);
+        return None;
+    }
+    let path = path_for(config_path);
+    let mut lock = match for_config(config_path) {
+        Some(existing) => existing,
+        None => Lock {
+            schema_version: CURRENT_SCHEMA,
+            locked_at: String::new(),
+            base: Base {
+                reference: release.reference.clone(),
+                digest: release.digest.clone(),
+            },
+            release: None,
+            resolved: Resolved { rpm: BTreeMap::new() },
+        },
+    };
+    lock.locked_at = utc_now();
+    lock.release = Some(release);
     if let Err(err) = lock.save(&path) {
         eprintln!("{err:#}; continuing without a lock");
         return None;
@@ -479,6 +539,7 @@ mod tests {
                 reference: "quay.io/fedora/fedora-bootc:44".into(),
                 digest: digest.into(),
             },
+            release: None,
             resolved: Resolved {
                 rpm: rpms.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect(),
             },

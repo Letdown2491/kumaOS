@@ -104,6 +104,8 @@ fn etc_writes(containerfile: &str) -> Vec<String> {
 /// Byte-stable by contract: the goldens in `goldens/` pin the output
 /// for the declaration matrix, and a deliberate change is a golden
 /// diff someone reads.
+pub mod delta;
+
 pub fn generate(config: &Config) -> String {
     plan(config).text
 }
@@ -150,14 +152,25 @@ pub fn write_context(
     std::fs::write(dir.join("kuma.toml"), config_text)?;
     std::fs::copy(kuma_binary, dir.join("kuma"))
         .with_context(|| format!("staging {} into the build context", kuma_binary.display()))?;
-    // The nostr layer's binaries ride the same road: they live beside
-    // the running kuma, because the release ships the three together
-    // and a build whose siblings are missing is a checkout, not a
-    // release. The failure is honest and early — the nostr block's
-    // COPY would otherwise name files the context never carried.
+    // The nostr layer's binaries ride the same road, ALWAYS — the block
+    // ships the layer in every image with the preset deciding
+    // enablement, so the siblings stage whether or not this
+    // declaration arms it. The failure is honest and early — the nostr
+    // block's COPY would otherwise name files the context never
+    // carried.
     let parent = kuma_binary
         .parent()
         .with_context(|| "the running kuma has no parent directory".to_string())?;
+    for name in ["kuma-nostrd", "kuma-nostr", "nip46-relay"] {
+        let sibling = parent.join(name);
+        std::fs::copy(&sibling, dir.join(name)).with_context(|| {
+            format!(
+                "staging {name}: it is not beside the running kuma ({}); a \
+                 build needs the release's binaries together",
+                kuma_binary.display()
+            )
+        })?;
+    }
     // The desktop shell rides the same road, and is staged only where
     // an image will COPY it: built from the kumaui tree, beside the
     // running kuma, shipped with the release. On any other desktop the
@@ -270,22 +283,6 @@ pub fn write_context(
             )
         })?;
     }
-    if config.nostr.enable {
-        let mut names = vec!["kuma-nostrd", "kuma-nostr"];
-        if config.nostr.relay.enable {
-            names.push("nip46-relay");
-        }
-        for name in names {
-            let sibling = parent.join(name);
-            std::fs::copy(&sibling, dir.join(name)).with_context(|| {
-                format!(
-                    "staging {name}: it is not beside the running kuma ({}); a \
-                     nostr-enabled image needs the release's binaries together",
-                    kuma_binary.display()
-                )
-            })?;
-        }
-    }
     let plan = plan(config);
     std::fs::write(dir.join("Containerfile"), &plan.text)?;
     emit::materialize(&plan.files, dir)?;
@@ -294,7 +291,9 @@ pub fn write_context(
 
 /// "de_DE.UTF-8" → "de": the glibc langpack that provides the locale.
 /// Locales without a territory part (C, POSIX, C.UTF-8) need none.
-fn langpack(locale: &str) -> Option<&str> {
+/// pub(crate) because the delta compiler routes a locale divergence
+/// through the same langpack arithmetic.
+pub(crate) fn langpack(locale: &str) -> Option<&str> {
     let lang = locale.split('_').next()?;
     (locale.contains('_')
         && (2..=3).contains(&lang.len())
@@ -348,14 +347,11 @@ mod tests {
             .unwrap();
         std::fs::write(bin_home.path().join("kuma-monitor.png"), "not really kuma-monitor\n")
             .unwrap();
-        if cfg.nostr.enable {
-            let mut names = vec!["kuma-nostrd", "kuma-nostr"];
-            if cfg.nostr.relay.enable {
-                names.push("nip46-relay");
-            }
-            for name in names {
-                std::fs::write(bin_home.path().join(name), format!("not really {name}\n")).unwrap();
-            }
+        // The nostr layer's siblings ride unconditionally now: the
+        // block ships the layer in every image, so every case's
+        // context needs all three.
+        for name in ["kuma-nostrd", "kuma-nostr", "nip46-relay"] {
+            std::fs::write(bin_home.path().join(name), format!("not really {name}\n")).unwrap();
         }
         write_context(&cfg, toml, &stub, dir).unwrap();
     }
@@ -2376,7 +2372,7 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
 
         let enabled: Vec<String> = containerfile
             .lines()
-            .filter(|l| l.contains("systemctl") && l.contains("enable"))
+            .filter(|l| l.contains("systemctl") && (l.contains("enable") || l.contains("preset")))
             .flat_map(|l| l.split_whitespace())
             .filter(|u| u.ends_with(".service") || u.ends_with(".timer") || u.ends_with(".target"))
             .map(String::from)

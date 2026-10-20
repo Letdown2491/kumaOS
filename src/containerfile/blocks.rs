@@ -4520,7 +4520,12 @@ pub(super) fn live_masks() -> Vec<&'static str> {
 /// carries their values: a binary with no config file of its own is a
 /// binary whose every fact arrives on argv, and that is the shape an
 /// auditor can hold in their head.
-fn nostrd_service(nostr: &crate::config::Nostr) -> String {
+/// The daemon's exec line: the fact the unit and a delta's relay
+/// drop-in must agree on, so it is written once. The drop-in's whole
+/// job is overriding this line with the declaration's own relay set —
+/// an override ExecStart in systemd replaces the unit's, so the
+/// drop-in resets the line first and restates it.
+pub(crate) fn nostrd_exec_line(nostr: &crate::config::Nostr) -> String {
     // The list is [local, ...declared]: the bunker's first subscription
     // is the relay on this machine, and the declared set follows as
     // fallbacks. A relay that is not baked (the off switch) leaves the
@@ -4539,6 +4544,11 @@ fn nostrd_service(nostr: &crate::config::Nostr) -> String {
     if let Some(secs) = nostr.inactivity_lock_secs.filter(|secs| *secs > 0) {
         inactivity_arg.push_str(&format!(" --inactivity-lock-secs {secs}"));
     }
+    format!("/usr/bin/kuma-nostrd{relay_args}{inactivity_arg}")
+}
+
+fn nostrd_service(nostr: &crate::config::Nostr) -> String {
+    let exec_line = nostrd_exec_line(nostr);
     format!(
         r#"[Unit]
 Description=kumaOS nostr bunker
@@ -4549,7 +4559,7 @@ PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
-ExecStart=/usr/bin/kuma-nostrd{relay_args}{inactivity_arg}
+ExecStart={exec_line}
 # The state dir has to exist before the sandbox does: ReadWritePaths
 # names it, and a namespace that cannot mount a missing path fails the
 # unit before the daemon runs. The `+` runs this one command unsandboxed
@@ -4599,9 +4609,12 @@ WantedBy=graphical-session.target
 /// the port lands.
 fn nostr(e: &mut Emitter<'_>) {
     let config = e.config;
-    if !config.nostr.enable {
-        return;
-    }
+    // The layer ships ALWAYS: units and binaries in every image, with
+    // enablement as a preset file — the distro pattern, ship the unit
+    // and let the preset decide. The gate this used to return behind is
+    // the one conditional a delta build could not compile across: with
+    // the layer always present, `[nostr]` on/off is a one-file delta
+    // (rewrite the preset, apply it) instead of a full rebuild.
     let unit = e.stage("kuma-nostrd.service", nostrd_service(&config.nostr));
     // Supplied by write_context from beside the running binary: the
     // release carries the three together, and a build that cannot find
@@ -4614,36 +4627,51 @@ fn nostr(e: &mut Emitter<'_>) {
     e.copy_exec(&nostrd, "/usr/bin/kuma-nostrd");
     e.copy_exec(&cli, "/usr/bin/kuma-nostr");
     e.copy(&unit, "/usr/lib/systemd/user/kuma-nostrd.service");
+    // The local relay rides too, opt-in by preset rather than by
+    // absence: a delta that arms it needs the unit in the base, and
+    // the base is the release example's — which does not arm it.
+    let relay = e.supplied("nip46-relay");
+    let relay_unit = e.stage("nip46-relay.service", relay_service());
+    e.copy_exec(&relay, "/usr/bin/nip46-relay");
+    e.copy(&relay_unit, "/usr/lib/systemd/user/nip46-relay.service");
+
+    // The tailnet exposure: a converge script and a oneshot, and only
+    // when the declaration says serve. The switch is the declaration's
+    // own, not an inference from the relay and tailscaled both being on
+    // — those two say the relay exists and that the machine talks to a
+    // tailnet, and neither says a loopback-only relay belongs on it.
+    // Serving also needs tailscaled; a declaration that says serve
+    // without it bakes nothing, and the doctor names the missing piece.
+    // (This one stays a build-time enable rather than a preset line:
+    // it is conditional on another unit's presence, which a preset
+    // file cannot see.)
+    if config.nostr.serve && config.services.enable.iter().any(|s| s == "tailscaled.service") {
+        let serve = e.stage("kuma-nostr-serve", NOSTR_SERVE_SCRIPT);
+        let serve_unit = e.stage("kuma-nostr-serve.service", NOSTR_SERVE_SERVICE);
+        e.copy_exec(&serve, "/usr/libexec/kuma-nostr-serve");
+        e.copy(&serve_unit, "/usr/lib/systemd/system/kuma-nostr-serve.service");
+        e.enable(&["kuma-nostr-serve.service"]);
+    }
+
+    // The preset file, explicit both ways for both units: a preset with
+    // no opinion leaves a unit's existing enablement standing, so the
+    // relay's disarm must be spoken, not implied by silence.
+    let armed_nostrd = config.nostr.enable;
+    let armed_relay = config.nostr.enable && config.nostr.relay.enable;
+    let preset = e.stage(
+        "50-kuma-nostr.preset",
+        format!(
+            "{} kuma-nostrd.service\n{} nip46-relay.service\n",
+            if armed_nostrd { "enable" } else { "disable" },
+            if armed_relay { "enable" } else { "disable" },
+        ),
+    );
+    e.copy(&preset, "/usr/lib/systemd/user-preset/50-kuma-nostr.preset");
     // --global because the bunker is session furniture for every
     // account: the first login arms it without each user opting in
-    // again.
-    if config.nostr.relay.enable {
-        let relay = e.supplied("nip46-relay");
-        let relay_unit = e.stage("nip46-relay.service", relay_service());
-        e.copy_exec(&relay, "/usr/bin/nip46-relay");
-        e.copy(&relay_unit, "/usr/lib/systemd/user/nip46-relay.service");
-
-        // The tailnet exposure: a converge script and a oneshot, and
-        // only when the declaration says serve. The switch is the
-        // declaration's own, not an inference from the relay and
-        // tailscaled both being on — those two say the relay exists and
-        // that the machine talks to a tailnet, and neither says a
-        // loopback-only relay belongs on it. Serving also needs
-        // tailscaled; a declaration that says serve without it bakes
-        // nothing, and the doctor names the missing piece.
-        if config.nostr.serve && config.services.enable.iter().any(|s| s == "tailscaled.service") {
-            let serve = e.stage("kuma-nostr-serve", NOSTR_SERVE_SCRIPT);
-            let serve_unit = e.stage("kuma-nostr-serve.service", NOSTR_SERVE_SERVICE);
-            e.copy_exec(&serve, "/usr/libexec/kuma-nostr-serve");
-            e.copy(&serve_unit, "/usr/lib/systemd/system/kuma-nostr-serve.service");
-            e.enable(&["kuma-nostr-serve.service"]);
-        }
-    }
-    let mut global = vec!["kuma-nostrd.service"];
-    if config.nostr.relay.enable {
-        global.push("nip46-relay.service");
-    }
-    e.enable_global(&global);
+    // again. preset applies the file — skel links created or taken
+    // away — so the same two lines carry the on and the off.
+    e.preset_global(&["kuma-nostrd.service", "nip46-relay.service"]);
     // The version guard is the binary-runs proof the kuma COPY carries:
     // a musl-host binary on a glibc base shows up here, at build, where
     // it costs a build, not at boot, where it costs the session.

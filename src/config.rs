@@ -65,7 +65,7 @@ pub struct Config {
 /// maintain — the payload is NIP-44 end-to-end, so the relay carries
 /// ciphertext and metadata, not messages. An explicit empty list is the
 /// local-only spelling, for a machine whose relay is its own.
-#[derive(Debug, Deserialize, Default, JsonSchema)]
+#[derive(Debug, Deserialize, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Nostr {
     #[serde(default)]
@@ -107,7 +107,7 @@ pub struct Nostr {
 /// The local relay's switch. Absent means off — the public relay is
 /// the default signing road, and the loopback relay is the machine
 /// that asks for it by name.
-#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Deserialize, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NostrRelay {
     #[serde(default)]
@@ -115,8 +115,10 @@ pub struct NostrRelay {
 }
 
 /// The serde default that says what absence means: the public relay
-/// the layer's installs pair against.
-fn default_relays() -> Vec<String> {
+/// the layer's installs pair against. pub(crate) because the delta
+/// compiler diffs a release's baked declaration against the same
+/// default the parser fills — one default, read from one place.
+pub(crate) fn default_relays() -> Vec<String> {
     vec!["wss://relay.nip46.com".to_string()]
 }
 
@@ -130,7 +132,7 @@ fn default_relays() -> Vec<String> {
 /// a stolen laptop. [backup] is the other half, and it reads from here
 /// rather than from the live subvolume, which is why enabling it
 /// requires enabling this.
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Snapshots {
     #[serde(default)]
@@ -194,7 +196,7 @@ impl Default for Snapshots {
 /// elsewhere. The practical consequence is about recovery rather than
 /// about the file, namely that restoring a machine takes two things
 /// instead of one.
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Backup {
     #[serde(default)]
@@ -289,7 +291,7 @@ impl Default for Backup {
 /// The primary account, created and converged by a boot service, not at
 /// image build time, because /home is machine state (/var/home) and an
 /// image-built home directory never materializes on `bootc switch`.
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct User {
     pub name: String,
@@ -319,7 +321,7 @@ fn default_groups() -> Vec<String> {
     vec!["wheel".to_string()]
 }
 
-#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Deserialize, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct System {
     /// Unset — the default — means kuma composes its own base from
@@ -421,7 +423,7 @@ impl Desktop {
     }
 }
 
-#[derive(Debug, Deserialize, Default, JsonSchema)]
+#[derive(Debug, Deserialize, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Packages {
     #[serde(default)]
@@ -439,7 +441,7 @@ pub struct Packages {
     pub brew: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Default, JsonSchema)]
+#[derive(Debug, Deserialize, Default, PartialEq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Services {
     #[serde(default)]

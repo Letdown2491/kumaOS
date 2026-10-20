@@ -127,9 +127,16 @@ enter from the registry, or from a local build?
 - **A machine running a local build** (a declaration compiled in) cannot
   plain-fetch — the newer release would not carry its choices. It
   delta-builds from the release image with its declaration compiled in:
-  packages and firmware become a set difference, units become a preset,
-  and a field the compiler cannot carry refuses loudly instead of
-  silently dropping a choice.
+  packages and firmware become a set difference, `[nostr]` becomes a
+  preset file, converged lists re-bake, and a field the compiler cannot
+  carry (an account, a backup, a timezone) refuses loudly instead of
+  silently dropping a choice. What the delta does not carry is the
+  release's own new curated packages and its newer converger scripts —
+  the recipe the running kuma compiles with is the delta's ceiling, and
+  the next `kuma update` full rebuild catches those up. The resolution
+  lands in `kuma.lock`'s `release` slot, so `git diff kuma.lock` tells
+  both stories: the base move (`update`) and the release move
+  (`upgrade`).
 - **A headless machine** has no release tier to fetch; `kuma update`
   remains its path.
 

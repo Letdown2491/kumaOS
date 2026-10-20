@@ -23,7 +23,7 @@ use std::path::Path;
 /// What one staged file holds. Text and bytes are written as-is; a
 /// tree materializes as a directory, so COPY lines can name it as a
 /// unit (plymouth's theme, the overrides stores).
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum Content {
     Text(String),
     Bytes(&'static [u8]),
@@ -58,6 +58,7 @@ pub(crate) struct Staged {
 }
 
 /// One walk's result: the text, and every staged file.
+#[derive(Debug)]
 pub(crate) struct Plan {
     pub(crate) text: String,
     pub(crate) files: BTreeMap<String, Content>,
@@ -186,6 +187,18 @@ impl<'c> Emitter<'c> {
             self.account(unit);
         }
         self.text.push_str(&format!("RUN systemctl --global enable {}\n", units.join(" ")));
+    }
+
+    /// `RUN systemctl --global preset …` — the preset flip's shape: the
+    /// preset FILE decides enable or disable, and this applies it to
+    /// the image (skel links created or taken away). Same door as
+    /// enable — a kuma unit named here needs its disposition declared,
+    /// delta or not.
+    pub(crate) fn preset_global(&mut self, units: &[&str]) {
+        for unit in units {
+            self.account(unit);
+        }
+        self.text.push_str(&format!("RUN systemctl --global preset {}\n", units.join(" ")));
     }
 
     /// `--global` first, then system scope, in one RUN: the niri arm's

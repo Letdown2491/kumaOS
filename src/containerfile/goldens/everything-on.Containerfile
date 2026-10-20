@@ -214,7 +214,8 @@ COPY nip46-relay.service /usr/lib/systemd/user/nip46-relay.service
 COPY --chmod=755 kuma-nostr-serve /usr/libexec/kuma-nostr-serve
 COPY kuma-nostr-serve.service /usr/lib/systemd/system/kuma-nostr-serve.service
 RUN systemctl enable kuma-nostr-serve.service
-RUN systemctl --global enable kuma-nostrd.service nip46-relay.service
+COPY 50-kuma-nostr.preset /usr/lib/systemd/user-preset/50-kuma-nostr.preset
+RUN systemctl --global preset kuma-nostrd.service nip46-relay.service
 RUN /usr/bin/kuma-nostrd --version
 COPY kuma-nostr-panel.desktop /usr/share/applications/kuma-nostr-panel.desktop
 RUN update-desktop-database /usr/share/applications

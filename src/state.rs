@@ -167,6 +167,15 @@ struct ImageFact {
     /// built before the label existed, which is itself the answer — those
     /// were built by a kuma older than this one.
     builder: Option<String>,
+    /// `io.kuma.delta`: the kuma that delta-compiled this image onto a
+    /// release, when a delta compiled it. Under a delta the builder
+    /// label is always the older compiler — that is not staleness — so
+    /// the stale-build question switches to the version label.
+    delta: Option<String>,
+    /// `org.opencontainers.image.version`: the release the image
+    /// reports. The version the machine runs after it boots this
+    /// image, whatever compiled it.
+    version_label: Option<String>,
 }
 
 enum MachineFact {
@@ -297,25 +306,34 @@ fn observe(config_path: &Path) -> Observed {
     // The builder label rides along with the id and the timestamp rather
     // than costing a second call. It is last because it is the only field
     // that can contain spaces, so a splitn leaves it whole.
+    // The labels ride along with the id and the timestamp rather than
+    // costing a second call. io.kuma.delta and the version label have
+    // no spaces (the plain version number), so builder — the only field
+    // that can contain spaces — stays last, and a splitn leaves it whole.
     let image = host_output(&[
         "podman",
         "image",
         "inspect",
         "--format",
-        "{{.Id}} {{.Created.Unix}} {{index .Config.Labels \"io.kuma.builder\"}}",
+        "{{.Id}} {{.Created.Unix}} {{index .Config.Labels \"io.kuma.delta\"}} \
+         {{index .Config.Labels \"org.opencontainers.image.version\"}} \
+         {{index .Config.Labels \"io.kuma.builder\"}}",
         crate::DEFAULT_TAG,
     ])
     .ok()
     .and_then(|out| {
-        let mut parts = out.trim().splitn(3, ' ');
+        let mut parts = out.trim().splitn(5, ' ');
         let id = parts.next()?;
         let created = parts.next()?;
         // podman prints "<no value>" for a label the image does not carry.
-        let builder = parts
-            .next()
-            .map(str::trim)
-            .filter(|b| !b.is_empty() && *b != "<no value>")
-            .map(str::to_string);
+        let label = |raw: Option<&str>| {
+            raw.map(str::trim)
+                .filter(|b| !b.is_empty() && *b != "<no value>")
+                .map(str::to_string)
+        };
+        let delta = label(parts.next());
+        let version_label = label(parts.next());
+        let builder = label(parts.next());
         let created: i64 = created.parse().ok()?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -331,6 +349,8 @@ fn observe(config_path: &Path) -> Observed {
             age_secs: now.saturating_sub(created).max(0) as u64,
             edited_after: edited.is_some_and(|mtime| mtime > created),
             builder,
+            delta,
+            version_label,
         })
     });
 
@@ -524,13 +544,51 @@ fn classify(obs: &Observed) -> Snapshot {
     // The claim is "a different kuma", never "an older" one. Ordering two
     // of these strings would mean ranking a commit sha against another,
     // and running a deliberately older binary is a real thing to do.
-    if obs.image.as_ref().is_some_and(|i| i.builder.as_deref() != Some(crate::VERSION)) {
-        let built_by = match obs.image.as_ref().and_then(|i| i.builder.as_deref()) {
-            Some(other) => format!("kuma {other}"),
-            None => "a kuma older than the label".into(),
-        };
-        claim("stale-build", format!("the image was built by {built_by}, not the one running"));
-        actions.push(Action::new("build", "kuma build", "rebuild with the kuma you are running"));
+    // Under a delta build the question changes shape: the image's
+    // builder label is the compiler that delta-built it — always older
+    // than the release the machine runs after rebooting — so the
+    // in-sync question becomes "is the machine running the release it
+    // reports": the image's version label against the running kuma's
+    // number. In sync, quiet; out of sync, the honest claim.
+    if obs
+        .image
+        .as_ref()
+        .is_some_and(|i| i.builder.as_deref() != Some(crate::VERSION))
+    {
+        match obs.image.as_ref().and_then(|i| i.delta.clone()) {
+            Some(_compiler) => {
+                // In sync (the image reports the release the machine
+                // runs after rebooting into it — the delta's normal
+                // state), quiet. Out of sync, the discrepancy names
+                // itself; the edges are already on the list — reboot
+                // when staged, `kuma switch` when the delta never
+                // staged — and `kuma update` would be the wrong one of
+                // the three to offer here.
+                let reports = obs
+                    .image
+                    .as_ref()
+                    .and_then(|i| i.version_label.clone())
+                    .unwrap_or_else(|| "an unlabeled image".to_string());
+                if reports != crate::KUMA_VERSION {
+                    claim(
+                        "stale-build",
+                        format!(
+                            "the delta-built image reports kumaOS {reports} while kuma \
+                             {} is running; reboot to run the release",
+                            crate::KUMA_VERSION
+                        ),
+                    );
+                }
+            }
+            None => {
+                let built_by = match obs.image.as_ref().and_then(|i| i.builder.as_deref()) {
+                    Some(other) => format!("kuma {other}"),
+                    None => "a kuma older than the label".into(),
+                };
+                claim("stale-build", format!("the image was built by {built_by}, not the one running"));
+                actions.push(Action::new("build", "kuma build", "rebuild with the kuma you are running"));
+            }
+        }
     }
     if let (Some(image), MachineFact::Kuma { deployed_id: Some(deployed), .. }) =
         (&obs.image, &obs.machine)
@@ -934,7 +992,23 @@ mod tests {
             age_secs: 60,
             edited_after,
             builder: Some(crate::VERSION.to_string()),
+            ..image_delta(None, None)
         })
+    }
+
+    /// A delta-built image's facts: the builder label names the older
+    /// compiler, the version label names the release it reports. The
+    /// in-sync pair (compiler older, release == running kuma) must read
+    /// quiet; an out-of-pair one must not.
+    fn image_delta(delta: Option<&str>, version_label: Option<&str>) -> ImageFact {
+        ImageFact {
+            id: "sha256:aaa".into(),
+            age_secs: 60,
+            edited_after: false,
+            builder: Some("44.9.0 (deadbee 2026-10-01)".into()),
+            delta: delta.map(str::to_string),
+            version_label: version_label.map(str::to_string),
+        }
     }
 
     fn image_built_by(builder: Option<&str>) -> Option<ImageFact> {
@@ -943,6 +1017,8 @@ mod tests {
             age_secs: 60,
             edited_after: false,
             builder: builder.map(str::to_string),
+            delta: None,
+            version_label: None,
         })
     }
     fn kuma_machine(staged: bool, drift: Vec<String>, deployed_id: Option<&str>) -> MachineFact {
@@ -990,6 +1066,33 @@ mod tests {
         ));
         assert_eq!(snap.state, "in-sync");
         assert!(!snap.facts.iter().any(|(_, d)| d.contains("by kuma")), "{:?}", snap.facts);
+    }
+
+    /// A delta-built image names an older compiler in its builder label
+    /// FOREVER — that is not staleness. In sync (the image reports the
+    /// release the running kuma is), the probe stays quiet.
+    #[test]
+    fn a_delta_built_image_in_sync_stays_quiet() {
+        let snap = classify(&workspace(
+            loaded(),
+            Some(image_delta(Some("44.9.0"), Some(crate::KUMA_VERSION))),
+            kuma_machine(false, vec![], Some("sha256:aaa")),
+        ));
+        assert_eq!(snap.state, "in-sync", "{:?}", snap.state);
+    }
+
+    /// Out of sync — the image reports a release the running kuma is
+    /// not — the probe says so, and names the delta for what it is.
+    #[test]
+    fn a_delta_built_image_out_of_sync_says_what_it_reports() {
+        let snap = classify(&workspace(
+            loaded(),
+            Some(image_delta(Some("44.9.0"), Some("44.10.0"))),
+            kuma_machine(false, vec![], Some("sha256:aaa")),
+        ));
+        assert_eq!(snap.state, "stale-build");
+        assert!(snap.headline.contains("delta-built"), "{}", snap.headline);
+        assert!(snap.headline.contains("44.10.0"), "{}", snap.headline);
     }
 
     /// An edit is the more familiar reason to rebuild and the edge is the
