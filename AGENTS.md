@@ -203,7 +203,11 @@ offer beyond the confirmation line itself.
   a DRM render node a GPU-less runner does not have; the kvm action
   builds vgem out of tree against the running kernel's headers when
   the module will not load (the WSL trick: one file, seconds, no
-  reboot).
+  reboot). Oct 20's bite is the sequel: the 7.x azure kernels stopped
+  publishing modules-extra altogether — its contents merged into
+  linux-modules — so the kvm action installs it only when the fresh
+  lists say it exists; a hardcoded modules-extra install fails
+  "Couldn't find any package" on any 7.x runner.
 - The boot smoke's hardening lap pins the image's floor (blocks.rs's
   hardening block): the sysctl values, the kargs on /proc/cmdline, the
   public zone's shape, NTS sources, faillock's wiring, the MAC conf.

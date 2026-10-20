@@ -21,8 +21,9 @@ runs:
         # mesa's software path, and the runner image carries neither lib.
         # qemu-utils: qemu-nbd, which the boot stage uses to add the
         # console karg its QCOW2 needs. linux-modules-extra: the nbd and
-        # vgem modules both live there, and the runner's azure kernel
-        # ships without it (uname -r names the running flavor exactly).
+        # vgem modules live there on 6.x kernels, and the runner's azure
+        # kernel ships without installing it (uname -r names the running
+        # flavor exactly).
         # The lists are refreshed first, not out of habit: the 20261010
         # snapshot's kernel (7.0.0-1012-azure) published after the
         # snapshot's apt lists were baked, and every qemu lap died at
@@ -30,9 +31,22 @@ runs:
         # the archive carries. An update costs seconds and lets the
         # archive answer instead of the snapshot's age.
         sudo apt-get update -qq
+        # Whether modules-extra exists is now a per-kernel question. The
+        # 7.x azure kernels stopped publishing it: no modules-extra in
+        # the pool for any 7.0.0 build, because the base linux-modules
+        # package absorbed its contents — 7.0.0-1017-azure's
+        # linux-modules carries all 6,067 modules, nbd.ko and vgem.ko
+        # among them (verified in the deb, 2026-10-20). Asking for a
+        # package the archive dropped fails the whole install line
+        # ("Couldn't find any package by regex"), so install it only
+        # when the fresh lists say it exists; modprobe finds nbd and
+        # vgem either way, and the 6.x path keeps its modules-extra.
         sudo apt-get install -y -qq qemu-system-x86 qemu-utils cryptsetup-bin ovmf \
-            libegl1 libgl1 "linux-modules-extra-$(uname -r)" \
+            libegl1 libgl1 \
             ${{ inputs.sshpass == 'true' && 'sshpass' || '' }}
+        if apt-cache show "linux-modules-extra-$(uname -r)" >/dev/null 2>&1; then
+            sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
+        fi
         # qemu-nbd needs the nbd module: the boot stage adds the console
         # karg to its disk through it. In modules-extra, which the 6.17
         # azure runner image ships without installing.
