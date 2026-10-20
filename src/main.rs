@@ -1765,7 +1765,9 @@ fn upgrade(config_path: &Path, check: bool, yes: bool, json: bool) -> Result<()>
     // (the dispatch arm already resolved the path).
     let config = Config::load(config_path)?;
     let status = host_output(&["sudo", "bootc", "status", "--format", "json"])?;
-    let deps = deployment::Deployments::from_status_json(&status);
+    let deps = deployment::Deployments::from_status_json(
+        &serde_json::from_str(&status).context("cannot parse bootc status")?,
+    );
     match upgrade_lane(config.system.desktop, &deps.booted) {
         UpgradeLane::Headless => bail!(
             "a headless machine has no release to upgrade to: no published image\n\
@@ -1786,8 +1788,8 @@ fn upgrade(config_path: &Path, check: bool, yes: bool, json: bool) -> Result<()>
             if json {
                 upgrade_delta_response(&inferred, &actions).print(json, "");
             } else {
-                print_actions(&actions);
                 println!("{prose}");
+                print_actions(&actions);
             }
             Ok(())
         }
@@ -1933,7 +1935,9 @@ fn upgrade_fetch(origin: &str, json: bool) -> Result<()> {
     // pull; a refusal here is the policy working, not a kuma opinion.
     run_host(&["sudo", "bootc", "upgrade"])?;
     let status = host_output(&["sudo", "bootc", "status", "--format", "json"])?;
-    let after = deployment::Deployments::from_status_json(&status);
+    let after = deployment::Deployments::from_status_json(
+        &serde_json::from_str(&status).context("cannot parse bootc status")?,
+    );
     let Some(staged) = after.staged else {
         // Nothing staged: bootc resolved the origin and found the
         // booted image. Honest "current" rather than a fake success.

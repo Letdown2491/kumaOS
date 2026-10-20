@@ -101,6 +101,45 @@ This is a Fedora release change: 44 to 45.
 That is the biggest change kuma can make to a machine, and in a package
 diff it would otherwise look like several hundred ordinary lines.
 
+## Two axes: the declaration, and the release
+
+`kuma update` and `kuma upgrade` are two different moves, and the verbs
+stay apart on purpose.
+
+`kuma update` is the declaration axis. It recomposes against the repos,
+rebuilds the image from your declaration, and stages it. The recipe the
+running kuma carries is the ceiling: the OS never moves past the release
+that binary was born in.
+
+`kuma upgrade` is the release axis. It moves the machine to a newer
+published kumaOS — the image the publish pipeline already composed and
+boot-validated — without a checkout, without a build machine, and without
+touching your declaration.
+
+Which way an upgrade goes is one question: does the machine's release
+enter from the registry, or from a local build?
+
+- **A machine booted from a registry image** (installed from an ISO, or
+  tracking a published tag) fetches: the release is whatever that tag now
+  holds, verified by the machine's baked signature policy. `bootc` is the
+  engine; `kuma upgrade` asks the registry first (`--check`), then fetches
+  and stages (`--yes`).
+- **A machine running a local build** (a declaration compiled in) cannot
+  plain-fetch — the newer release would not carry its choices. It
+  delta-builds from the release image with its declaration compiled in:
+  packages and firmware become a set difference, units become a preset,
+  and a field the compiler cannot carry refuses loudly instead of
+  silently dropping a choice.
+- **A headless machine** has no release tier to fetch; `kuma update`
+  remains its path.
+
+The release an upgrade fetches is inferred, and the inference says itself
+before anything moves: a registry origin is followed as-is; a local build
+infers from the declared desktop (`niri` tracks the published `niri` tag,
+`cosmic` the `cosmic` tag). `kuma upgrade --check` costs one registry
+metadata read and builds nothing.
+
+
 ## Boot health and automatic rollback
 
 Every image includes [greenboot](https://github.com/fedora-iot/greenboot-rs).
