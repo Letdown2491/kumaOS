@@ -48,21 +48,45 @@ until the image ships the fixed daemon. So the deploy is: commit, then
 ## The desktop shell's dev loop (44.4.0)
 
 The shell is the kumaui tree (`~/Documents/kumaui`), not this repo: a
-GPUI program whose binary lands at `/usr/bin/kuma-shell` in the image
-and whose dev deploy rides the same unit. Build and test only inside
-its `localhost/kuma-dev-rust` container (`./scripts/build.sh`), never
-on the host — this machine has no C compiler, and a host build poisons
-shared target artifacts. The host install (`cp` from the container's
-`target/release`) fails with "Text file busy" while the session is
-running; stop `kuma-shell.service` first, run `~/.local/bin/kuma-shell`
-by hand for the verification pass, and put the service back after. Two
-shells cannot share the layer surfaces or the logind lock listener, so
-a quiet moment is a requirement, not a preference.
+GPUI program whose binary lands at `/usr/bin/kuma-shell` in the image.
+Build and test only inside its `localhost/kuma-dev-rust` container
+(`./scripts/build.sh build --release`; bare, the script runs `cargo`
+with no subcommand and prints its help), never on the host — this
+machine has no C compiler, and a host build poisons shared target
+artifacts. The dev-deploy override retired with 44.9.0's corrected
+compose: the service runs the image's binary, and a dev build is
+verified by hand — stop `kuma-shell.service`, run
+`~/.local/bin/kuma-shell` by hand, start the service again. A raw `cp`
+over a running binary fails with "Text file busy"; the build script's
+`.new` + `mv` rename works and is why a hand-run shell survives the
+next build's install. Two shells cannot share the layer surfaces or
+the logind lock listener, so a quiet moment is a requirement, not a
+preference.
 
-An image build needs the release binaries beside the running kuma in
-the build context (`kuma-shell` and `kuma-greeter`, with
-`kuma-nostrd`/`kuma-nostr` when the nostr layer is enabled) — the same
-road every release ships.
+An image build stages the release binaries from beside the kuma that
+runs the build — `current_exe()`'s siblings (`~/.cargo/bin` in
+practice): five kumaui binaries (`kuma-shell`, `kuma-greeter`,
+`kuma-files`, `kuma-term`, `kuma-monitor`), their three `.desktop`
+entries and three icons, plus `kuma-nostrd`/`kuma-nostr` when the
+nostr layer is enabled. A *missing* sibling fails the staging loudly
+("it is not beside the running kuma"); a *stale* one composes silently
+— 44.9.0's first compose shipped Oct 17's kumaui under the new
+version's name while the changelog claimed the v0.4.1 ride (#42). So a
+kumaui pin ride is a four-step road: commit the ride in kumaui, build
+in the container at that commit (v0.4.1's first binaries stamped the
+commit *before* the release commit because the build ran first — a
+stamp that names no commit in the checkout is the tell; rebuild after
+the commit lands), refresh the siblings beside the running kuma,
+recompose. Verify the image's stamps before the switch:
+`podman run --rm --entrypoint /usr/bin/kuma-shell localhost/kuma:latest --version`.
+
+A session death that reaches the greeter with clean teardown — portals
+stopping in order, no crash, no OOM, no signal in the journal — is not
+a crash: niri's stock `Mod+Shift+E` exit dialog confirms in two
+presses and the only log line is "quitting after confirming exit
+dialog". Grep that line before diagnosing hardware; 2026-10-19
+produced two in three minutes and the journal had no third fact to
+offer beyond the confirmation line itself.
 
 ## The gpui host API's loaded facts (each learned the hard way)
 
