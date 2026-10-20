@@ -19,6 +19,10 @@ pub(crate) struct Slot {
     /// How the deployment names its image (`containers-storage` when it
     /// follows a local tag), for doctor's tag comparison.
     pub transport: Option<String>,
+    /// The release the image reports (`44.9.0`), from the OCI label —
+    /// what `kuma upgrade` moves, and what the machine says it is
+    /// between reboots.
+    pub version: Option<String>,
 }
 
 /// booted, and what would boot next: the staged deployment, and the one
@@ -46,6 +50,7 @@ impl Deployments {
                 digest: field("/image/imageDigest"),
                 timestamp: field("/image/timestamp"),
                 transport: field("/image/image/transport"),
+                version: field("/image/version"),
             }
         };
         Deployments {
@@ -67,6 +72,7 @@ mod tests {
                           "transport": "containers-storage"},
                 "imageDigest": "sha256:0123456789abcdef0123456789abcdef",
                 "timestamp": "2026-08-01T00:00:00Z",
+                "version": "44.9.0",
             }},
             "staged": null,
             "rollback": {"image": {
@@ -88,6 +94,9 @@ mod tests {
         assert_eq!(deps.booted.digest.as_deref(), Some("sha256:0123456789abcdef0123456789abcdef"));
         assert_eq!(deps.booted.timestamp.as_deref(), Some("2026-08-01T00:00:00Z"));
         assert_eq!(deps.booted.transport.as_deref(), Some("containers-storage"));
+        // The version rides the image's OCI label: what the deployment
+        // says it is, and what `kuma upgrade` reports the move in.
+        assert_eq!(deps.booted.version.as_deref(), Some("44.9.0"));
         assert_eq!(
             deps.rollback.as_ref().and_then(|r| r.image.as_deref()),
             Some("ghcr.io/letdown2491/kuma:previous"),
@@ -114,6 +123,7 @@ mod tests {
         let deps = Deployments::from_status_json(&serde_json::json!({}));
         assert!(deps.booted.image.is_none());
         assert!(deps.booted.digest.is_none());
+        assert!(deps.booted.version.is_none());
         assert!(deps.staged.is_none());
         assert!(deps.rollback.is_none());
     }

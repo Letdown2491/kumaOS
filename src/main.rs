@@ -281,6 +281,26 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Move the machine to a newer published kumaOS release (prints the plan unless --yes)
+    ///
+    /// The release axis beside `kuma update`'s declaration axis: update
+    /// recomposes and rebuilds, upgrade fetches what the publish pipeline
+    /// already validated. Machines whose origin names the published
+    /// registry image fetch the release (bootc is the engine); machines
+    /// running a local build delta-build from the release image with
+    /// their declaration compiled in (kumaOS#44, phase 2).
+    Upgrade {
+        /// Ask whether a newer release exists, and change nothing. One
+        /// registry metadata read via bootc; no pull, no build, no staging.
+        #[arg(long, conflicts_with_all = ["yes"])]
+        check: bool,
+        /// Actually upgrade (requires root; applies on reboot)
+        #[arg(long)]
+        yes: bool,
+        /// Report the result as JSON (progress moves to stderr)
+        #[arg(long)]
+        json: bool,
+    },
     /// Swap the boot order back to the previous deployment (prints unless --yes)
     Rollback {
         /// Actually run `bootc rollback` (requires root; takes effect on next boot)
@@ -498,6 +518,7 @@ fn main() -> Result<()> {
             Cmd::Build { json, .. }
             | Cmd::Switch { json, .. }
             | Cmd::Update { json, .. }
+            | Cmd::Upgrade { json, .. }
             | Cmd::Rollback { json, .. }
             | Cmd::Sync { json }
             | Cmd::Clean { json }
@@ -647,6 +668,10 @@ fn run(
             }
         }
         Cmd::Rollback { yes, json: _ } => rollback(yes, json),
+        Cmd::Upgrade { check, yes, json: _ } => {
+            let path = read_config_path(config_path, explicit, !json);
+            upgrade(&path, check, yes, json)
+        }
         Cmd::Sync { json: _ } => {
             // Resolved the same way diff resolves it: sync converges to
             // what the image baked, so whether the file being edited is
@@ -1524,6 +1549,63 @@ fn update_staged_response(
     }
 }
 
+fn upgrade_preview_response(origin: &str, actions: &[Action]) -> response::Response {
+    response::Response::new()
+        .dry_run()
+        .field("lane", "fetch")
+        .field("origin", origin)
+        .actions(actions)
+}
+
+fn upgrade_delta_response(inferred: &str, actions: &[Action]) -> response::Response {
+    response::Response::new()
+        .field("lane", "delta")
+        .field("delta_builds", false)
+        .field("inferred_release", inferred)
+        .actions(actions)
+}
+
+fn upgrade_check_response(
+    origin: &str,
+    running_version: Option<String>,
+    running_digest: Option<String>,
+    release_version: Option<String>,
+    release_digest: Option<String>,
+    actions: &[Action],
+) -> response::Response {
+    response::Response::new()
+        .field("check", true)
+        .field("lane", "fetch")
+        .field("origin", origin)
+        .field("running", serde_json::json!({
+            "version": running_version, "digest": running_digest,
+        }))
+        .field("release", serde_json::json!({
+            "version": release_version, "digest": release_digest,
+        }))
+        .field("current", actions.is_empty())
+        .actions(actions)
+}
+
+fn upgrade_current_response(origin: &str) -> response::Response {
+    response::Response::new()
+        .field("staged", false)
+        .field("current", true)
+        .field("origin", origin)
+}
+
+fn upgrade_staged_response(
+    version: Option<String>,
+    digest: Option<String>,
+    reboot: Action,
+) -> response::Response {
+    response::Response::new()
+        .field("staged", true)
+        .field("version", version)
+        .field("digest", digest)
+        .action(reboot)
+}
+
 fn update(config_path: &Path, tag: &str, yes: bool, json: bool) -> Result<()> {
     let config = Config::load(config_path)?;
     // Both reads happen before the pull, and that is the whole trick.
@@ -1674,6 +1756,204 @@ fn release_move_json(
         "from": moved.map(|(from, _)| from.clone()),
         "to": moved.map(|(_, to)| to.clone()),
     })
+}
+
+fn upgrade(config_path: &Path, check: bool, yes: bool, json: bool) -> Result<()> {
+    // The verb never edits a declaration, but its routing reads the
+    // machine's desktop, and the machine's answer is the baked one —
+    // the same resolution update --check uses, for the same reason
+    // (the dispatch arm already resolved the path).
+    let config = Config::load(config_path)?;
+    let status = host_output(&["sudo", "bootc", "status", "--format", "json"])?;
+    let deps = deployment::Deployments::from_status_json(&status);
+    match upgrade_lane(config.system.desktop, &deps.booted) {
+        UpgradeLane::Headless => bail!(
+            "a headless machine has no release to upgrade to: no published image\n\
+             tier exists for it. `kuma update` rebuilds from the declaration."
+        ),
+        UpgradeLane::Delta { inferred } => {
+            let actions =
+                vec![Action::new("update", "kuma update", "rebuild from the declaration")];
+            let prose = format!(
+                "This machine's release enters from a local build; releases are inferred\n\
+                 from this machine's desktop: {inferred}.\n\n\
+                 The delta build that would carry this declaration onto the release\n\
+                 (declaration compiled in, base exchanged) is phase 2 of the release-as-\n\
+                 ingredient plan (kumaOS#44) and is not built yet. Until it lands, `kuma\n\
+                 update` rebuilds from the declaration, and the ceiling holds: the OS\n\
+                 moves only as far as the recipe the running kuma compiled.\n"
+            );
+            if json {
+                upgrade_delta_response(&inferred, &actions).print(json, "");
+            } else {
+                print_actions(&actions);
+                println!("{prose}");
+            }
+            Ok(())
+        }
+        UpgradeLane::Fetch { origin } => {
+            if check {
+                upgrade_check(&deps, &origin, json)
+            } else if yes {
+                upgrade_fetch(&origin, json)
+            } else {
+                let actions = vec![Action::new(
+                    "check",
+                    "kuma upgrade --check",
+                    "ask the release tag whether a newer kumaOS exists",
+                )];
+                let prose = format!(
+                    "Release lane: this machine fetches the published release from its bootc\n\
+                     origin ({origin}).\n\n\
+                     Run `kuma upgrade --check` to ask the registry (no pull, no build), or\n\
+                     `kuma upgrade --yes` to fetch and stage directly.\n"
+                );
+                upgrade_preview_response(&origin, &actions).print(json, &prose);
+                Ok(())
+            }
+        }
+    }
+}
+
+/// The lane `kuma upgrade` routes on. One question decides it — *is
+/// there a declaration whose choices need honoring?* — and the answer
+/// comes from the booted deployment's origin, not from files on disk:
+/// every installed machine has a baked declaration (the example's if
+/// none of its own), so "does a declaration exist" is the wrong
+/// question. The right one is where the release enters from: a machine
+/// booted from a registry image boots the release's own choices, and a
+/// plain fetch honors them; a machine booted from a local build has a
+/// declaration's choices baked in, and a newer release must compile
+/// those in as deltas. A headless machine has no release tier at all.
+enum UpgradeLane {
+    /// Registry origin: bootc is the engine, and the release comes off
+    /// the origin tag.
+    Fetch { origin: String },
+    /// Local-build origin with a desktop: the release is inferred from
+    /// the declared desktop, and delta-built with the declaration
+    /// compiled in. Phase 2 of #44 — the delta compiler is not built yet.
+    Delta { inferred: String },
+    /// No desktop: no release image exists to fetch.
+    Headless,
+}
+
+fn upgrade_lane(desktop: config::Desktop, booted: &deployment::Slot) -> UpgradeLane {
+    let Some(tag) = desktop.release_tag() else {
+        return UpgradeLane::Headless;
+    };
+    let image = booted.image.as_deref().unwrap_or_default();
+    let local = booted.transport.as_deref() == Some("containers-storage")
+        || image.starts_with("localhost/");
+    if !local && !image.is_empty() {
+        return UpgradeLane::Fetch { origin: image.to_string() };
+    }
+    UpgradeLane::Delta { inferred: format!("{}:{tag}", published_repo()) }
+}
+
+fn upgrade_check(deps: &deployment::Deployments, origin: &str, json: bool) -> Result<()> {
+    note("Asking the registry what the release tag holds...");
+    // A metadata-only read: no layers, and the baked signature policy
+    // applies (skopeo enforces /etc/containers/policy.json), so an
+    // unsigned or tampered tag refuses here rather than staging.
+    let raw = host_output(&["sudo", "skopeo", "inspect", &format!("docker://{origin}")])?;
+    let inspect: serde_json::Value =
+        serde_json::from_str(raw.trim()).context("skopeo inspect returned nothing readable")?;
+    let digest = inspect
+        .get("Digest")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .context("skopeo inspect answered without a digest")?;
+    let release_version = inspect
+        .pointer("/Labels/org.opencontainers.image.version")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let running = deps.booted.digest.as_deref() == Some(digest.as_str());
+    // "Same release, new image": the tag was republished within the
+    // version (a fixed compose, a re-signed one). The digest is what
+    // the machine shares with the fleet, so the digest is what moves —
+    // the prose says the version did not.
+    let same_release = !running
+        && deps.booted.version.is_some()
+        && deps.booted.version == release_version;
+    let actions = if running {
+        Vec::new()
+    } else {
+        vec![Action::new(
+            "upgrade",
+            "kuma upgrade --yes",
+            "fetch the release and stage it (applies on reboot)",
+        )]
+    };
+    if json {
+        upgrade_check_response(
+            origin,
+            deps.booted.version.clone(),
+            deps.booted.digest.clone(),
+            release_version,
+            Some(digest.clone()),
+            &actions,
+        )
+        .print(json, "");
+        return Ok(());
+    }
+    let running_version =
+        deps.booted.version.clone().unwrap_or_else(|| "an unlabeled image".to_string());
+    if running {
+        println!("The machine runs the release tag's image ({origin}).");
+    } else if same_release {
+        println!(
+            "The release tag moved within {running_version}: a newer image holds the same\n\
+             release version. Fetching it is still the move — the tag is what the fleet\n\
+             shares, and the machine is behind it."
+        );
+    } else {
+        println!(
+            "Release lane: fetching from the bootc origin ({origin}).\n\
+             Running:   {running_version} ({}...)\n\
+             Released:  {} ({})\n\n\
+             Re-run with --yes to fetch and stage. The change takes effect on next boot;\n\
+             the previous deployment stays available for `kuma rollback`.",
+            deps.booted.digest.as_deref().unwrap_or("no digest recorded").chars().take(14).collect::<String>(),
+            release_version.as_deref().unwrap_or("an unlabeled image"),
+            digest.chars().take(14).collect::<String>(),
+        );
+    }
+    if !actions.is_empty() {
+        println!();
+        print_actions(&actions);
+    }
+    Ok(())
+}
+
+fn upgrade_fetch(origin: &str, json: bool) -> Result<()> {
+    // bootc pulls from the origin it already has; the engine decides
+    // what "newer" means (digest comparison against its own records)
+    // and stages through the same ostree-finalize machinery a `bootc
+    // upgrade` timer would. The baked signature policy verifies the
+    // pull; a refusal here is the policy working, not a kuma opinion.
+    run_host(&["sudo", "bootc", "upgrade"])?;
+    let status = host_output(&["sudo", "bootc", "status", "--format", "json"])?;
+    let after = deployment::Deployments::from_status_json(&status);
+    let Some(staged) = after.staged else {
+        // Nothing staged: bootc resolved the origin and found the
+        // booted image. Honest "current" rather than a fake success.
+        let prose = format!("Already current: {origin} holds what is booted.\n");
+        upgrade_current_response(origin).print(json, &prose);
+        return Ok(());
+    };
+    let reboot = reboot_action();
+    if json {
+        upgrade_staged_response(staged.version.clone(), staged.digest.clone(), reboot)
+            .print(json, "");
+        return Ok(());
+    }
+    println!(
+        "Staged: {} ({}...) from {origin}.",
+        staged.version.as_deref().unwrap_or("an unlabeled image"),
+        staged.digest.as_deref().unwrap_or("no digest recorded").chars().take(14).collect::<String>(),
+    );
+    print_actions(&[reboot]);
+    Ok(())
 }
 
 /// Which rpmdb the repos get compared against.
@@ -4222,6 +4502,84 @@ fn path_str(path: &Path) -> Result<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The routing is the verb's whole contract on paper: the same
+    /// machine, pointed at a different origin, takes a different lane.
+    /// These tests hold the table's four rows, because the rows are
+    /// exactly the cases a refactor is likeliest to flatten.
+    fn slot(image: &str, transport: &str) -> deployment::Slot {
+        deployment::Slot {
+            image: Some(image.to_string()),
+            digest: Some("sha256:0123".to_string()),
+            timestamp: None,
+            transport: Some(transport.to_string()),
+            version: Some("44.9.0".to_string()),
+        }
+    }
+
+    #[test]
+    fn a_registry_origin_fetches() {
+        let booted = slot("ghcr.io/letdown2491/kuma:niri", "registry");
+        assert!(matches!(
+            upgrade_lane(config::Desktop::Niri, &booted),
+            UpgradeLane::Fetch { .. }
+        ));
+    }
+
+    #[test]
+    fn an_unverified_registry_origin_fetches_too() {
+        // The policy decides whether the pull verifies; the lane only
+        // decides whether the origin is a registry at all.
+        let booted = slot("ghcr.io/letdown2491/kuma:niri", "ostree-unverified-registry");
+        assert!(matches!(
+            upgrade_lane(config::Desktop::Niri, &booted),
+            UpgradeLane::Fetch { .. }
+        ));
+    }
+
+    #[test]
+    fn a_local_build_infers_from_the_declared_desktop() {
+        let booted = slot("localhost/kuma:latest", "containers-storage");
+        let UpgradeLane::Delta { inferred } = upgrade_lane(config::Desktop::Niri, &booted)
+        else {
+            panic!("a local build must take the delta lane");
+        };
+        assert_eq!(inferred, format!("{}:niri", published_repo()));
+        // Cosmic infers its own tier, not niri's.
+        let UpgradeLane::Delta { inferred } = upgrade_lane(config::Desktop::Cosmic, &booted)
+        else {
+            panic!("cosmic must infer its own tier");
+        };
+        assert_eq!(inferred, format!("{}:cosmic", published_repo()));
+    }
+
+    #[test]
+    fn a_headless_machine_refuses_even_on_a_registry_origin() {
+        // No release tier exists for a headless machine; the origin
+        // naming a registry image cannot make one exist.
+        let booted = slot("ghcr.io/letdown2491/kuma:niri", "registry");
+        assert!(matches!(
+            upgrade_lane(config::Desktop::None, &booted),
+            UpgradeLane::Headless
+        ));
+    }
+
+    #[test]
+    fn a_missing_origin_is_not_a_fetch() {
+        // An origin this verb cannot name is a lane that would fetch
+        // from an empty string; inference answers instead.
+        let booted = deployment::Slot {
+            image: None,
+            digest: None,
+            timestamp: None,
+            transport: None,
+            version: None,
+        };
+        assert!(matches!(
+            upgrade_lane(config::Desktop::Niri, &booted),
+            UpgradeLane::Delta { .. }
+        ));
+    }
 
     /// The shape tests' ruler: the exact keys a document carries. The
     /// map is a BTreeMap, so the order is the alphabet's; the set is

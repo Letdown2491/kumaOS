@@ -406,6 +406,21 @@ pub enum Desktop {
     Cosmic,
 }
 
+/// The release tier a desktop's machines track on the release axis: the
+/// moving tag publish.yml promotes (its example list is the same fact —
+/// this is the kuma-side mirror of it, and the one place that may name
+/// the mapping). None for a headless machine: no release tier exists to
+/// fetch, and upgrade refuses there.
+impl Desktop {
+    pub fn release_tag(&self) -> Option<&'static str> {
+        match self {
+            Desktop::None => None,
+            Desktop::Niri => Some("niri"),
+            Desktop::Cosmic => Some("cosmic"),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Packages {

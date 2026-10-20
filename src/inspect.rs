@@ -1276,11 +1276,26 @@ fn check_deployment(
             days => format!("booted image is {days} days old"),
         };
         let fix = stale.then(|| {
-            Action::new(
-                "update",
-                "kuma update",
-                "recompose against the repos' current packages and rebuild",
-            )
+            // The stale-image advice is where the two axes meet, and it
+            // names the axis the machine actually rides: a registry
+            // origin has a release to fetch (kuma upgrade), a local
+            // build can only recompose from its declaration (kuma
+            // update). Advising update on a fetch machine sends it
+            // through a 20-minute rebuild that answers nothing — the
+            // exact detour the release axis exists to remove.
+            if deps.booted.transport.as_deref() == Some("registry") {
+                Action::new(
+                    "upgrade",
+                    "kuma upgrade --check",
+                    "ask the release tag whether a newer kumaOS exists",
+                )
+            } else {
+                Action::new(
+                    "update",
+                    "kuma update",
+                    "recompose against the repos' current packages and rebuild",
+                )
+            }
         });
         report(if stale { Grade::Warn } else { Grade::Ok }, "deployment", detail, fix);
     }
