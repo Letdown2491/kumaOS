@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+## v44.9.0 (2026-10-19)
+
+- **The session's subprocess reads can no longer hang, and the Wi-Fi
+  password stays off the command line.** The kumaui pin rides to
+  v0.4.1, whose hardening batches are this release's substance. Every
+  subprocess read the panel and poll paths make (volume, media,
+  network, bluetooth, power, brightness, the nostr CLI) is bounded by
+  timeout now, so one hung CLI costs seconds instead of a subsystem's
+  updates for the rest of the session; the sway and greetd readers
+  refuse to allocate what a length prefix alone claims; and the polkit
+  helper exchange and the per-device bluetoothctl reads are capped, so
+  a hung PAM stack or device cannot pin a worker forever. Joining a
+  Wi-Fi network hands nmcli its password through a 0600 passwd-file
+  instead of argv, where any process could read it in /proc for the
+  whole connect. And pasted text that carries the end-of-bracketed-
+  paste marker is stripped of it, so a paste can no longer close the
+  block and run as keystrokes.
+
+- **kuma-term asks before output can rewrite the clipboard.** An OSC 52
+  write used to succeed silently whenever the output carrying it
+  reached the screen; it shows a confirm card at the prompt now, with a
+  content preview, y to allow, n or escape to deny, and the card denies
+  itself after ten seconds so an unanswered prompt never holds the
+  keyboard hostage. URLs open on ctrl+click, matching kitty, alacritty,
+  and gnome-terminal; the underline and pointing-hand cursor only show
+  while ctrl is held, and a stray plain click no longer fires the
+  browser.
+
+- **The apps cost less when nothing is happening, and the crash-and-freeze bugs are out.** The
+  bar stops repainting on a poll that found nothing moved, Kamuy skips
+  its paint while an equal beat applies and while the window cannot
+  paint, Koguma builds a tens-of-thousands-entry directory's rows on
+  screen instead of all of them every frame and reads a rescanned
+  directory's listing off the UI thread, and kuma-term coalesces a pty
+  output burst into one repaint so its row cache can no longer be wiped
+  by one scroll burst. A tab whose shell is gone no longer crashes or
+  freezes the terminal; a large paste into a program that is not
+  reading no longer freezes every tab; extracting `1.tgz` no longer
+  underflows; and one unreadable hwmon entry no longer wipes out
+  Kamuy's temperature discovery for the whole session.
+
 ## v44.8.0 (2026-10-17)
 
 - **Kamuy, the monitor, ships: the image's kumaui pin moves to v0.4.0
