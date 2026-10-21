@@ -77,12 +77,11 @@ struct Baked {
     services: config::Services,
     nostr: config::Nostr,
     snapshots: config::Snapshots,
-    // Kept unread on purpose: the tolerant read's parse IS the point —
-    // a [user] section whose meaning moved inside fails to deserialize,
-    // and that refusal is the delta compiler's duty. The diff never
-    // reads the baked value; the declared one is what a machine may
-    // carry.
-    #[expect(dead_code)]
+    // The tolerant read's parse is the point — a [user] section whose
+    // meaning moved inside fails to deserialize, and that refusal is
+    // the delta compiler's duty. The diff reads it against the
+    // declared one: an account the release already names rides, a
+    // moved one refuses.
     user: Option<config::User>,
     backup: config::Backup,
     overrides: BTreeMap<String, config::AppOverride>,
@@ -173,10 +172,18 @@ pub(crate) fn compile(
     if declared.system.ca_certificates != baked.ca_certificates {
         refusals.push("  - [system] ca_certificates: `kuma update` full-rebuilds".to_string());
     }
-    if declared.user.is_some() {
+    // The account rides the image, and the delta carries the release's
+    // own baked [user] untouched: the machine's declaration is COPY'd
+    // in verbatim, so an account the release already names costs the
+    // delta nothing and moves nothing — user sync converges the same
+    // section it always did. A [user] the release does not name, or
+    // one that differs from it, is a move the compiler cannot carry:
+    // the full rebuild rebakes accounts, the delta does not.
+    if declared.user != baked.user {
         refusals.push(
             "  - [user]: an account declaration rides the image (hash, keys, autologin), \
-             and the delta compiler does not carry it; `kuma update` full-rebuilds"
+             and the delta compiler does not carry one that moves; `kuma update` \
+             full-rebuilds"
                 .to_string(),
         );
     }
@@ -838,6 +845,32 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err:#}").contains("[user]"));
+    }
+
+    #[test]
+    fn an_account_the_release_already_carries_rides_the_delta() {
+        // The boot images bake an account (the smoke's does; a personal
+        // image declares its own), and a machine's declaration starts as
+        // the baked one — so the delta compiler meets a [user] that is
+        // the RELEASE's own, not a move. It rides: the declaration COPY
+        // is verbatim and user sync converges what it always converged.
+        // The package beside it is what the delta is actually for.
+        let base = format!("{BASE}[user]\nname = \"smoketest\"\nshell = \"bash\"\n");
+        let plan = compile_ok(
+            "schema_version = 1\n\
+             [system]\n\
+             desktop = \"niri\"\n\
+             shell = \"fish\"\n\
+             [packages]\n\
+             rpm = [\"fish\", \"git-core\", \"distrobox\", \"tailscale\", \"cowsay\"]\n\
+             [snapshots]\n\
+             enable = true\n\
+             [user]\n\
+             name = \"smoketest\"\n\
+             shell = \"bash\"\n",
+            &base,
+        );
+        assert!(plan.text.contains(&dnf_install("cowsay")));
     }
 
     #[test]

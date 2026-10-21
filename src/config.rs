@@ -1402,7 +1402,7 @@ pub(crate) mod tests {
             Proof::Runs("scripts/smoke.sh", "restore_args=(--restore \"$restore\")"),
         ),
         ("kuma check", Proof::Runs("scripts/smoke.sh", "\"$KUMA\" --config \"$file\" check")),
-        ("kuma build", Proof::Runs("scripts/smoke.sh", "\"$KUMA\" --config \"$file\" build --tag")),
+        ("kuma build", Proof::Runs("scripts/smoke.sh", "kuma_build \"$file\" \"$tag\"")),
         ("kuma switch --yes", Proof::Unexecuted("mutates a deployment; nothing runs it, and it is how a built image is taken")),
         // smoke.sh runs `vm --no-run --rebuild` and then boots the disk
         // with qemu itself, so kuma's own boot path is the half nothing

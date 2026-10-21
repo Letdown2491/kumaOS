@@ -62,11 +62,20 @@ runs:
         # against the running kernel's headers: vgem is one file, the
         # build takes seconds, and loading it needs no reboot. The same
         # trick WSL uses for the same reason.
-        if ! ls /dev/dri/renderD* >/dev/null 2>&1; then
-            sudo modprobe vgem 2>/dev/null || true
-        fi
-        if ! ls /dev/dri/renderD* >/dev/null 2>&1; then
-            echo "   .. no render node and no vgem module; building vgem out of tree"
+        #
+        # vgem is asked for ALWAYS, native node or not, because a node
+        # that opens is not a node that works: the runners' paravirt GPU
+        # presents renderD128, the open() check below passed it, and
+        # qemu still died on it sixteen minutes later — the same "egl:
+        # no drm render node available" (dead-disk, 2026-10-21) — while
+        # the boot job's native node booted fine in the same round. The
+        # two nodes are indistinguishable to open(); only EGL can tell.
+        # mesa's render scan tries every renderD* and lands on one that
+        # GBMs, so an extra vgem costs it one failed probe and saves
+        # the run when the native node cannot.
+        sudo modprobe vgem 2>/dev/null || true
+        if ! ls /sys/module/vgem >/dev/null 2>&1; then
+            echo "   .. no vgem module; building it out of tree"
             sudo apt-get install -y -qq "linux-headers-$(uname -r)" build-essential
             vgem_dir=/tmp/vgem-build
             mkdir -p "$vgem_dir"
