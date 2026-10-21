@@ -2080,7 +2080,7 @@ fn upgrade_delta_apply(
         "/usr/lib/kuma/kuma.toml",
     ])
     .with_context(|| {
-        format!("the release image carries no baked declaration at /usr/lib/kuma/kuma.toml")
+        "the release image carries no baked declaration at /usr/lib/kuma/kuma.toml".to_string()
     })?;
     // The nostr layer's presence is probed, not assumed: a 44.9.0-shaped
     // base shipped it only when its example armed it, and the delta

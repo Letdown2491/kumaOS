@@ -500,7 +500,7 @@ mod tests {
         // moves the stubs and the gate together.
         let (pin_sha, pin_version) = kumaui_pin().unwrap();
         let built = &pin_sha[..7];
-        let mut exe_stub = |name: &str, stamp: String| {
+        let exe_stub = |name: &str, stamp: String| {
             let path = bin_home.path().join(name);
             std::fs::write(&path, format!("#!/bin/sh\necho '{stamp}'\n")).unwrap();
             let mut perm = std::fs::metadata(&path).unwrap().permissions();

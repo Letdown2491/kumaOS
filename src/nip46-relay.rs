@@ -89,7 +89,7 @@ const LIMITER_CAP: usize = 20_000;
 /// when the cap has actually been reached.
 fn sweep_limiters(limiters: &mut HashMap<nostr::key::PublicKey, RateLimiter>, now: u64) {
     let floor = now.saturating_sub(LIMITER_IDLE_SECS);
-    limiters.retain(|_, lim| lim.last_seen().map_or(false, |at| at >= floor));
+    limiters.retain(|_, lim| lim.last_seen().is_some_and(|at| at >= floor));
     if limiters.len() < LIMITER_CAP {
         return;
     }
@@ -462,14 +462,13 @@ fn broadcast(event: &Event, outbound: &Outbound, subscriptions: &Subscriptions) 
             for (sub_id, filter) in conn_subs {
                 if filter.matches(event) {
                     let frame = serde_json::json!(["EVENT", sub_id, event]).to_string();
-                    match queues.get_mut(conn_id) {
-                        Some((queue, _)) => match queue.try_send(Message::text(frame)) {
+                    if let Some((queue, _)) = queues.get_mut(conn_id) {
+                        match queue.try_send(Message::text(frame)) {
                             Ok(()) => {}
                             Err(TrySendError::Full(_)) => kicked.push(*conn_id),
                             // Already gone; its own teardown holds the map.
                             Err(TrySendError::Disconnected(_)) => {}
-                        },
-                        None => {}
+                        }
                     }
                 }
             }

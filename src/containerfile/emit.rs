@@ -180,15 +180,6 @@ impl<'c> Emitter<'c> {
         self.text.push_str(&format!("RUN systemctl enable {}\n", units.join(" ")));
     }
 
-    /// `RUN systemctl --global enable …` — the bunker's shape: a user
-    /// unit with no system-scope half.
-    pub(crate) fn enable_global(&mut self, units: &[&str]) {
-        for unit in units {
-            self.account(unit);
-        }
-        self.text.push_str(&format!("RUN systemctl --global enable {}\n", units.join(" ")));
-    }
-
     /// `RUN systemctl --global preset …` — the preset flip's shape: the
     /// preset FILE decides enable or disable, and this applies it to
     /// the image (skel links created or taken away). Same door as

@@ -371,9 +371,10 @@ impl Engine {
         self.state_path.as_ref().map(|dir| dir.join("log.json"))
     }
 
-    /// Whatever the batched writes owe the files, written. The
-    /// flusher's whole body; also the test seam, so a test can make
-    /// the tail durable without waiting out the period.
+    /// The test seam: the flusher's body lives in the thread, which
+    /// calls persist_log_at on its own period — a test that wants the
+    /// tail durable before a restart makes it so by hand.
+    #[cfg(test)]
     fn flush(&self) {
         let mut inner = self.inner.lock().expect("the policy lock");
         if inner.log_dirty {
@@ -395,10 +396,6 @@ impl Engine {
                 eprintln!("kuma-nostrd: {file:?} did not parse; starting with an empty log: {e}")
             }
         }
-    }
-
-    fn persist_log(&self, inner: &mut Inner) {
-        persist_log_at(&self.state_path, inner);
     }
 
     /// The activity log's one door: push, cap, mark. The write itself
