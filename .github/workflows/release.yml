@@ -411,6 +411,15 @@ jobs:
           # `cargo build`, which would be a debug binary carrying
           # /home/runner paths that publish-audit.sh fails an image for,
           # and would be a second compile of code already built above.
+          #
+          # The layer's binaries ride beside it, ALWAYS since the layer
+          # ships in every image: the staging gate reads each sibling's
+          # --version from this directory, and the packaged assets carry
+          # target suffixes the gate does not know. Linked, not copied —
+          # a link answers as its target, and the bytes are already here.
+          for bin in kuma-nostrd kuma-nostr nip46-relay; do
+            ln -s "${bin}-${TARGET}" "$bin"
+          done
           KUMA=./${{ steps.pkg.outputs.name }} ./scripts/smoke.sh --iso --keep niri
           # Unversioned for the same reason the binary is, and the reason
           # binds harder here: this is the asset getting-started links, so

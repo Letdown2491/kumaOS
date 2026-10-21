@@ -47,6 +47,7 @@ fn main() {
     println!("cargo:rustc-env=KUMA_BUILD_DATE={date}");
 
     plymouth_theme();
+    kumaui_pin();
 }
 
 /// Embed the vendored plymouth theme into the binary.
@@ -89,6 +90,48 @@ fn plymouth_theme() {
     let out_path = Path::new(&out_dir).join("plymouth_theme.rs");
     std::fs::write(&out_path, table)
         .unwrap_or_else(|e| panic!("cannot write {}: {e}", out_path.display()));
+}
+
+/// Emit the kumaui pin as compile-time env, parsed from the action file
+/// whose `default:` line is the one place the pinned kumaui version is
+/// named.
+///
+/// Parse-and-emit rather than letting the crate include_str! the file,
+/// and the reason is the publish audit: the action's text carries the
+/// runner's RUSTFLAGS (`--remap-path-prefix=/home/runner/...`), and a
+/// binary embedding the file embeds that string — the audit reads any
+/// `/home/<name>/` in a shipped binary as a leaked build path and
+/// refuses the image, which 44.10.0's first publish died of (the first
+/// build to carry the pin embed at all). The pin is the file's one
+/// cargo-relevant fact; only it travels.
+///
+/// Both values degrade to empty rather than failing the build: a
+/// release tarball carries the action file (it is tracked), but a
+/// file whose shape moved parses to nothing, and the empty pin is the
+/// consumer's refusal at the call site, not a skipped check.
+fn kumaui_pin() {
+    println!("cargo:rerun-if-changed=.github/actions/kuma-shell/action.yml");
+    let text = std::fs::read_to_string(".github/actions/kuma-shell/action.yml").unwrap_or_default();
+    let mut pin = ("", "");
+    for line in text.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("default:") else {
+            continue;
+        };
+        let mut parts = rest.split_whitespace();
+        let sha = parts.next().unwrap_or("");
+        if sha.len() != 40 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+            break;
+        }
+        if let Some(idx) = rest.find("# v") {
+            let version = rest[idx + 3..].trim();
+            if !version.is_empty() {
+                pin = (sha, version);
+            }
+        }
+        break;
+    }
+    println!("cargo:rustc-env=KUMA_UI_PIN_SHA={}", pin.0);
+    println!("cargo:rustc-env=KUMA_UI_PIN_VERSION={}", pin.1);
 }
 
 /// Trimmed stdout of a successful `git`, or None if git is missing, this

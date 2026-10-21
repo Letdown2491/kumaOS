@@ -145,33 +145,23 @@ pub fn live_masks() -> Vec<&'static str> {
 /// its input and `scan_etc` takes its roots.
 /// The kumaui pin, riding inside the binary: the action file that builds
 /// the shell is the one place the pinned kumaui version is named, and an
-/// installed kuma has no checkout to read it from. include_str! puts the
-/// file's bytes here at compile time, so a released kuma always knows
-/// which kumaui ride it was built to carry.
-const KUMAUI_PIN_FILE: &str = include_str!("../../.github/actions/kuma-shell/action.yml");
-
-/// The kumaui version the pin names, as (sha, version) — the
-/// `default: <sha> # v0.4.1` line of the staged action file. None when
-/// the file's shape moved, which is a refusal at the call site, not a
-/// skip: a pin that cannot be read is a pin that cannot be enforced.
+/// installed kuma has no checkout to read it from. build.rs parses that
+/// file's `default:` line and emits the (sha, version) pair as
+/// compile-time env, so a released kuma always knows which kumaui ride
+/// it was built to carry — and the file's text, which carries the
+/// runner's remap flags under `/home/runner/`, stays out of the binary
+/// the publish audit grades (see build.rs).
+///
+/// None when the file's shape moved, which is a refusal at the call
+/// site, not a skip: a pin that cannot be read is a pin that cannot be
+/// enforced.
 pub(crate) fn kumaui_pin() -> Option<(String, String)> {
-    for line in KUMAUI_PIN_FILE.lines() {
-        let Some(rest) = line.trim_start().strip_prefix("default:") else {
-            continue;
-        };
-        let mut parts = rest.split_whitespace();
-        let sha = parts.next()?;
-        if sha.len() != 40 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
-            continue;
-        }
-        if let Some(idx) = rest.find("# v") {
-            let version = rest[idx + 3..].trim();
-            if !version.is_empty() {
-                return Some((sha.to_string(), version.to_string()));
-            }
-        }
+    let sha = env!("KUMA_UI_PIN_SHA");
+    let version = env!("KUMA_UI_PIN_VERSION");
+    if sha.is_empty() || version.is_empty() {
+        return None;
     }
-    None
+    Some((sha.to_string(), version.to_string()))
 }
 
 /// Whether a kumaui stamp is the ride the pin names: the `(g<short>)`
