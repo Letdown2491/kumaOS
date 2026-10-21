@@ -380,4 +380,30 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "the credential inherited the wider mode: {mode:o}");
     }
+
+    /// The two capture halves disagree on exit status on purpose, and
+    /// the delta lane's unit probe lives on the disagreement: one ls
+    /// asks about several files whose absence is a FINDING (ls exits
+    /// non-zero while printing the ones it found), so the probe needs
+    /// the stdout a strict capture would throw away. The erroring half
+    /// keeps its contract — an Err, stdout gone — because elsewhere
+    /// the exit status IS the answer.
+    #[test]
+    fn stdout_survives_a_failed_command_only_in_the_any_half() {
+        // The probe below must run as itself. Inside a build container
+        // host_command re-executes through flatpak-spawn --host, which
+        // fails at the bus before the command runs — that failure is
+        // the wrap's own business, not the capture halves' contract.
+        // The paths this contract serves (the runner, the guest) carry
+        // no such marker.
+        if Path::new("/run/.containerenv").exists() || Path::new("/.dockerenv").exists() {
+            return;
+        }
+        // `sh` because the delta lane's unit probe runs this shape; the
+        // exit status and the stdout line are the whole setup.
+        let probe = ["sh", "-c", "echo found; exit 2"];
+        let any = host_output_any(&probe).expect("any keeps a failing command's stdout");
+        assert_eq!(any, "found");
+        assert!(host_output(&probe).is_err(), "strict treats the exit as the answer");
+    }
 }

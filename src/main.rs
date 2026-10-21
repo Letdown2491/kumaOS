@@ -2086,7 +2086,16 @@ fn upgrade_delta_apply(
     // base shipped it only when its example armed it, and the delta
     // must refuse arming an absent unit rather than fail a build that
     // names a unit file that is not there.
-    let listing = host_output(&[
+    // host_output_any, and it matters: the one ls asks about all three
+    // units, and the serve unit bakes only when the declaration arms
+    // serve — so on every image that carries the daemon and the relay
+    // but not the serve oneshot, ls exits non-zero WHILE PRINTING the
+    // two paths it found. host_output turns that exit into an Err and
+    // the caller's unwrap_or_default then reads as "the layer is
+    // absent", which refused every delta arming [nostr] from a machine
+    // whose release was perfectly capable of carrying it (measured
+    // 2026-10-21, the delta lap dying at exactly that guard).
+    let listing = host_output_any(&[
         "podman",
         "run",
         "--rm",
