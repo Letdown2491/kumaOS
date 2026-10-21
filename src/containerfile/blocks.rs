@@ -4577,6 +4577,10 @@ ExecStart={exec_line}
 ExecStartPre=+/usr/bin/mkdir -p %h/.local/state/kuma-nostr
 # A bunker that exits zero is still a bunker that stopped answering.
 Restart=always
+# Same case as the relay's: a crash-loop at the default 100 ms spin is
+# churn for nothing; five seconds between restarts is inaudible in a
+# session and keeps the failure quiet.
+RestartSec=5
 Slice=session.slice
 
 # The sandbox. A bunker holds a signing key; the unit is the reason an
@@ -4725,6 +4729,10 @@ After=graphical-session.target
 [Service]
 ExecStart=/usr/bin/nip46-relay --bind {LOCAL_RELAY_BIND}
 Restart=always
+# A crash-loop spins at systemd's default 100 ms without this; the
+# daemon is a session service, not a boot-critical one, so a slow
+# restart costs seconds and buys a quiet failure.
+RestartSec=5
 Slice=session.slice
 
 # Loopback is the boundary: the relay carries signing metadata for the

@@ -1876,7 +1876,9 @@ fn upgrade_check(deps: &deployment::Deployments, origin: &str, fetch: bool, json
     // A metadata-only read: no layers, and the baked signature policy
     // applies (skopeo enforces /etc/containers/policy.json), so an
     // unsigned or tampered tag refuses here rather than staging.
-    let raw = host_output(&["sudo", "skopeo", "inspect", &format!("docker://{origin}")])?;
+    // Bounded like the delta lane's read: a registry that accepts the
+    // connection and stalls must not hold `--check` forever.
+    let raw = host_output(&["sudo", "timeout", "60", "skopeo", "inspect", &format!("docker://{origin}")])?;
     let inspect: serde_json::Value =
         serde_json::from_str(raw.trim()).context("skopeo inspect returned nothing readable")?;
     let digest = inspect
@@ -1963,6 +1965,40 @@ fn upgrade_check(deps: &deployment::Deployments, origin: &str, fetch: bool, json
 /// everything the compiler carries rides; everything else refuses
 /// loudly (see the compiler). The lock's release slot records the
 /// resolution, beside the base story the full builds write.
+/// The delta lane pulls the full release image as scaffolding: the delta
+/// build FROMs its digest, so the built image shares every layer and the
+/// parent reference is dead weight from the moment the build exists.
+/// Untagged (digest-pulled) and invisible to prune-by-tag, a year of
+/// monthly upgrades would otherwise leave every release behind — the
+/// `vm_apply` switch already rmis its copy for the same reason. Reclaimed
+/// once the build succeeds, best-effort on any failure after the pull: a
+/// failed removal only costs disk, never correctness.
+struct ReleaseScaffold {
+    reference: String,
+    reclaimed: bool,
+}
+
+impl ReleaseScaffold {
+    fn reclaim_now(mut self) {
+        self.reclaimed = true;
+        match run_host(&["podman", "rmi", "-f", &self.reference]) {
+            Ok(_) => note("Reclaimed the pulled release image (the delta shares its layers)."),
+            Err(_) => note("Could not reclaim the pulled release; `kuma clean` will."),
+        }
+    }
+}
+
+impl Drop for ReleaseScaffold {
+    fn drop(&mut self) {
+        if self.reclaimed {
+            return;
+        }
+        // A failure path: the pull happened but the build never did, so
+        // nothing shares the layers and the whole image is stranded.
+        let _ = run_host(&["podman", "rmi", "-f", &self.reference]);
+    }
+}
+
 fn upgrade_delta_apply(
     config_path: &Path,
     config: &Config,
@@ -1974,7 +2010,12 @@ fn upgrade_delta_apply(
     // Metadata-only: no layers, baked signature policy enforced. The
     // digest is what the machine shares with the fleet; the version
     // label is what the delta image reports (and bootupd reads).
-    let raw = host_output(&["sudo", "skopeo", "inspect", &format!("docker://{inferred}")])?;
+    //
+    // Like `podman manifest inspect` (lock.rs), skopeo has a dial
+    // timeout and no request timeout: a registry that accepts the
+    // connection and stalls would hold the verb forever, so the bound
+    // is the same 60 s the other registry reads use.
+    let raw = host_output(&["sudo", "timeout", "60", "skopeo", "inspect", &format!("docker://{inferred}")])?;
     let inspect: serde_json::Value =
         serde_json::from_str(raw.trim()).context("skopeo inspect returned nothing readable")?;
     let digest = inspect
@@ -2001,6 +2042,7 @@ fn upgrade_delta_apply(
     note(&format!("Pulling the release image ({version})..."));
     let pinned = lock::pinned_ref(inferred, &digest);
     run_host(&["podman", "pull", &format!("docker://{pinned}")])?;
+    let scaffold = ReleaseScaffold { reference: pinned.clone(), reclaimed: false };
 
     note("Reading the release's baked declaration...");
     let base_text = host_output(&[
@@ -2064,6 +2106,11 @@ fn upgrade_delta_apply(
         dir.path().to_str().context("non-UTF-8 temp path")?,
     ])?;
     reclaim_stranded(DEFAULT_TAG, previous);
+
+    // The delta shares the release's layers now; the parent reference
+    // is scaffolding. Reclaimed before the stage so even a failed stage
+    // leaves nothing behind.
+    scaffold.reclaim_now();
 
     note("Staging the delta image...");
     if !stage(DEFAULT_TAG)? {
@@ -4274,6 +4321,18 @@ fn sync_image_to_root(tag: &str, scratch: &Path) -> Result<String> {
                  && sudo podman rm -f kuma-sync-unpack"
             ),
         ])?;
+        // The load re-tagged the NEW image, which strands the copy root
+        // already had — one dangling image (~3 GB) per sync, in a store
+        // `kuma clean` prunes only on a bootc machine (elsewhere root
+        // storage may not be kuma's to prune; a workstation's dangling
+        // images can be its own). Removed here instead, at the source,
+        // after the load succeeded so a failed sync keeps the old copy.
+        // A booted deployment does not need it: bootc copies the content
+        // into its own store at deploy time, and the origin spec is the
+        // tag, which this load just re-pointed.
+        if !root_id.is_empty() {
+            let _ = run_host(&["sudo", "podman", "image", "rm", "-f", root_id.trim()]);
+        }
         let _ = scratch;
     }
     Ok(local_id)
