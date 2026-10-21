@@ -4103,7 +4103,7 @@ if [ -n "$PUBLISHED" ]; then
     # exits before the sweep's epilogue. ci's readers (ci.yml,
     # published.yml) tail the copy, not the dir.
     rm -f "vm-smoke/console-published.log"
-    machine="$PUBLISHED"
+    machine_ref="$PUBLISHED"
     if [ $DELTA_PUBLISHED -eq 1 ]; then
         # The delta lane infers localhost-origin as its own: a machine
         # installed from a registry ref takes the fetch lane, which is
@@ -4114,11 +4114,11 @@ if [ -n "$PUBLISHED" ]; then
         # already carries. The tag part is arbitrary: the lane reads the
         # machine's release tier off its declaration, not off this tag.
         podman pull -q "$PUBLISHED" || bad "cannot pull the published machine $PUBLISHED"
-        machine="localhost/kuma-delta-machine:smoke"
-        podman tag "$PUBLISHED" "$machine" || bad "cannot retag the published machine for a localhost origin"
-        note "published delta: the machine is $machine (from $PUBLISHED)"
+        machine_ref="localhost/kuma-delta-machine:smoke"
+        podman tag "$PUBLISHED" "$machine_ref" || bad "cannot retag the published machine for a localhost origin"
+        note "published delta: the machine is $machine_ref (from $PUBLISHED)"
     fi
-    if (smoke_published "$machine" published "$port" "$DELTA_TARGET"); then
+    if (smoke_published "$machine_ref" published "$port" "$DELTA_TARGET"); then
         PASS+=("published")
     else
         FAIL+=("published")
