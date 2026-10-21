@@ -3,7 +3,7 @@ mod emit;
 
 use crate::config::{Config, Desktop};
 use crate::seam;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -143,6 +143,114 @@ pub fn live_masks() -> Vec<&'static str> {
 /// the tests can stage a stub instead of copying a 42 MB test harness into
 /// a temp directory fourteen times — the same reason `loop_mounts_in` takes
 /// its input and `scan_etc` takes its roots.
+/// The kumaui pin, riding inside the binary: the action file that builds
+/// the shell is the one place the pinned kumaui version is named, and an
+/// installed kuma has no checkout to read it from. include_str! puts the
+/// file's bytes here at compile time, so a released kuma always knows
+/// which kumaui ride it was built to carry.
+const KUMAUI_PIN_FILE: &str = include_str!("../../.github/actions/kuma-shell/action.yml");
+
+/// The kumaui version the pin names — the `default: <sha> # v0.4.1` line
+/// of the staged action file. None when the file's shape moved, which is
+/// a refusal at the call site, not a skip: a pin that cannot be read is
+/// a pin that cannot be enforced.
+pub(crate) fn kumaui_pin() -> Option<String> {
+    for line in KUMAUI_PIN_FILE.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("default:") else {
+            continue;
+        };
+        if let Some(idx) = rest.find("# v") {
+            let pin = rest[idx + 3..].trim();
+            if !pin.is_empty() {
+                return Some(pin.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// What a sibling binary says about itself. Both streams are read:
+/// clap writes `--version` to stdout and the kumaui binaries print their
+/// line there too, but a binary that answers on stderr still answered.
+fn sibling_stamp(parent: &Path, name: &str) -> Result<String> {
+    let out = std::process::Command::new(parent.join(name))
+        .arg("--version")
+        .output()
+        .with_context(|| {
+            format!(
+                "running {name} --version to read its stamp; the binary must be \
+                 runnable beside the kuma doing the build"
+            )
+        })?;
+    if !out.status.success() {
+        bail!("{name} --version exited nonzero; refusing to compose around an unprovable stamp");
+    }
+    Ok(format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    ))
+}
+
+/// The stamp gate over every staged sibling. The kumaui five answer to
+/// the pin (the action file's `kumaui-ref` default); the nostr pair
+/// answers to this kuma's own version number, because cargo install
+/// moves all three together and a partial install is exactly the
+/// stale-sibling shape this gate exists for — the compose that shipped
+/// an older kumaui under the new version's name while the changelog
+/// claimed the ride (#42).
+///
+/// Refuse-by-default, and the refusal names both stamps: what the
+/// binary reports and what the pin claims. KUMA_ALLOW_KUMAUI_MISMATCH=1
+/// lets a deliberate mismatch through loudly — the dev loop's road, not
+/// the release road's.
+fn verify_sibling_stamps(parent: &Path, config: &Config) -> Result<()> {
+    let loud = std::env::var("KUMA_ALLOW_KUMAUI_MISMATCH").is_ok_and(|v| v == "1");
+    verify_sibling_stamps_loud(parent, config, loud)
+}
+
+/// `verify_sibling_stamps` with the override named by the caller, so the
+/// tests can take both branches without mutating process-global env
+/// state from a parallel harness.
+fn verify_sibling_stamps_loud(parent: &Path, config: &Config, loud: bool) -> Result<()> {
+    let mut checks: Vec<(&str, String)> = vec![
+        ("kuma-nostrd", env!("CARGO_PKG_VERSION").to_string()),
+        ("kuma-nostr", env!("CARGO_PKG_VERSION").to_string()),
+    ];
+    if config.system.desktop == Desktop::Niri {
+        let Some(pin) = kumaui_pin() else {
+            bail!(
+                "the kumaui pin cannot be read from the staged action file; \
+                 refusing to compose a desktop image against an unreadable pin"
+            );
+        };
+        for name in ["kuma-shell", "kuma-greeter", "kuma-files", "kuma-term", "kuma-monitor"] {
+            checks.push((name, pin.clone()));
+        }
+    }
+    for (name, expected) in checks {
+        let stamp = sibling_stamp(parent, name)?;
+        if stamp.contains(&expected) {
+            continue;
+        }
+        if loud {
+            eprintln!(
+                "warn: KUMA_ALLOW_KUMAUI_MISMATCH=1 lets this through: {name} reports \
+                 '{}', the pin names {expected}",
+                stamp.trim()
+            );
+            continue;
+        }
+        bail!(
+            "{name} reports '{}' but the pin names {expected}; refusing to compose an \
+             image whose ride does not match. Set KUMA_ALLOW_KUMAUI_MISMATCH=1 to let a \
+             deliberate mismatch through.",
+            stamp.trim()
+        );
+    }
+    Ok(())
+}
+
 pub fn write_context(
     config: &Config,
     config_text: &str,
@@ -283,6 +391,10 @@ pub fn write_context(
             )
         })?;
     }
+    // Every sibling that just rode in has now answered for itself: the
+    // stamp gate runs after the copies, against the same files, so a
+    // stale ride composes nothing.
+    verify_sibling_stamps(parent, config)?;
     let plan = plan(config);
     std::fs::write(dir.join("Containerfile"), &plan.text)?;
     emit::materialize(&plan.files, dir)?;
@@ -324,36 +436,89 @@ mod tests {
         std::fs::write(&stub, b"not really a binary\n").unwrap();
         let cfg = config(toml);
         // The shell and the nostr siblings are as fake as the stub, and
-        // as stable.
-        std::fs::write(bin_home.path().join("kuma-shell"), "not really kuma-shell\n").unwrap();
-        std::fs::write(bin_home.path().join("kuma-greeter"), "not really kuma-greeter\n").unwrap();
-        // Koguma's trio rides with them: the binary, its desktop entry,
-        // and the icon the entry names. Written for every case like the
-        // shell's stubs, because write_context only reads them where a
-        // niri image will COPY them.
-        std::fs::write(bin_home.path().join("kuma-files"), "not really kuma-files\n").unwrap();
-        std::fs::write(bin_home.path().join("kuma-files.desktop"), "not really kuma-files\n")
-            .unwrap();
-        std::fs::write(bin_home.path().join("kuma-files.png"), "not really kuma-files\n").unwrap();
-        // kuma-term's trio rides the same road: binary, entry, icon.
-        std::fs::write(bin_home.path().join("kuma-term"), "not really kuma-term\n").unwrap();
-        std::fs::write(bin_home.path().join("kuma-term.desktop"), "not really kuma-term\n")
-            .unwrap();
-        std::fs::write(bin_home.path().join("kuma-term.png"), "not really kuma-term\n").unwrap();
-        // Kamuy's trio rides the same road as the terminal's, and is
-        // written for every case for the same reason.
-        std::fs::write(bin_home.path().join("kuma-monitor"), "not really kuma-monitor\n").unwrap();
-        std::fs::write(bin_home.path().join("kuma-monitor.desktop"), "not really kuma-monitor\n")
-            .unwrap();
-        std::fs::write(bin_home.path().join("kuma-monitor.png"), "not really kuma-monitor\n")
-            .unwrap();
-        // The nostr layer's siblings ride unconditionally now: the
-        // block ships the layer in every image, so every case's
-        // context needs all three.
-        for name in ["kuma-nostrd", "kuma-nostr", "nip46-relay"] {
-            std::fs::write(bin_home.path().join(name), format!("not really {name}\n")).unwrap();
+        // as stable — but they are executable, because the stamp gate
+        // reads each one's --version. Every stub prints the version the
+        // gate expects, parsed from the same pin the gate checks
+        // against, so a pin bump moves the stubs and the gate together.
+        let pin = kumaui_pin().unwrap();
+        let mut exe_stub = |name: &str, version: &str| {
+            let path = bin_home.path().join(name);
+            std::fs::write(&path, format!("#!/bin/sh\necho '{name} {version} (gstub)'\n")).unwrap();
+            let mut perm = std::fs::metadata(&path).unwrap().permissions();
+            use std::os::unix::fs::PermissionsExt;
+            perm.set_mode(0o755);
+            std::fs::set_permissions(&path, perm).unwrap();
+        };
+        for name in ["kuma-shell", "kuma-greeter", "kuma-files", "kuma-term", "kuma-monitor"] {
+            exe_stub(name, &pin);
+        }
+        for name in ["kuma-nostrd", "kuma-nostr"] {
+            exe_stub(name, env!("CARGO_PKG_VERSION"));
+        }
+        // nip46-relay is not kuma's binary and carries no pin: the stub
+        // stays text, like the other non-binary siblings.
+        std::fs::write(bin_home.path().join("nip46-relay"), "not really nip46-relay\n").unwrap();
+        // The entries and icons ride beside their binaries; the stamp
+        // gate reads binaries only, so these stay text.
+        for name in ["kuma-files", "kuma-term", "kuma-monitor"] {
+            for suffix in [".desktop", ".png"] {
+                std::fs::write(bin_home.path().join(format!("{name}{suffix}")), "not really\n")
+                    .unwrap();
+            }
         }
         write_context(&cfg, toml, &stub, dir).unwrap();
+    }
+
+    #[test]
+    fn the_pin_is_read_from_the_staged_action_file() {
+        // Moves when the pin bumps, and the move is the review — the
+        // same deal the goldens are on.
+        assert_eq!(kumaui_pin().as_deref(), Some("0.4.1"));
+    }
+
+    /// The gate's two verdicts, run for real: a shell reporting a ride
+    /// the pin does not name refuses the compose, and the refusal names
+    /// both stamps and the override road. The nostr pair answers to
+    /// this kuma's version number, so their stubs tell the truth here —
+    /// the lie under test is the shell's.
+    fn mismatch_home() -> tempfile::TempDir {
+        let bin_home = tempfile::tempdir().unwrap();
+        for (name, version) in [
+            ("kuma-nostrd", env!("CARGO_PKG_VERSION")),
+            ("kuma-nostr", env!("CARGO_PKG_VERSION")),
+            ("kuma-shell", "0.0.1"),
+            ("kuma-greeter", kumaui_pin().unwrap().as_str()),
+            ("kuma-files", kumaui_pin().unwrap().as_str()),
+            ("kuma-term", kumaui_pin().unwrap().as_str()),
+            ("kuma-monitor", kumaui_pin().unwrap().as_str()),
+        ] {
+            let path = bin_home.path().join(name);
+            std::fs::write(&path, format!("#!/bin/sh\necho '{name} {version} (gstub)'\n"))
+                .unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            let mut perm = std::fs::metadata(&path).unwrap().permissions();
+            perm.set_mode(0o755);
+            std::fs::set_permissions(&path, perm).unwrap();
+        }
+        bin_home
+    }
+
+    #[test]
+    fn a_stale_sibling_stamp_refuses_the_compose() {
+        let bin_home = mismatch_home();
+        let cfg = config("schema_version = 1\n[system]\ndesktop = \"niri\"\n");
+        let err = verify_sibling_stamps_loud(bin_home.path(), &cfg, false).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("0.0.1"), "{text}");
+        assert!(text.contains(kumaui_pin().unwrap().as_str()), "{text}");
+        assert!(text.contains("KUMA_ALLOW_KUMAUI_MISMATCH"), "{text}");
+    }
+
+    #[test]
+    fn the_override_lets_a_mismatched_ride_through() {
+        let bin_home = mismatch_home();
+        let cfg = config("schema_version = 1\n[system]\ndesktop = \"niri\"\n");
+        verify_sibling_stamps_loud(bin_home.path(), &cfg, true).unwrap();
     }
 
     /// The declaration matrix every structural change to the generator
