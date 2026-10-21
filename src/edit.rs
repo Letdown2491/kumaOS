@@ -340,11 +340,10 @@ fn refuse_names_not_in(names: &[String], known: &[String]) -> Result<()> {
             continue;
         }
         bail!(
-            "{name} is not an app Flathub lists.\n\
-             A name Flathub does not know fails the converger on every boot, and takes \
-             the apps beside it down with it, so it is refused here rather than at 3am.\n\
-             If it is new, this machine's cached list may be behind: \
-             `flatpak update --appstream` refreshes it."
+            "{name} is not an app Flathub lists. A name Flathub does not know fails the \
+             converger on every boot, and takes the apps beside it down with it, so it is \
+             refused here rather than at 3am. If it is new, this machine's cached list may be \
+             behind: `flatpak update --appstream` refreshes it."
         );
     }
     Ok(())

@@ -349,15 +349,15 @@ pub fn baked_user_warning(baked: &str, installing: &str) -> Option<String> {
         return None;
     }
     let mut out = format!(
-        "note: this image declares the account '{}', which is not the '{installing}' being\n\
-         created here. Its password hash rides along in the image's baked declaration,\n\
-         so this disk carries a credential for an account it will never have.",
+        "note: this image declares the account '{}', which is not the '{installing}' being \
+         created here. Its password hash rides along in the image's baked declaration, so this \
+         disk carries a credential for an account it will never have.",
         declared.name
     );
     if declared.autologin {
         out.push_str(
-            "\nIts autologin has been dropped from the greeter, which would otherwise try to\n\
-             log in a user that does not exist and fail to start at all.",
+            "\nIts autologin has been dropped from the greeter, which would otherwise try to log \
+             in a user that does not exist and fail to start at all.",
         );
     }
     out.push_str("\n\nImages meant to be installed elsewhere should declare no [user].");
@@ -494,11 +494,10 @@ pub fn unreachable_update_source(reference: &str) -> Option<String> {
     if reference.starts_with("localhost/") {
         return Some(format!(
             "{reference} is local to the machine running this install.\n\n\
-             The installed machine records it as where updates come from, and\n\
-             `localhost` there means itself. It has no registry, so it would\n\
-             never update.\n\n\
-             Install a published image, or keep this one and say where the\n\
-             machine should update from:\n\n  \
+             The installed machine records it as where updates come from, and `localhost` there \
+             means itself. It has no registry, so it would never update.\n\n\
+             Install a published image, or keep this one and say where the machine should \
+             update from:\n\n  \
              --update-from ghcr.io/<owner>/kuma:niri"
         ));
     }
@@ -531,11 +530,11 @@ pub fn image_for_media(recorded: Option<&str>) -> (String, Option<String>) {
         return (recorded.to_string(), None);
     }
     let note = format!(
-        "This media was built from {recorded}, which is local to the machine\n\
-         that built it and cannot be pulled from here. Installing {published}\n\
-         instead, so the installed machine has somewhere to update from.\n\n\
-         To install what this media is running, push that image to a registry\n\
-         and name it: kuma install --image ghcr.io/<owner>/kuma:<tag>"
+        "This media was built from {recorded}, which is local to the machine that built it and \
+         cannot be pulled from here. Installing {published} instead, so the installed machine \
+         has somewhere to update from.\n\n\
+         To install what this media is running, push that image to a registry and name it: \
+         kuma install --image ghcr.io/<owner>/kuma:<tag>"
     );
     (published, Some(note))
 }

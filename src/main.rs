@@ -1763,8 +1763,8 @@ fn upgrade(config_path: &Path, check: bool, yes: bool, json: bool) -> Result<()>
     );
     match upgrade_lane(config.system.desktop, &deps.booted) {
         UpgradeLane::Headless => bail!(
-            "a headless machine has no release to upgrade to: no published image\n\
-             tier exists for it. `kuma update` rebuilds from the declaration."
+            "a headless machine has no release to upgrade to: no published image tier exists \
+             for it. `kuma update` rebuilds from the declaration."
         ),
         UpgradeLane::Delta { inferred } => {
             if check {
@@ -1784,12 +1784,12 @@ fn upgrade(config_path: &Path, check: bool, yes: bool, json: bool) -> Result<()>
                     "ask the release tag whether a newer kumaOS exists",
                 )];
                 let prose = format!(
-                    "Release lane (delta): this machine's release enters from local builds;\n\
-                     the release tier is inferred from the declaration's desktop: {inferred}.\n\n\
-                     Run `kuma upgrade --check` to ask the registry (no pull, no build), or\n\
-                     `kuma upgrade --yes` to delta-build this declaration onto the release\n\
-                     and stage it. Fields the delta compiler cannot carry (an account, a\n\
-                     backup, a timezone) refuse loudly and say `kuma update`.\n"
+                    "Your machine's release builds locally, inferred from the declaration's \
+                     desktop: {inferred}.\n\n\
+                     Run `kuma upgrade --check` to ask the registry (no pull, no build), or \
+                     `kuma upgrade --yes` to delta-build this declaration onto the release and \
+                     stage it. Fields the delta compiler cannot carry (an account, a backup, a \
+                     timezone) refuse loudly and say `kuma update`.\n"
                 );
                 upgrade_preview_response(&inferred, &actions, "delta").print(json, &prose);
                 Ok(())
@@ -1807,9 +1807,9 @@ fn upgrade(config_path: &Path, check: bool, yes: bool, json: bool) -> Result<()>
                     "ask the release tag whether a newer kumaOS exists",
                 )];
                 let prose = format!(
-                    "Release lane: this machine fetches the published release from its bootc\n\
+                    "Your machine upgrades by fetching the published release from its bootc \
                      origin ({origin}).\n\n\
-                     Run `kuma upgrade --check` to ask the registry (no pull, no build), or\n\
+                     Run `kuma upgrade --check` to ask the registry (no pull, no build), or \
                      `kuma upgrade --yes` to fetch and stage directly.\n"
                 );
                 upgrade_preview_response(&origin, &actions, "fetch").print(json, &prose);
@@ -1940,16 +1940,16 @@ fn upgrade_check(
         println!("Your machine is on the release tag's image ({origin}).");
     } else if same_release {
         println!(
-            "A newer build of {running_version} is on the release tag (same version, new image).\n\
-             Your machine is a step behind; fetching it is a normal upgrade, and it applies\n\
-             on reboot."
+            "A newer build of {running_version} is on the release tag (same version, new image). \
+             Your machine is a step behind; fetching it is a normal upgrade, and it applies on \
+             reboot."
         );
     } else {
         println!(
             "Released:  {} ({}) from {origin}\n\
              Running:   {running_version} ({}...)\n\n\
-             Re-run with --yes to {}. The change takes effect on next boot;\n\
-             the previous deployment stays available for `kuma rollback`.",
+             Re-run with --yes to {}. The change takes effect on next boot, and the previous \
+             deployment stays available for `kuma rollback`.",
             release_version.as_deref().unwrap_or("an unlabeled image"),
             digest.chars().take(14).collect::<String>(),
             deps.booted
@@ -2164,11 +2164,10 @@ fn upgrade_delta_apply(
         return Ok(());
     }
     println!(
-        "Delta built: your declaration compiled onto kumaOS {version} ({}).\n\
-         Staged; it applies on next boot, and the previous deployment stays\n\
-         available for `kuma rollback`. The delta carries your declaration,\n\
-         not the release's own package updates — your next `kuma update`\n\
-         picks those up.",
+        "Delta built: your declaration compiled onto kumaOS {version} ({}). Staged; it applies \
+         on next boot, and the previous deployment stays available for `kuma rollback`. The \
+         delta carries your declaration, not the release's own package updates — your next \
+         `kuma update` picks those up.",
         digest.chars().take(14).collect::<String>(),
     );
     println!();
@@ -3028,10 +3027,10 @@ fn run_install(
 /// over the network by design.
 fn iso(config_path: &Path, tag: &str, output: &Path) -> Result<()> {
     println!(
-        "WARNING: `kuma iso` without --live builds the legacy Anaconda image; it is\n\
-         deprecated and stops being the default in 45.0.0. Use --live instead: the\n\
-         live ISO is what releases attach, and it installs with kuma's own installer.\n\
-         The trade: a live install pulls the image over the network by design.\n"
+        "WARNING: `kuma iso` without --live builds the legacy Anaconda image; it is deprecated \
+         and stops being the default in 45.0.0. Use --live instead: the live ISO is what \
+         releases attach, and it installs with kuma's own installer. The trade: a live install \
+         pulls the image over the network by design.\n"
     );
     let config = Config::load(config_path)?;
     // Installer media outlives the machine it was meant for — surface
@@ -3255,8 +3254,8 @@ fn hibernate_cmd(size: Option<String>, off: bool, yes: bool, json: bool) -> Resu
     if existing.is_none() && present && !status.active {
         bail!(
             "{} exists but the kernel would refuse it as swap.\n\n\
-             Take it away with `kuma hibernate --off --yes` and make a new one; \n\
-             kuma will not reuse a file it cannot vouch for.",
+             Take it away with `kuma hibernate --off --yes` and make a new one; kuma will not \
+             reuse a file it cannot vouch for.",
             hibernate::FILE
         );
     }
@@ -3284,7 +3283,7 @@ fn hibernate_cmd(size: Option<String>, off: bool, yes: bool, json: bool) -> Resu
         // verb has just refused to remake.
         (Some(_), Some(_)) => bail!(
             "there is already a {} swapfile; --size would not resize it.\n\n\
-             `kuma hibernate --yes` puts the kernel arguments back in step with it, and\n\
+             `kuma hibernate --yes` puts the kernel arguments back in step with it, and \
              `kuma hibernate --off --yes` takes it away so a different size can be made.",
             hibernate::size_text(status.file_mib.unwrap_or(0))
         ),
@@ -3778,9 +3777,9 @@ fn install(disk: Option<&Path>, request: install::Request) -> Result<()> {
             if host_output_any(&["skopeo", "--version"]).is_ok() {
                 bail!(
                     "cannot reach {image}\n\n{why}\n\n\
-                     Installing pulls that image, so it has to exist and be readable\n\
-                     from here. A 403 or 404 usually means it is not published yet, or\n\
-                     is private. Pass --image to install a different one."
+                     Installing pulls that image, so it has to exist and be readable from here. \
+                     A 403 or 404 usually means it is not published yet, or is private. Pass \
+                     --image to install a different one."
                 );
             }
         }
@@ -4055,8 +4054,8 @@ fn install(disk: Option<&Path>, request: install::Request) -> Result<()> {
         println!("                                 image declares no account");
         println!("  a hostname                     defaults to {}", install::DEFAULT_HOSTNAME);
         println!(
-            "\nand then destroy {}. This is the one kuma verb with no way back:\n\
-             no staged deployment to discard, no rollback slot.\n",
+            "\nand then destroy {}. This is the one kuma verb with no way back: no staged \
+             deployment to discard, no rollback slot.\n",
             disk.display()
         );
         print_actions(&[Action::new("install", confirm, "ask those, then write it")]);
@@ -4169,22 +4168,22 @@ fn install(disk: Option<&Path>, request: install::Request) -> Result<()> {
     }
     println!("\nInstalled {image} to {}.", disk.display());
     println!(
-        "The account '{}' is created on first boot by kuma-user-sync, from\n\
+        "The account '{}' is created on first boot by kuma-user-sync, from \
          /var/lib/kuma/user written onto the target. The hostname is '{hostname}'.",
         account.name
     );
     if encrypt {
         println!(
-            "\nThe root is a LUKS volume. It asks for that passphrase at every boot,\n\
-             before the desktop and before anything can log in. Nothing here kept a\n\
-             copy of it, and a lost one is a lost disk."
+            "\nThe root is a LUKS volume. It asks for that passphrase at every boot, before the \
+             desktop and before anything can log in. Nothing here kept a copy of it, and a lost \
+             one is a lost disk."
         );
     }
     if to_file {
         println!(
-            "\nBoot it with UEFI firmware, which a disk image needs and a plain\n\
-             qemu invocation does not supply, and with a 3D-capable device,\n\
-             without which the desktop logs in to a black screen:\n\n{}",
+            "\nBoot it with UEFI firmware, which a disk image needs and a plain qemu invocation \
+             does not supply, and with a 3D-capable device, without which the desktop logs in \
+             to a black screen:\n\n{}",
             disk_image_boot_hint(disk)
         );
         // Named rather than removed. Deleting a firmware entry on
@@ -4196,9 +4195,9 @@ fn install(disk: Option<&Path>, request: install::Request) -> Result<()> {
         };
         if !added.is_empty() {
             println!(
-                "\nInstalling added {} to this machine's firmware, naming the ESP\n\
-                 inside the image. It points at a partition no firmware can find,\n\
-                 and it sorts ahead of the entries that can boot. Remove it with:\n",
+                "\nInstalling added {} to this machine's firmware, naming the ESP inside the \
+                 image. It points at a partition no firmware can find, and it sorts ahead of \
+                 the entries that can boot. Remove it with:\n",
                 if added.len() == 1 { "a boot entry" } else { "boot entries" }
             );
             for number in &added {
