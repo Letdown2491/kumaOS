@@ -564,14 +564,32 @@ mod tests {
         bin_home
     }
 
+    /// The stamp gate's call, with the stubs' exec race defused. Once
+    /// in a blue moon a freshly written stub is still held open at
+    /// exec time inside the test container — "Text file busy" — and
+    /// the gate's error says the binary would not RUN, not that its
+    /// stamp lied. Retrying with a fresh tempdir before accepting the
+    /// result keeps that race from ever looking like a gate verdict.
+    fn gate(shell_stamp: &str, cfg: &Config, loud: bool) -> Result<()> {
+        for attempt in 0..3 {
+            let bin_home = mismatch_home(shell_stamp);
+            match verify_sibling_stamps_loud(bin_home.path(), cfg, loud) {
+                Err(err) if format!("{err:#}").contains("Text file busy") && attempt < 2 => {
+                    continue;
+                }
+                other => return other,
+            }
+        }
+        unreachable!("the loop returns on its third pass")
+    }
+
     #[test]
     fn a_stale_sibling_stamp_refuses_the_compose() {
         let cfg = config("schema_version = 1\n[system]\ndesktop = \"niri\"\n");
         let pin = kumaui_pin().unwrap();
 
         // Wrong version: the loud, obvious lie.
-        let bin_home = mismatch_home(&format!("kuma-shell 0.0.1 (g{})", &pin.0[..7]));
-        let err = verify_sibling_stamps_loud(bin_home.path(), &cfg, false).unwrap_err();
+        let err = gate(&format!("kuma-shell 0.0.1 (g{})", &pin.0[..7]), &cfg, false).unwrap_err();
         let text = format!("{err:#}");
         assert!(text.contains("0.0.1"), "{text}");
         assert!(text.contains(pin.1.as_str()), "{text}");
@@ -579,21 +597,18 @@ mod tests {
 
         // Right version, wrong commit: the quiet lie the 44.9.0 compose
         // shipped, and the one a version-only check would wave through.
-        let bin_home = mismatch_home(&format!("kuma-shell {} (gdeadbeef)", pin.1));
-        let err = verify_sibling_stamps_loud(bin_home.path(), &cfg, false).unwrap_err();
+        let err = gate(&format!("kuma-shell {} (gdeadbeef)", pin.1), &cfg, false).unwrap_err();
         let text = format!("{err:#}");
         assert!(text.contains("deadbeef"), "{text}");
 
         // No provenance at all: a bare cargo build stamps (gunknown).
-        let bin_home = mismatch_home(&format!("kuma-shell {} (gunknown)", pin.1));
-        assert!(verify_sibling_stamps_loud(bin_home.path(), &cfg, false).is_err());
+        assert!(gate(&format!("kuma-shell {} (gunknown)", pin.1), &cfg, false).is_err());
     }
 
     #[test]
     fn the_override_lets_a_mismatched_ride_through() {
-        let bin_home = mismatch_home(&format!("kuma-shell 0.0.1 (gunknown)"));
         let cfg = config("schema_version = 1\n[system]\ndesktop = \"niri\"\n");
-        verify_sibling_stamps_loud(bin_home.path(), &cfg, true).unwrap();
+        gate("kuma-shell 0.0.1 (gunknown)", &cfg, true).unwrap();
     }
 
     /// The declaration matrix every structural change to the generator

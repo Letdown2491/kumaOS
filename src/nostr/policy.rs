@@ -203,6 +203,11 @@ struct Prompt {
 /// One line of the activity log: what was asked, by whom, and why it
 /// went the way it went. Privacy mode is structural — there is no field
 /// a param could hide in.
+/// What the log knows it may not lose — a decision (an app asked, a
+/// person answered) versus a note (a protocol fact the bunker served
+/// or shed without the gate). The distinction exists for the eviction:
+/// a flood's notes go first, so the flood cannot evict the record of
+/// itself being survived.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
     pub at: u64,
@@ -210,6 +215,10 @@ pub struct LogEntry {
     pub method: String,
     pub summary: String,
     pub verdict: String,
+    /// Old files predate the flag and load as decisions, which is what
+    /// they were.
+    #[serde(default)]
+    pub note: bool,
 }
 
 #[derive(Default)]
@@ -395,12 +404,29 @@ impl Engine {
     /// The activity log's one door: push, cap, mark. The write itself
     /// is the flusher's — batching is the point — so a flood's shed
     /// entries cost memory (capped) and a flag, not a file rewrite
-    /// each.
+    /// each. And the cap's eviction is ordered: notes go first, oldest
+    /// first, so a flood of shed events fills and sheds its own kind
+    /// instead of pushing the decisions — the record an incident
+    /// reads — out the front.
     fn record_log(&self, inner: &mut Inner, entry: LogEntry) {
         inner.log.push(entry);
         if inner.log.len() > LOG_CAP {
-            let trim = inner.log.len() - LOG_CAP;
-            inner.log.drain(0..trim);
+            let mut still = inner.log.len() - LOG_CAP;
+            let mut idx = 0;
+            while still > 0 && idx < inner.log.len() {
+                if inner.log[idx].note {
+                    inner.log.remove(idx);
+                    still -= 1;
+                } else {
+                    idx += 1;
+                }
+            }
+            // More overflow than the log holds notes for: the oldest
+            // entries go regardless of kind, the cap's original rule.
+            while still > 0 {
+                inner.log.remove(0);
+                still -= 1;
+            }
         }
         inner.log_dirty = true;
     }
@@ -478,6 +504,7 @@ impl Engine {
                 method: "connect".into(),
                 summary: "paired".into(),
                 verdict: "paired at ask".into(),
+                note: false,
             },
         );
         self.persist_apps(&mut inner);
@@ -517,6 +544,7 @@ impl Engine {
                     method: "revoke".into(),
                     summary: "the person revoked the app".into(),
                     verdict: "tombstoned".into(),
+                    note: false,
                 },
             );
         }
@@ -546,6 +574,7 @@ impl Engine {
                 method: "unrevoke".into(),
                 summary: "the person un-revoked the app".into(),
                 verdict: "cleared".into(),
+                note: false,
             },
         );
         self.persist_apps(&mut inner);
@@ -570,6 +599,7 @@ impl Engine {
                 method: "label".into(),
                 summary: "the person named the app".into(),
                 verdict: "named".into(),
+                note: false,
             },
         );
         self.persist_apps(&mut inner);
@@ -593,6 +623,7 @@ impl Engine {
                     method: "delete".into(),
                     summary: "the person deleted the app".into(),
                     verdict: "removed".into(),
+                    note: false,
                 },
             );
             self.persist_apps(&mut inner);
@@ -617,6 +648,7 @@ impl Engine {
                     method: "logout".into(),
                     summary: "the app ended its own session".into(),
                     verdict: "removed".into(),
+                    note: false,
                 },
             );
             self.persist_apps(&mut inner);
@@ -639,6 +671,7 @@ impl Engine {
                 method: method.into(),
                 summary,
                 verdict: verdict.into(),
+                note: true,
             },
         );
     }
@@ -726,6 +759,7 @@ impl Engine {
                 method: format!("{:?}", prompt.method),
                 summary: prompt.summary.clone(),
                 verdict,
+                note: false,
             },
         );
         Ok(())
@@ -801,6 +835,7 @@ impl super::bunker::Gate for Engine {
                         method: format!("{method:?}"),
                         summary: summary.clone(),
                         verdict: verdict.into(),
+                        note: false,
                     },
                 );
                 // The count and last-used stamp ride the flusher: this
@@ -878,6 +913,7 @@ impl super::bunker::Gate for Engine {
                             method: format!("{method:?}"),
                             summary,
                             verdict: "expired unanswered".into(),
+                            note: false,
                         },
                     );
                 }
@@ -1676,5 +1712,47 @@ mod tests {
         let engine = Engine::new(Some(dir.path().to_path_buf()));
         assert_eq!(engine.log().len(), LOG_CAP);
         assert_eq!(engine.log().last().unwrap().app, app.to_string());
+    }
+
+    /// The eviction's order is the audit's protection: a flood of
+    /// shed/served notes fills and sheds its own kind, and the
+    /// decisions — the record of what was asked and answered, the
+    /// thing an incident reads — survive it whole.
+    #[test]
+    fn a_flood_of_notes_does_not_evict_the_decisions() {
+        let engine = Engine::new(None);
+        let mut inner = engine.inner.lock().expect("the policy lock");
+        for i in 0..LOG_CAP {
+            engine.record_log(
+                &mut inner,
+                LogEntry {
+                    at: i as u64,
+                    app: "app".into(),
+                    method: "sign".into(),
+                    summary: format!("decision {i}"),
+                    verdict: "allowed (basic)".into(),
+                    note: false,
+                },
+            );
+        }
+        // The flood: twice the cap's worth of notes on top of a full
+        // log of decisions.
+        for i in 0..(LOG_CAP * 2) {
+            engine.record_log(
+                &mut inner,
+                LogEntry {
+                    at: 1_000 + i as u64,
+                    app: "attacker".into(),
+                    method: "sign".into(),
+                    summary: format!("shed {i}"),
+                    verdict: "served".into(),
+                    note: true,
+                },
+            );
+        }
+        assert_eq!(inner.log.len(), LOG_CAP, "the cap is the log's own");
+        let decisions = inner.log.iter().filter(|e| !e.note).count();
+        assert_eq!(decisions, LOG_CAP, "every decision survived the flood");
+        assert!(inner.log.iter().take(LOG_CAP).all(|e| !e.note), "oldest first are the decisions");
     }
 }

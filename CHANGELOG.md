@@ -42,7 +42,10 @@
   churning: the policy engine's per-decision file rewrites are batched
   to one write per five seconds (a flood no longer rewrites the log
   file per attack event, and structural changes still persist at
-  once), the vault-exists answer the panel polls is cached between
+  once), and the log's cap sheds a flood's notes before it may shed a
+  decision — the record of what was asked and answered survives the
+  flood that made it worth reading. The vault-exists answer the
+  panel polls is cached between
   actual changes instead of re-asking the Secret Service per poll, the
   relay's per-pubkey limiter map and event store gained the shed-oldest
   bounds the bunker's own caches always had, a slow-reading relay
