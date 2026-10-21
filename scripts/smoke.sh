@@ -3026,8 +3026,12 @@ run_delta_arm() {
     # against the published stage's account and died here).
     local regconf
     regconf=$(printf '[[registry]]\nlocation = "10.0.2.2:%d/kuma"\ninsecure = true\n' "$DELTA_PORT")
-    printf '%s\n%s\n' "$pass" "$regconf" |
-        ssh "${ssh_opts[@]}" "sudo -S -p '' tee /etc/containers/registries.conf.d/90-smoke-delta.conf >/dev/null" \
+    # sshpass for the SSH hop (the stages' own pattern — a raw ssh with
+    # stdin piped cannot answer its password prompt and dies in
+    # ssh-askpass, twice measured), then sudo -S reads its password
+    # from the same stdin the file arrives on.
+    printf '%s\n' "$regconf" |
+        sshpass -p "$pass" ssh "${ssh_opts[@]}" "sudo -S -p '' tee /etc/containers/registries.conf.d/90-smoke-delta.conf >/dev/null" \
             2>>"vm-smoke/gsudo-$name.err" ||
         bad "cannot point the guest at the lap's registry"
     ok "the guest accepts the lap's registry over plain HTTP"
