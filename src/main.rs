@@ -1724,8 +1724,8 @@ fn print_release_move(moved: Option<&(String, String)>) {
         println!();
         println!("This is a Fedora release change: {from} to {to}.");
         println!(
-            "Everything in the declaration is rebuilt against {to}'s packages. \
-             Nothing is staged yet, and the current deployment stays for kuma rollback."
+            "Everything in your declaration is rebuilt against {to}'s packages. \
+             Nothing is staged yet, and your current deployment stays available for `kuma rollback`."
         );
     }
 }
@@ -1735,7 +1735,7 @@ fn print_release_move(moved: Option<&(String, String)>) {
 /// "Currently on Fedora ?" is worse than saying nothing.
 fn print_release_now(release: &Option<String>) {
     if let Some(release) = release {
-        println!("Currently on Fedora {release}; `kuma update` says so before it stages a change.");
+        println!("Your machine runs Fedora {release}.");
     }
 }
 
@@ -1946,12 +1946,12 @@ fn upgrade_check(
         );
     } else {
         println!(
-            "Release lane: {} the release tag ({origin}).\n\
-             Running:   {running_version} ({}...)\n\
-             Released:  {} ({})\n\n\
+            "Released:  {} ({}) from {origin}\n\
+             Running:   {running_version} ({}...)\n\n\
              Re-run with --yes to {}. The change takes effect on next boot;\n\
              the previous deployment stays available for `kuma rollback`.",
-            if fetch { "fetching from" } else { "delta-building onto" },
+            release_version.as_deref().unwrap_or("an unlabeled image"),
+            digest.chars().take(14).collect::<String>(),
             deps.booted
                 .digest
                 .as_deref()
@@ -1959,8 +1959,6 @@ fn upgrade_check(
                 .chars()
                 .take(14)
                 .collect::<String>(),
-            release_version.as_deref().unwrap_or("an unlabeled image"),
-            digest.chars().take(14).collect::<String>(),
             if fetch {
                 "fetch and stage"
             } else {
