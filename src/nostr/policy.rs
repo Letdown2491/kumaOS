@@ -221,6 +221,16 @@ struct Inner {
     remembered: HashMap<String, u64>,
     log: Vec<LogEntry>,
     next_id: u64,
+    /// The batched writes' flags: what changed since the files last
+    /// saw it. The per-decision paths (a count, a stamp, a log line)
+    /// used to rewrite whole JSON files under the engine lock at the
+    /// rate the decisions themselves ran — ten a second at the bunker's
+    /// own rate limit — so they mark instead, and the flusher thread
+    /// writes at most once per [`FLUSH_PERIOD`]. Structural changes
+    /// (pair, revoke, level) persist at once; durability for those is
+    /// the point of the files.
+    log_dirty: bool,
+    apps_dirty: bool,
 }
 
 /// How long an Ask waits for a person before it denies itself. A
@@ -231,6 +241,13 @@ const PROMPT_TTL_SECS: u64 = 300;
 /// The activity log's cap: the last 500 entries survive, which is
 /// more than a person reads and few enough that the file stays a file.
 const LOG_CAP: usize = 500;
+
+/// The batched writes' period. A kill can cost the last few seconds of
+/// activity log — a record of what apps asked, not state anything
+/// decides by — and the flood case the batching exists for (a shed
+/// event per attack event, each once rewriting the whole log file
+/// under the lock) writes at most once per period now.
+const FLUSH_PERIOD: Duration = Duration::from_secs(5);
 
 /// The engine: the [`super::bunker::Gate`] the bunker's worker asks,
 /// and the state the socket verbs (`prompts`, `approve`, `deny`,
@@ -246,6 +263,51 @@ pub struct Engine {
     prompt_ttl: Duration,
 }
 
+/// The batched writes' two doors, shared by the engine's methods and
+/// the flusher thread — the file paths derive from the state dir
+/// either way, and a successful write clears the flag it served. A
+/// memory-only engine (no state dir) persists nothing and its flags
+/// stay set, which costs nothing: there is nothing to flush into.
+fn persist_log_at(state_path: &Option<PathBuf>, inner: &mut Inner) {
+    let Some(file) = state_path.as_ref().map(|dir| dir.join("log.json")) else { return };
+    if let Some(parent) = file.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("kuma-nostrd: cannot create {parent:?}: {e}");
+            return;
+        }
+    }
+    match serde_json::to_string_pretty(&inner.log) {
+        Ok(text) => {
+            if let Err(e) = std::fs::write(&file, text) {
+                eprintln!("kuma-nostrd: cannot write {file:?}: {e}");
+            } else {
+                inner.log_dirty = false;
+            }
+        }
+        Err(e) => eprintln!("kuma-nostrd: the activity log did not serialize: {e}"),
+    }
+}
+
+fn persist_apps_at(state_path: &Option<PathBuf>, inner: &mut Inner) {
+    let Some(file) = state_path.as_ref().map(|dir| dir.join("apps.json")) else { return };
+    if let Some(parent) = file.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("kuma-nostrd: cannot create {parent:?}: {e}");
+            return;
+        }
+    }
+    match serde_json::to_string_pretty(&inner.apps) {
+        Ok(text) => {
+            if let Err(e) = std::fs::write(&file, text) {
+                eprintln!("kuma-nostrd: cannot write {file:?}: {e}");
+            } else {
+                inner.apps_dirty = false;
+            }
+        }
+        Err(e) => eprintln!("kuma-nostrd: the pairing list did not serialize: {e}"),
+    }
+}
+
 impl Engine {
     fn with_ttl(state_dir: Option<PathBuf>, prompt_ttl: Duration) -> Self {
         let engine = Self {
@@ -255,6 +317,25 @@ impl Engine {
         };
         engine.load_apps();
         engine.load_log();
+        // The batched writes' clock. Spawned only when there is a state
+        // dir to flush into, so the memory-only engines of the offline
+        // tests spawn nothing. A kill can cost the last few seconds of
+        // activity log; a pairing never waits — structural changes
+        // persist at once.
+        if engine.state_path.is_some() {
+            let inner = Arc::clone(&engine.inner);
+            let state_path = engine.state_path.clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(FLUSH_PERIOD);
+                let mut guard = inner.lock().expect("the policy lock");
+                if guard.log_dirty {
+                    persist_log_at(&state_path, &mut guard);
+                }
+                if guard.apps_dirty {
+                    persist_apps_at(&state_path, &mut guard);
+                }
+            });
+        }
         engine
     }
 
@@ -281,6 +362,19 @@ impl Engine {
         self.state_path.as_ref().map(|dir| dir.join("log.json"))
     }
 
+    /// Whatever the batched writes owe the files, written. The
+    /// flusher's whole body; also the test seam, so a test can make
+    /// the tail durable without waiting out the period.
+    fn flush(&self) {
+        let mut inner = self.inner.lock().expect("the policy lock");
+        if inner.log_dirty {
+            persist_log_at(&self.state_path, &mut inner);
+        }
+        if inner.apps_dirty {
+            persist_apps_at(&self.state_path, &mut inner);
+        }
+    }
+
     fn load_log(&self) {
         let Some(file) = self.log_file() else { return };
         let Ok(text) = std::fs::read_to_string(&file) else { return };
@@ -294,37 +388,21 @@ impl Engine {
         }
     }
 
-    fn persist_log(&self, inner: &Inner) {
-        let Some(file) = self.log_file() else { return };
-        if let Some(parent) = file.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!("kuma-nostrd: cannot create {parent:?}: {e}");
-                return;
-            }
-        }
-        match serde_json::to_string_pretty(&inner.log) {
-            Ok(text) => {
-                if let Err(e) = std::fs::write(&file, text) {
-                    eprintln!("kuma-nostrd: cannot write {file:?}: {e}");
-                }
-            }
-            Err(e) => eprintln!("kuma-nostrd: the activity log did not serialize: {e}"),
-        }
+    fn persist_log(&self, inner: &mut Inner) {
+        persist_log_at(&self.state_path, inner);
     }
 
-    /// The activity log's one door: push, cap, persist. The log is the
-    /// layer's memory — what this app asked, what it got — and a
-    /// memory that died at every restart answered nothing, so it rides
-    /// `log.json` beside the pairings, capped at the last 500 entries.
-    /// Every push in the engine goes through here, so the cap cannot
-    /// be forgotten at a new call site.
+    /// The activity log's one door: push, cap, mark. The write itself
+    /// is the flusher's — batching is the point — so a flood's shed
+    /// entries cost memory (capped) and a flag, not a file rewrite
+    /// each.
     fn record_log(&self, inner: &mut Inner, entry: LogEntry) {
         inner.log.push(entry);
         if inner.log.len() > LOG_CAP {
             let trim = inner.log.len() - LOG_CAP;
             inner.log.drain(0..trim);
         }
-        self.persist_log(inner);
+        inner.log_dirty = true;
     }
 
     /// The activity log, oldest first — what the `log` verb answers
@@ -343,22 +421,8 @@ impl Engine {
         self.inner.lock().expect("the policy lock").apps = apps;
     }
 
-    fn persist_apps(&self, inner: &Inner) {
-        let Some(file) = self.apps_file() else { return };
-        if let Some(parent) = file.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!("kuma-nostrd: cannot create {parent:?}: {e}");
-                return;
-            }
-        }
-        match serde_json::to_string_pretty(&inner.apps) {
-            Ok(text) => {
-                if let Err(e) = std::fs::write(&file, text) {
-                    eprintln!("kuma-nostrd: cannot write {file:?}: {e}");
-                }
-            }
-            Err(e) => eprintln!("kuma-nostrd: the pairing list did not serialize: {e}"),
-        }
+    fn persist_apps(&self, inner: &mut Inner) {
+        persist_apps_at(&self.state_path, inner);
     }
 
     /// Pair an app, or find it already paired. The default level is
@@ -416,7 +480,7 @@ impl Engine {
                 verdict: "paired at ask".into(),
             },
         );
-        self.persist_apps(&inner);
+        self.persist_apps(&mut inner);
     }
 
     fn pair(&self, app: &PublicKey) {
@@ -456,7 +520,7 @@ impl Engine {
                 },
             );
         }
-        self.persist_apps(&inner);
+        self.persist_apps(&mut inner);
         true
     }
 
@@ -484,7 +548,7 @@ impl Engine {
                 verdict: "cleared".into(),
             },
         );
-        self.persist_apps(&inner);
+        self.persist_apps(&mut inner);
         true
     }
 
@@ -508,7 +572,7 @@ impl Engine {
                 verdict: "named".into(),
             },
         );
-        self.persist_apps(&inner);
+        self.persist_apps(&mut inner);
         true
     }
 
@@ -531,7 +595,7 @@ impl Engine {
                     verdict: "removed".into(),
                 },
             );
-            self.persist_apps(&inner);
+            self.persist_apps(&mut inner);
         }
         removed
     }
@@ -555,7 +619,7 @@ impl Engine {
                     verdict: "removed".into(),
                 },
             );
-            self.persist_apps(&inner);
+            self.persist_apps(&mut inner);
         }
         removed
     }
@@ -684,7 +748,7 @@ impl Engine {
             .find(|p| p.pubkey == app)
             .ok_or_else(|| anyhow!("no paired app {app}"))?;
         paired.level = level;
-        self.persist_apps(&inner);
+        self.persist_apps(&mut inner);
         Ok(())
     }
 }
@@ -739,7 +803,13 @@ impl super::bunker::Gate for Engine {
                         verdict: verdict.into(),
                     },
                 );
-                self.persist_apps(&inner);
+                // The count and last-used stamp ride the flusher: this
+                // is the per-decision path, the one that ran at the
+                // rate the decisions ran, and it used to rewrite
+                // apps.json whole each time — under the lock every
+                // verb contends on. The pairing's STRUCTURE changes
+                // persist at once; this is bookkeeping.
+                inner.apps_dirty = true;
                 return Decision::Allow;
             }
         }
@@ -1597,6 +1667,10 @@ mod tests {
         }
         assert_eq!(engine.log().len(), LOG_CAP, "the cap is the log's own");
         assert_eq!(engine.log().last().unwrap().summary, "a probe", "the newest survive");
+
+        // The writes are batched now (the flusher's period), so the
+        // tail is made durable by hand before the restart reads it.
+        engine.flush();
 
         // A restart reads what the last one wrote.
         let engine = Engine::new(Some(dir.path().to_path_buf()));
