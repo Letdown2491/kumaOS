@@ -158,8 +158,11 @@ INSTALL=0
 # The ISO rides a GitHub release, and a release asset is capped at 2 GB.
 # Failing below the cap rather than at it: an ISO that only just fits is
 # one desktop package away from not fitting, and finding that out when a
-# tag is already pushed means a release with no installer.
-ISO_MAX_BYTES=${ISO_MAX_BYTES:-1900000000}
+# tag is already pushed means a release with no installer. 1.90 GB was
+# the 44.9.0 budget; the compose engines landed in the base since (the
+# delta verb needs podman and skopeo on every machine), and the 44.10.0
+# ISO measured 1.94 GB. Still 50 MB under the asset cap on purpose.
+ISO_MAX_BYTES=${ISO_MAX_BYTES:-1950000000}
 PUBLISHED=""
 DEAD_DISK=0
 UPGRADE_TO=""
@@ -341,6 +344,20 @@ bad()  {
     exit 1
 }
 
+# The build, with one retry. The base compose refreshes every enabled
+# rpm-md repo, and Fedora's openh264 CDN edge intermittently 404s for
+# runner egress (measured twice on 2026-10-21, same edge IP both times,
+# while the same repo answered 200 from elsewhere and the same compose
+# passed on other runners in the same run). No kuma package comes from
+# that repo — it is the base image's default repo set — so the retry is
+# CDN hygiene, not a product dodge: a build that fails twice fails
+# loudly either way.
+kuma_build() {
+    "$KUMA" --config "$1" build --tag "$2" >/dev/null \
+        || { sleep 30; "$KUMA" --config "$1" build --tag "$2" >/dev/null; } \
+        || bad "build failed: ${3:-the image does not build}"
+}
+
 # One value out of the declaration, by dotted key, so every assertion
 # below reads what the example actually asks for instead of a copy of it
 # that can drift. Lists print space-separated; a true boolean prints
@@ -453,7 +470,7 @@ smoke_image() {
         podman pull -q "$base" >/dev/null || bad "cannot pull $base"
     fi
 
-    "$KUMA" --config "$file" build --tag "$tag" >/dev/null || bad "build failed"
+    kuma_build "$file" "$tag"
     ok "image builds"
 
     # Self-describing: the machine carries the declaration it was made
@@ -2944,8 +2961,7 @@ smoke_dead_disk() {
 
     dead_disk_declaration "$decl"
     echo "   .. building an image that declares a backup"
-    "$KUMA" build --config "$decl" --tag "$tag" >/dev/null \
-        || bad "the declaration that backs up does not build"
+    kuma_build "$decl" "$tag" "the declaration that backs up does not build"
     ok "built $tag"
 
     # The one file a restore needs, and the same file the machine itself
@@ -3821,9 +3837,9 @@ smoke_boot() {
         # --json because the assertions parse, not grep prose.
         local before after want
         before=$(booted_digest) || bad "could not read the booted digest before the upgrade"
-        gsudo "env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --check --json --config /root/kuma.toml" \
-            >"$dir/upgrade-check.json" ||
-            bad "the delta lane's check failed on the booted machine"
+        gsudo "sh -c 'env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --check --json --config /root/kuma.toml 2>/tmp/kuma-upgrade.err'" \
+            >"$dir/upgrade-check.json" \
+            || { gsudo "cat /tmp/kuma-upgrade.err" || true; bad "the delta lane's check failed on the booted machine"; }
         python3 -c 'import json,sys
 d = json.load(open(sys.argv[1]))
 assert d["lane"] == "delta", d
@@ -3834,9 +3850,9 @@ assert d["release"]["digest"], d' "$dir/upgrade-check.json" ||
             "$dir/upgrade-check.json")
         ok "the check reports a newer release ($want)"
 
-        gsudo "env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --yes --json --config /root/kuma.toml" \
-            >"$dir/upgrade-yes.json" ||
-            bad "the delta upgrade failed on the booted machine"
+        gsudo "sh -c 'env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --yes --json --config /root/kuma.toml 2>/tmp/kuma-upgrade.err'" \
+            >"$dir/upgrade-yes.json" \
+            || { gsudo "cat /tmp/kuma-upgrade.err" || true; bad "the delta upgrade failed on the booted machine"; }
         python3 -c 'import json,sys
 d = json.load(open(sys.argv[1]))
 assert d["staged"] is True, d
