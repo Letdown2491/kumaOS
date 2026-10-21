@@ -150,23 +150,49 @@ pub fn live_masks() -> Vec<&'static str> {
 /// which kumaui ride it was built to carry.
 const KUMAUI_PIN_FILE: &str = include_str!("../../.github/actions/kuma-shell/action.yml");
 
-/// The kumaui version the pin names — the `default: <sha> # v0.4.1` line
-/// of the staged action file. None when the file's shape moved, which is
-/// a refusal at the call site, not a skip: a pin that cannot be read is
-/// a pin that cannot be enforced.
-pub(crate) fn kumaui_pin() -> Option<String> {
+/// The kumaui version the pin names, as (sha, version) — the
+/// `default: <sha> # v0.4.1` line of the staged action file. None when
+/// the file's shape moved, which is a refusal at the call site, not a
+/// skip: a pin that cannot be read is a pin that cannot be enforced.
+pub(crate) fn kumaui_pin() -> Option<(String, String)> {
     for line in KUMAUI_PIN_FILE.lines() {
         let Some(rest) = line.trim_start().strip_prefix("default:") else {
             continue;
         };
+        let mut parts = rest.split_whitespace();
+        let sha = parts.next()?;
+        if sha.len() != 40 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue;
+        }
         if let Some(idx) = rest.find("# v") {
-            let pin = rest[idx + 3..].trim();
-            if !pin.is_empty() {
-                return Some(pin.to_string());
+            let version = rest[idx + 3..].trim();
+            if !version.is_empty() {
+                return Some((sha.to_string(), version.to_string()));
             }
         }
     }
     None
+}
+
+/// Whether a kumaui stamp is the ride the pin names: the version must
+/// appear, and the `(g<short>)` tail must be a build of the pinned
+/// commit. The version alone cannot make the case — 44.9.0's first
+/// compose shipped an Oct 17 build under the new version's name — and
+/// `(gunknown)` proves nothing either: a binary built without build.sh
+/// carries no stamp, and a ride with no provenance is not a ride.
+fn stamp_matches_pin(stamp: &str, sha: &str, version: &str) -> bool {
+    if !stamp.contains(version) {
+        return false;
+    }
+    let built = stamp.split("(g").nth(1).and_then(|s| s.split(')').next()).unwrap_or("");
+    if built.is_empty() || built == "unknown" {
+        return false;
+    }
+    // The stamp carries a SHORT sha (build.sh runs `rev-parse --short`),
+    // the pin a full one, and git's shortening can differ between the
+    // machine that wrote the pin and the machine that built — so either
+    // side being a prefix of the other is the same commit.
+    sha.starts_with(built) || built.starts_with(sha)
 }
 
 /// What a sibling binary says about itself. Both streams are read:
@@ -193,7 +219,8 @@ fn sibling_stamp(parent: &Path, name: &str) -> Result<String> {
 }
 
 /// The stamp gate over every staged sibling. The kumaui five answer to
-/// the pin (the action file's `kumaui-ref` default); the nostr pair
+/// the pin (the action file's `kumaui-ref` default, version AND build
+/// provenance); the nostr pair
 /// answers to this kuma's own version number, because cargo install
 /// moves all three together and a partial install is exactly the
 /// stale-sibling shape this gate exists for — the compose that shipped
@@ -218,19 +245,28 @@ fn verify_sibling_stamps_loud(parent: &Path, config: &Config, loud: bool) -> Res
         ("kuma-nostr", env!("CARGO_PKG_VERSION").to_string()),
     ];
     if config.system.desktop == Desktop::Niri {
-        let Some(pin) = kumaui_pin() else {
+        let Some((pin_sha, pin_version)) = kumaui_pin() else {
             bail!(
                 "the kumaui pin cannot be read from the staged action file; \
                  refusing to compose a desktop image against an unreadable pin"
             );
         };
         for name in ["kuma-shell", "kuma-greeter", "kuma-files", "kuma-term", "kuma-monitor"] {
-            checks.push((name, pin.clone()));
+            checks.push((name, format!("{pin_version} {pin_sha}")));
         }
     }
     for (name, expected) in checks {
         let stamp = sibling_stamp(parent, name)?;
-        if stamp.contains(&expected) {
+        let ok = if expected.contains(' ') {
+            // A kumaui expectation: version AND build provenance.
+            let mut parts = expected.split(' ');
+            let version = parts.next().unwrap_or_default();
+            let sha = parts.next().unwrap_or_default();
+            stamp_matches_pin(&stamp, sha, version)
+        } else {
+            stamp.contains(&expected)
+        };
+        if ok {
             continue;
         }
         if loud {
@@ -437,23 +473,25 @@ mod tests {
         let cfg = config(toml);
         // The shell and the nostr siblings are as fake as the stub, and
         // as stable — but they are executable, because the stamp gate
-        // reads each one's --version. Every stub prints the version the
-        // gate expects, parsed from the same pin the gate checks
-        // against, so a pin bump moves the stubs and the gate together.
-        let pin = kumaui_pin().unwrap();
-        let mut exe_stub = |name: &str, version: &str| {
+        // reads each one's --version. Every stub prints the stamp the
+        // gate expects — version AND the pinned commit's sha, parsed
+        // from the same pin the gate checks against — so a pin bump
+        // moves the stubs and the gate together.
+        let (pin_sha, pin_version) = kumaui_pin().unwrap();
+        let built = &pin_sha[..7];
+        let mut exe_stub = |name: &str, stamp: String| {
             let path = bin_home.path().join(name);
-            std::fs::write(&path, format!("#!/bin/sh\necho '{name} {version} (gstub)'\n")).unwrap();
+            std::fs::write(&path, format!("#!/bin/sh\necho '{stamp}'\n")).unwrap();
             let mut perm = std::fs::metadata(&path).unwrap().permissions();
             use std::os::unix::fs::PermissionsExt;
             perm.set_mode(0o755);
             std::fs::set_permissions(&path, perm).unwrap();
         };
         for name in ["kuma-shell", "kuma-greeter", "kuma-files", "kuma-term", "kuma-monitor"] {
-            exe_stub(name, &pin);
+            exe_stub(name, format!("{name} {pin_version} (g{built})"));
         }
         for name in ["kuma-nostrd", "kuma-nostr"] {
-            exe_stub(name, env!("CARGO_PKG_VERSION"));
+            exe_stub(name, format!("{name} {} (gstub)", env!("CARGO_PKG_VERSION")));
         }
         // nip46-relay is not kuma's binary and carries no pin: the stub
         // stays text, like the other non-binary siblings.
@@ -473,28 +511,51 @@ mod tests {
     fn the_pin_is_read_from_the_staged_action_file() {
         // Moves when the pin bumps, and the move is the review — the
         // same deal the goldens are on.
-        assert_eq!(kumaui_pin().as_deref(), Some("0.4.1"));
+        assert_eq!(
+            kumaui_pin(),
+            Some((
+                "156eb333a8057d68f7f4e49592481907be0acff8".to_string(),
+                "0.4.1".to_string()
+            ))
+        );
     }
 
     /// The gate's two verdicts, run for real: a shell reporting a ride
     /// the pin does not name refuses the compose, and the refusal names
-    /// both stamps and the override road. The nostr pair answers to
-    /// this kuma's version number, so their stubs tell the truth here —
-    /// the lie under test is the shell's.
-    fn mismatch_home() -> tempfile::TempDir {
+    /// both stamps and the override road. The lie under test is
+    /// deliberate in both directions: a wrong version number, and the
+    /// subtler one that started this gate — the right version printed
+    /// by a build of the wrong commit.
+    fn mismatch_home(shell_stamp: &str) -> tempfile::TempDir {
         let bin_home = tempfile::tempdir().unwrap();
-        for (name, version) in [
-            ("kuma-nostrd", env!("CARGO_PKG_VERSION")),
-            ("kuma-nostr", env!("CARGO_PKG_VERSION")),
-            ("kuma-shell", "0.0.1"),
-            ("kuma-greeter", kumaui_pin().unwrap().as_str()),
-            ("kuma-files", kumaui_pin().unwrap().as_str()),
-            ("kuma-term", kumaui_pin().unwrap().as_str()),
-            ("kuma-monitor", kumaui_pin().unwrap().as_str()),
+        let (pin_sha, pin_version) = kumaui_pin().unwrap();
+        let built = &pin_sha[..7];
+        for (name, stamp) in [
+            (
+                "kuma-nostrd",
+                format!("kuma-nostrd {} (gstub)", env!("CARGO_PKG_VERSION")),
+            ),
+            (
+                "kuma-nostr",
+                format!("kuma-nostr {} (gstub)", env!("CARGO_PKG_VERSION")),
+            ),
+            ("kuma-shell", shell_stamp.to_string()),
+            (
+                "kuma-greeter",
+                format!("kuma-greeter {pin_version} (g{built})"),
+            ),
+            (
+                "kuma-files",
+                format!("kuma-files {pin_version} (g{built})"),
+            ),
+            ("kuma-term", format!("kuma-term {pin_version} (g{built})")),
+            (
+                "kuma-monitor",
+                format!("kuma-monitor {pin_version} (g{built})"),
+            ),
         ] {
             let path = bin_home.path().join(name);
-            std::fs::write(&path, format!("#!/bin/sh\necho '{name} {version} (gstub)'\n"))
-                .unwrap();
+            std::fs::write(&path, format!("#!/bin/sh\necho '{stamp}'\n")).unwrap();
             use std::os::unix::fs::PermissionsExt;
             let mut perm = std::fs::metadata(&path).unwrap().permissions();
             perm.set_mode(0o755);
@@ -505,18 +566,32 @@ mod tests {
 
     #[test]
     fn a_stale_sibling_stamp_refuses_the_compose() {
-        let bin_home = mismatch_home();
         let cfg = config("schema_version = 1\n[system]\ndesktop = \"niri\"\n");
+        let pin = kumaui_pin().unwrap();
+
+        // Wrong version: the loud, obvious lie.
+        let bin_home = mismatch_home(&format!("kuma-shell 0.0.1 (g{})", &pin.0[..7]));
         let err = verify_sibling_stamps_loud(bin_home.path(), &cfg, false).unwrap_err();
         let text = format!("{err:#}");
         assert!(text.contains("0.0.1"), "{text}");
-        assert!(text.contains(kumaui_pin().unwrap().as_str()), "{text}");
+        assert!(text.contains(pin.1.as_str()), "{text}");
         assert!(text.contains("KUMA_ALLOW_KUMAUI_MISMATCH"), "{text}");
+
+        // Right version, wrong commit: the quiet lie the 44.9.0 compose
+        // shipped, and the one a version-only check would wave through.
+        let bin_home = mismatch_home(&format!("kuma-shell {} (gdeadbeef)", pin.1));
+        let err = verify_sibling_stamps_loud(bin_home.path(), &cfg, false).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("deadbeef"), "{text}");
+
+        // No provenance at all: a bare cargo build stamps (gunknown).
+        let bin_home = mismatch_home(&format!("kuma-shell {} (gunknown)", pin.1));
+        assert!(verify_sibling_stamps_loud(bin_home.path(), &cfg, false).is_err());
     }
 
     #[test]
     fn the_override_lets_a_mismatched_ride_through() {
-        let bin_home = mismatch_home();
+        let bin_home = mismatch_home(&format!("kuma-shell 0.0.1 (gunknown)"));
         let cfg = config("schema_version = 1\n[system]\ndesktop = \"niri\"\n");
         verify_sibling_stamps_loud(bin_home.path(), &cfg, true).unwrap();
     }
