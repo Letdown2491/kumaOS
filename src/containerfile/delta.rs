@@ -77,6 +77,12 @@ struct Baked {
     services: config::Services,
     nostr: config::Nostr,
     snapshots: config::Snapshots,
+    // Kept unread on purpose: the tolerant read's parse IS the point —
+    // a [user] section whose meaning moved inside fails to deserialize,
+    // and that refusal is the delta compiler's duty. The diff never
+    // reads the baked value; the declared one is what a machine may
+    // carry.
+    #[expect(dead_code)]
     user: Option<config::User>,
     backup: config::Backup,
     overrides: BTreeMap<String, config::AppOverride>,
@@ -757,7 +763,7 @@ mod tests {
         assert!(text.starts_with("[Service]\nExecStart=\nExecStart=/usr/bin/kuma-nostrd"));
         assert!(text.contains("--relay wss://myrelay.example"));
         // The base's road stays in the unit; the drop-in only restates.
-        assert!(text.contains("--relay wss://relay.nip46.com") == false);
+        assert!(!text.contains("--relay wss://relay.nip46.com"));
     }
 
     #[test]
@@ -824,7 +830,7 @@ mod tests {
                  [snapshots]\n\
                  enable = true\n\
                  [user]\n\
-                 name = \"martin\"\n",
+                 name = \"builder\"\n",
             ),
             BASE,
             &release(),
