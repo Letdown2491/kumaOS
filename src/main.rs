@@ -1876,7 +1876,7 @@ fn upgrade_check(
     fetch: bool,
     json: bool,
 ) -> Result<()> {
-    note("Asking the registry what the release tag holds...");
+    note("Asking the registry what the release tag points to...");
     // A metadata-only read: no layers, and the baked signature policy
     // applies (skopeo enforces /etc/containers/policy.json), so an
     // unsigned or tampered tag refuses here rather than staging.
@@ -1937,12 +1937,12 @@ fn upgrade_check(
     let running_version =
         deps.booted.version.clone().unwrap_or_else(|| "an unlabeled image".to_string());
     if running {
-        println!("The machine runs the release tag's image ({origin}).");
+        println!("Your machine is on the release tag's image ({origin}).");
     } else if same_release {
         println!(
-            "The release tag moved within {running_version}: a newer image holds the same\n\
-             release version. Fetching it is still the move — the tag is what the fleet\n\
-             shares, and the machine is behind it."
+            "A newer build of {running_version} is on the release tag (same version, new image).\n\
+             Your machine is a step behind; fetching it is a normal upgrade, and it applies\n\
+             on reboot."
         );
     } else {
         println!(
@@ -2022,7 +2022,7 @@ fn upgrade_delta_apply(
     booted_digest: Option<&str>,
     json: bool,
 ) -> Result<()> {
-    note("Asking the registry what the release tag holds...");
+    note("Asking the registry what the release tag points to...");
     // Metadata-only: no layers, baked signature policy enforced. The
     // digest is what the machine shares with the fleet; the version
     // label is what the delta image reports (and bootupd reads).
@@ -2054,7 +2054,7 @@ fn upgrade_delta_apply(
             "the release image carries no version label; the delta cannot report what it stages",
         )?;
     if booted_digest == Some(digest.as_str()) {
-        let prose = format!("Already current: {inferred} holds what is booted.\n");
+        let prose = format!("Already current: your machine is running what {inferred} serves.\n");
         upgrade_current_response(inferred).print(json, &prose);
         return Ok(());
     }
@@ -2166,11 +2166,11 @@ fn upgrade_delta_apply(
         return Ok(());
     }
     println!(
-        "Delta built: this declaration compiled onto kumaOS {version} ({}).\n\
-         Staged; the change takes effect on next boot. The previous deployment\n\
-         stays available for `kuma rollback`. What the delta does not carry —\n\
-         the release's own new curated packages, its converger scripts — rides\n\
-         the next `kuma update` full rebuild.",
+        "Delta built: your declaration compiled onto kumaOS {version} ({}).\n\
+         Staged; it applies on next boot, and the previous deployment stays\n\
+         available for `kuma rollback`. The delta carries your declaration,\n\
+         not the release's own package updates — your next `kuma update`\n\
+         picks those up.",
         digest.chars().take(14).collect::<String>(),
     );
     println!();
@@ -2192,7 +2192,7 @@ fn upgrade_fetch(origin: &str, json: bool) -> Result<()> {
     let Some(staged) = after.staged else {
         // Nothing staged: bootc resolved the origin and found the
         // booted image. Honest "current" rather than a fake success.
-        let prose = format!("Already current: {origin} holds what is booted.\n");
+        let prose = format!("Already current: your machine is running what {origin} serves.\n");
         upgrade_current_response(origin).print(json, &prose);
         return Ok(());
     };
