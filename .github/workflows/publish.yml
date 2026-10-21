@@ -305,7 +305,11 @@ jobs:
       # registry already serves must be able to take the delta lane onto
       # exactly this digest before promote moves a tag. The same
       # digest pin the laps boot is the pin the gate upgrades onto.
-      delta_target: ${{ needs.publish.outputs.repo }}@${{ needs.publish.outputs.digest }}
+      # Niri only: the lap's fixture derives from the niri-* pinned
+      # tags, and a cosmic publish has no niri-shaped road to prove --
+      # an empty delta_target skips the lap rather than aiming a niri
+      # machine at bytes it would never be offered.
+      delta_target: ${{ needs.publish.outputs.example == 'niri' && format('{0}@{1}', needs.publish.outputs.repo, needs.publish.outputs.digest) || '' }}
 
   # The tags move here, and only here, and only by digest: `crane tag`
   # re-points a registry tag at a manifest that is already stored, which
