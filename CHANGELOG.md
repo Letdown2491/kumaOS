@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- **The kumaui pin rides to v0.5.2.** The visible substance is in the
+  shell: the clock's date faces follow the system locale the way the
+  time follows the system zone, so weekday and month names render in
+  the user's language; the sysmon full pass (cores, loadavg, temp,
+  disk, battery) runs only while a widget on the bar feeds it; and
+  the dock stops rescanning the applications directories forever for
+  one unmatched window. The wallpapers page no longer misreads a
+  remote file URI as a relative path, so its folder picker works on
+  mounted locations. The ride also carries the release process's own
+  fix: cuts commit before they build, so the stamp in every installed
+  binary names the commit the tag names.
+
+- **`kuma upgrade`, `kuma update`, and `kuma check` speak in state
+  and next step.** The verbs' user-facing messages now say what is so
+  and what to do about it, one clause of why only where trust needs
+  it, and wrap at the terminal's width instead of carrying hardcoded
+  breaks mid-sentence.
+
+- **A release cannot promote until its delta lane works.** The image
+  publish road gained a pre-promote lap: a machine running the
+  published previous release must take the delta lane onto the exact
+  bytes being published — declaration compiled on, staged, rebooted
+  into, healthy — before the moving and pinned tags move. The bytes
+  that go live are the bytes the lane carried, by the same digest pin
+  the boot laps already judge.
+
 ## v44.10.0 (2026-10-21)
 
 - **The kumaui pin rides to v0.5.0, whose substance is the Kuma
