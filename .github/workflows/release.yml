@@ -37,6 +37,12 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   TARGET: x86_64-unknown-linux-musl
+  # The binaries a release carries, in one place. The package and sign
+  # steps loop over this, and config.rs's signed-asset test reads the
+  # same line, so a binary added here is signed and attached by the
+  # same stroke — and one left out of the list is absent from the
+  # release, not silently unsigned on it.
+  BINARIES: kuma kuma-nostrd kuma-nostr nip46-relay
 
 jobs:
   release:
@@ -138,13 +144,13 @@ jobs:
           set -euo pipefail
           name='${{ steps.what.outputs.name }}'
           # The layer's binaries ride the same packaging as the tool
-          # that stages them into images: a nostr-enabled declaration
-          # stages kuma-nostrd and kuma-nostr from beside the running
-          # kuma, so a release carrying one of the three is a release
-          # whose nostr block fails honestly at build time. The asset
-          # name is the plain name plus the target — what the release
-          # notes curl and the draft attaches.
-          for bin in kuma kuma-nostrd kuma-nostr; do
+          # that stages them into images: every compose stages
+          # kuma-nostrd, kuma-nostr and nip46-relay from beside the
+          # running kuma, nostr or not, so a release carrying one of
+          # the four is a release whose staging fails honestly at
+          # build time. The asset name is the plain name plus the
+          # target — what the release notes curl and the draft attaches.
+          for bin in $BINARIES; do
             cp "target/${TARGET}/release/$bin" "${bin}-${TARGET}"
             strip "${bin}-${TARGET}"
             sha256sum "${bin}-${TARGET}" > "${bin}-${TARGET}.sha256"
@@ -166,7 +172,7 @@ jobs:
       - name: sign
         run: |
           set -euo pipefail
-          for bin in kuma kuma-nostrd kuma-nostr; do
+          for bin in $BINARIES; do
             cosign sign-blob --yes --bundle "${bin}-${TARGET}.bundle" "${bin}-${TARGET}"
           done
 
@@ -191,6 +197,9 @@ jobs:
             kuma-nostr-x86_64-unknown-linux-musl
             kuma-nostr-x86_64-unknown-linux-musl.sha256
             kuma-nostr-x86_64-unknown-linux-musl.bundle
+            nip46-relay-x86_64-unknown-linux-musl
+            nip46-relay-x86_64-unknown-linux-musl.sha256
+            nip46-relay-x86_64-unknown-linux-musl.bundle
           if-no-files-found: error
 
       # The notes used to be identical for every release, so the page a
@@ -289,16 +298,18 @@ jobs:
           $ chmod +x ${{ steps.pkg.outputs.name }} && sudo mv ${{ steps.pkg.outputs.name }} /usr/local/bin/kuma
           ```
 
-          A declaration with `[nostr]` enabled stages the layer's two
-          binaries from beside the running kuma, so they install to the
-          same place:
+          The image build stages the layer's three binaries from beside
+          the running kuma on every compose, nostr or not, so they
+          install to the same place:
 
           ```console
           $ curl -LO ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ steps.what.outputs.tag }}/kuma-nostrd-x86_64-unknown-linux-musl
           $ curl -LO ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ steps.what.outputs.tag }}/kuma-nostr-x86_64-unknown-linux-musl
-          $ chmod +x kuma-nostrd-x86_64-unknown-linux-musl kuma-nostr-x86_64-unknown-linux-musl
+          $ curl -LO ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ steps.what.outputs.tag }}/nip46-relay-x86_64-unknown-linux-musl
+          $ chmod +x kuma-nostrd-x86_64-unknown-linux-musl kuma-nostr-x86_64-unknown-linux-musl nip46-relay-x86_64-unknown-linux-musl
           $ sudo mv kuma-nostrd-x86_64-unknown-linux-musl /usr/local/bin/kuma-nostrd
           $ sudo mv kuma-nostr-x86_64-unknown-linux-musl /usr/local/bin/kuma-nostr
+          $ sudo mv nip46-relay-x86_64-unknown-linux-musl /usr/local/bin/nip46-relay
           ```
 
           Verify it came from this workflow:
@@ -338,7 +349,10 @@ jobs:
             kuma-nostrd-x86_64-unknown-linux-musl.bundle \
             kuma-nostr-x86_64-unknown-linux-musl \
             kuma-nostr-x86_64-unknown-linux-musl.sha256 \
-            kuma-nostr-x86_64-unknown-linux-musl.bundle
+            kuma-nostr-x86_64-unknown-linux-musl.bundle \
+            nip46-relay-x86_64-unknown-linux-musl \
+            nip46-relay-x86_64-unknown-linux-musl.sha256 \
+            nip46-relay-x86_64-unknown-linux-musl.bundle
         env:
           GH_TOKEN: ${{ github.token }}
 

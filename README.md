@@ -142,6 +142,12 @@ and `switch` makes that image what boots next time. Nothing about the
 running system changes until you reboot, and the deployment you were on
 is still on the disk.
 
+There is a second axis besides the file: the kumaOS release itself. A
+machine on a published image moves to a newer release with
+`kuma upgrade`, keeping its declaration either way.
+[How kuma behaves](docs/concepts.md#two-axes-the-declaration-and-the-release)
+explains the two axes and when each applies.
+
 Those are the ones you type. The rest of the surface:
 
 | | |
@@ -150,6 +156,7 @@ Those are the ones you type. The rest of the surface:
 | `kuma build` | turn it into an image |
 | `kuma switch` | boot that image next time |
 | `kuma update` | pull a newer base and rebuild |
+| `kuma upgrade` | move to a newer published kumaOS release |
 | `kuma rollback` | go back to the previous deployment |
 | `kuma sync` | converge the running machine now |
 | `kuma diff` | what the machine has that the file does not |
@@ -231,7 +238,8 @@ In order:
 - [Moving over](docs/moving.md): rebase a machine that boots an image,
   or back up and install one that doesn't.
 - [How kuma behaves](docs/concepts.md): why drift is a proposal rather
-  than an error, what `kuma.lock` pins and what it only records, how
+  than an error, the two axes a machine moves on (the declaration and
+  the release), what `kuma.lock` pins and what it only records, how
   `/etc` is merged rather than replaced, how a bad update rolls itself
   back, the hardening floor every image carries, and what an install
   decides that a declaration cannot.

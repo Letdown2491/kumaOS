@@ -25,6 +25,28 @@ it. A build can name its base before any compose has run, and a
 changed manifest cannot reuse a stale one.
 _Avoid_: cache key, version tag
 
+**Release**:
+A published kumaOS version — the tier a git tag cuts and a machine
+runs. Distinct from the git tag that names it (immutable once cut)
+and from a moving registry tag (the upgrade lane's contract).
+_Avoid_: build, version (unqualified, when the axis matters)
+
+**Upgrade**:
+The release axis: `kuma upgrade` moves a machine to a newer release
+and keeps its declaration. Fetch lane on a registry origin (take the
+published image whole), delta lane on a local build (compile the
+declaration onto the release). The declaration axis is `kuma update`.
+_Avoid_: update (that is the base axis), rebase (that is a one-time
+move, not a machine's release cadence)
+
+**Delta build**:
+A release image used as an ingredient: the compiler reads the
+release's baked declaration, compiles the machine's per-field
+divergences on top, and refuses what it cannot carry rather than
+guessing. Produces a local image; the ceiling is what the release's
+recipe has that the machine's does not.
+_Avoid_: incremental build, rebuild
+
 **Operating tools**:
 The package class the base carries for operating the machine: ping,
 ip, the ssh client, the pager, curl. Machine operation, not work;

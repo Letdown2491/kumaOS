@@ -69,18 +69,27 @@ An image build stages the release binaries from beside the kuma that
 runs the build — `current_exe()`'s siblings (`~/.cargo/bin` in
 practice): five kumaui binaries (`kuma-shell`, `kuma-greeter`,
 `kuma-files`, `kuma-term`, `kuma-monitor`), their three `.desktop`
-entries and three icons, plus `kuma-nostrd`/`kuma-nostr` when the
-nostr layer is enabled. A *missing* sibling fails the staging loudly
-("it is not beside the running kuma"); a *stale* one composes silently
-— 44.9.0's first compose shipped Oct 17's kumaui under the new
-version's name while the changelog claimed the v0.4.1 ride (#42). So a
-kumaui pin ride is a four-step road: commit the ride in kumaui, build
-in the container at that commit (v0.4.1's first binaries stamped the
-commit *before* the release commit because the build ran first — a
-stamp that names no commit in the checkout is the tell; rebuild after
-the commit lands), refresh the siblings beside the running kuma,
-recompose. Verify the image's stamps before the switch:
-`podman run --rm --entrypoint /usr/bin/kuma-shell localhost/kuma:latest --version`.
+entries and three icons, plus the nostr pair and `nip46-relay` ALWAYS
+(44.10.0 ships the layer in every image; the preset decides
+enablement). A *missing* sibling fails the staging loudly ("it is not
+beside the running kuma"); a *stale* one fails too since the stamp gate
+(#42): every staged binary must answer `--version` matching what the
+build claims it is — the kumaui five against the action file's pin
+(version AND commit sha), the nostr pair against this kuma's own
+version. `KUMA_ALLOW_KUMAUI_MISMATCH=1` lets a deliberate mismatch
+through, loudly — that override, not the old silent compose, is the
+44.9.0 story's residue (Oct 17's kumaui shipped under the new version's
+name because staging checked presence, not identity). So a kumaui pin
+ride is a four-step road: commit the ride in kumaui, build in the
+container at that commit (v0.4.1's first binaries stamped the commit
+*before* the release commit because the build ran first — a stamp that
+names no commit in the checkout is the tell; rebuild after the commit
+lands), refresh the siblings beside the running kuma, bump the pin in
+`.github/actions/kuma-shell/action.yml` and rebuild kuma so the pin the
+binary carries is the ride it stages, recompose. The gate verifies the
+image's stamps itself; the human check
+(`podman run --rm --entrypoint /usr/bin/kuma-shell localhost/kuma:latest --version`)
+is a spot-check, not the gate.
 
 A session death that reaches the greeter with clean teardown — portals
 stopping in order, no crash, no OOM, no signal in the journal — is not

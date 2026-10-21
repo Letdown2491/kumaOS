@@ -49,6 +49,12 @@ the declaration no longer names. Runs at boot and on a daily timer.
 
 **Declaration.** Your `kuma.toml`. The file that says what the system is.
 
+**Delta build.** A build that compiles your declaration on top of a
+published release image instead of from the base, so a locally built
+machine can take a new release without giving up what makes it its own.
+What a delta refuses to carry is named in
+[how kuma behaves](concepts.md#two-axes-the-declaration-and-the-release).
+
 **Deployment.** One bootable system on the machine; a bootc machine keeps
 more than one, which is what makes rollback instant.
 
@@ -117,6 +123,10 @@ dependency.
 runs that image's system while everything in `/var` stays; the way an
 existing machine moves to kuma. See [moving over](moving.md).
 
+**Release.** A published kumaOS version — the thing a git tag cuts and a
+machine runs. The release axis is what `kuma upgrade` moves; the
+declaration is the other axis.
+
 **rpm.** A Fedora package; declared ones become part of the image, so
 changing them is a build and a reboot.
 
@@ -143,3 +153,9 @@ and a reboot. The opposite of **machine state**.
 
 **Tag.** A moving name for an image, like `:44`, which is why a build
 records the digest instead.
+
+**Upgrade.** `kuma upgrade`: the verb that moves a machine to a newer
+kumaOS release. On a machine installed from a published image it fetches
+the newer image outright; on a machine that builds locally it delta-builds
+the declaration on top of the release. See
+[two axes](concepts.md#two-axes-the-declaration-and-the-release).

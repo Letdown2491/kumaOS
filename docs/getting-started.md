@@ -138,16 +138,23 @@ $ chmod +x kuma-x86_64-unknown-linux-musl
 $ sudo mv kuma-x86_64-unknown-linux-musl /usr/local/bin/kuma
 ```
 
-The [nostr layer](nostr.md)'s two binaries install the same way, for
-building images that enable it:
+The [nostr layer](nostr.md)'s two binaries install the same way, and a
+third rides with them — the image build stages all three beside `kuma`
+on **every** compose, whether or not the declaration enables the layer:
 
 ```console
 $ curl -LO https://github.com/Letdown2491/kumaos/releases/latest/download/kuma-nostrd-x86_64-unknown-linux-musl
 $ curl -LO https://github.com/Letdown2491/kumaos/releases/latest/download/kuma-nostr-x86_64-unknown-linux-musl
-$ chmod +x kuma-nostrd-x86_64-unknown-linux-musl kuma-nostr-x86_64-unknown-linux-musl
+$ curl -LO https://github.com/Letdown2491/kumaos/releases/latest/download/nip46-relay-x86_64-unknown-linux-musl
+$ chmod +x kuma-nostrd-x86_64-unknown-linux-musl kuma-nostr-x86_64-unknown-linux-musl nip46-relay-x86_64-unknown-linux-musl
 $ sudo mv kuma-nostrd-x86_64-unknown-linux-musl /usr/local/bin/kuma-nostrd
 $ sudo mv kuma-nostr-x86_64-unknown-linux-musl /usr/local/bin/kuma-nostr
+$ sudo mv nip46-relay-x86_64-unknown-linux-musl /usr/local/bin/nip46-relay
 ```
+
+An image build refuses to run without them — the staging names what is
+missing from beside the running `kuma`. Enabling the layer is still the
+declaration's `[nostr]` switch; the binaries riding along is not.
 
 The file is the whole interface. This is a complete one:
 
@@ -284,11 +291,13 @@ podman mount; an installed machine is enforcing from its first boot.
 
 ## 9. Living with it
 
-Five commands cover ordinary use:
+Seven commands cover ordinary use:
 
 ```console
 $ kuma                  # where this machine is, and what it can do next
 $ kuma doctor           # a health check: image age, convergence, drift, encryption, disk
+$ kuma upgrade --check  # what kumaOS releases have moved, and which lane would run
+$ kuma upgrade --yes    # move to the newest release, keeping this declaration
 $ kuma update --check   # what has moved in Fedora's packages, security first
 $ kuma update --yes     # build a current image and stage it for next boot
 $ kuma rollback --yes   # go back to the deployment you were on before
@@ -297,7 +306,15 @@ $ kuma rollback --yes   # go back to the deployment you were on before
 Running bare `kuma` is always safe, and every command ends by naming
 what you can legally do next, so you can follow the prompts rather than
 remember the verbs. Nothing changes what is running without a reboot: an
-update stages, and the change lands when you choose.
+update or an upgrade stages, and the change lands when you choose.
+
+The two moving parts have different jobs, and
+[two axes](concepts.md#two-axes-the-declaration-and-the-release) is the
+name for them: `upgrade` moves the kumaOS release under your
+declaration, `update` rebuilds your declaration on a newer Fedora base.
+On a machine installed from the ISO, `upgrade` takes the fetch lane and
+goes straight to the newer published image; a machine you build locally
+takes the delta lane, which keeps your build's divergence.
 
 **Hibernate, if you did not ask for it at install:**
 

@@ -25,15 +25,21 @@ boots the disk that install wrote. That boot verdict is greenboot's own, so
 the check that would roll an update back is the one that decides whether the
 test passed.
 
-`--published` is the only stage that reads the registry rather than the
-tree, so it can go red without anyone having committed anything, and it
-lives in its own workflow for that reason. It is also the only one that
+`--published` and the delta lap are the only parts that read a registry
+rather than the tree, so they can go red without anyone having committed
+anything, and they live in their own workflows for that reason. `--published`
+is also the only one that
 boots a disk `kuma install` wrote interactively: every other disk here is
 written by the same installer non-interactively, so the boot stage
 exercises the same btrfs-root layout a real machine gets. Add
 `--upgrade-to <image>` and it installs one
 version, upgrades to another, and asks whether the machine survived;
-`--encrypted` types the passphrase at the guest's serial console.
+`--encrypted` types the passphrase at the guest's serial console. Add
+`--delta` and the boot stage, after its health questions, starts a registry
+on the runner, fabricates a release one empty layer ahead of the image under
+test, and drives `kuma upgrade --yes` on the booted machine against it — the
+proof that the delta lane compiles, stages, and boots a diverged machine
+onto a newer release.
 
 `--install` and `--boot` are separate because they answer different
 questions. Boot asks whether a machine works. Install asks whether the disk
@@ -70,10 +76,13 @@ and the image stage on every committed example, desktops included. That
 covers the compose and both desktop arms, so the build-time guards in them
 run on a push.
 
-The `boot`, `install`, `hibernate`, `dead-disk`, and `iso` jobs run there
+The `boot`, `boot-delta`, `install`, `hibernate`, `dead-disk`, and `iso`
+jobs run there
 too, for pushes to main and on a daily schedule. All of them ride the niri
 example except `dead-disk`, which builds a declaration of its own so the
-restore has a machine to bring back. They were local-only on the stated
+restore has a machine to bring back; `boot-delta` is `boot` plus the delta
+lap, kept as a separate job so a failure names the question it failed. They
+were local-only on the stated
 grounds that they need KVM and sudo, which turned out to be one udev rule:
 a hosted runner has `/dev/kvm` and the runner user is simply not in the
 `kvm` group. The daily run exists because the base kuma builds on moves
@@ -170,11 +179,14 @@ whose section says so in one line.
 
 Push to `main` first and let it go green. A push that touches anything other
 than documentation runs the release workflow itself rather than a copy of it,
-so main is a complete rehearsal of every step a tag will run: the same test on
-the release target, the same packaging, the same signature. It stops one step
-short, publishing nothing, and keeps the binary as a workflow artifact
+so main rehearses every step of *assembling* a release: the same test on
+the release target, the same packaging, the same signature. It stops one
+step short, publishing nothing, and keeps the binary as a workflow artifact
 instead. A problem surfaces there while it costs nothing, instead of once a
-tag already exists.
+tag already exists. What main cannot rehearse is the publishing half — the
+two image publishes and their validation batteries — because a rehearsal
+that publishes would be a publish. That half is what a tag runs first, and
+why a tag costs more than main's green.
 
 The releases page only ever lists tagged versions. A rolling entry on top of
 them reads as a version that shipped, and none did.
@@ -196,7 +208,14 @@ download for everyone rather than only for itself.
 was built from and appends `-dirty` when that tree had uncommitted changes.
 Worth checking whenever a change doesn't appear in the image: `kuma build`
 runs whatever `kuma` is on `$PATH`, which is not necessarily the tree you
-just edited.
+just edited. The compose checks the binaries it *stages* the same way, on
+your behalf and before you can ship the wrong one: every sibling beside
+`kuma` (the five kumaui binaries, the nostr pair) must answer `--version`
+matching what the build claims it is — the kumaui five against the pin in
+`.github/actions/kuma-shell/action.yml` (version and commit sha), the nostr
+pair against this kuma's own version. A mismatch refuses the compose naming
+both stamps; `KUMA_ALLOW_KUMAUI_MISMATCH=1` lets a deliberate one through,
+loudly.
 
 **Testing in a VM.** [Getting started](docs/getting-started.md) covers `kuma
 vm` and `kuma iso` as a user meets them. What matters when developing:
@@ -223,15 +242,19 @@ refuses a disk with anything in use on it, asking `lsblk` rather than only
 `/proc/mounts`, because an encrypted root is named by its mapper device in
 the mount table.
 
-**Publishing an image.** `.github/workflows/publish.yml`, manual dispatch
-only. It builds from a committed example, runs `scripts/publish-audit.sh`
-against the result *before* touching the registry, and refuses to push
+**Publishing an image.** A `v*` tag does it: the tag dispatches
+`.github/workflows/publish-tag.yml`, which publishes both tiers — niri then
+cosmic, sequentially — by running `.github/workflows/publish.yml` once per
+tier. Each run builds from a committed example, runs
+`scripts/publish-audit.sh` against the result *before* touching the
+registry, and refuses to push
 unsigned unless asked to. The audit is the interesting part: a published
 image must carry no account, no hostname, no ssh keys, and no build paths in
 the baked binary, and four of those five come from building it from a
 declaration with no `[user]`. The fifth does not, which is why the check
 exists rather than a rule in a document. Run it locally against any image:
-`./scripts/publish-audit.sh localhost/kuma:latest`.
+`./scripts/publish-audit.sh localhost/kuma:latest`. A manual dispatch of
+`publish.yml` remains the road for a one-off re-publish of a single tier.
 
 **Inspecting an image.** It's a normal OCI image:
 `podman run --rm -it localhost/kuma:latest bash`.

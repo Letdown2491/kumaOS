@@ -58,6 +58,13 @@ so you start from what you are running. From there it is the loop in
 [getting started](getting-started.md): edit the file, `kuma check`,
 `kuma build`, `kuma switch --yes`.
 
+The release underneath your declaration now moves on its own axis:
+`kuma upgrade` fetches the newest published image this machine's origin
+names, and keeps the declaration either way. That is the fetch lane —
+the whole story, including the delta lane for machines that build
+locally, is
+[two axes](concepts.md#two-axes-the-declaration-and-the-release).
+
 The flatpaks you brought with you are drift, not errors. `kuma diff`
 lists them, and `kuma capture` offers to write them into the
 declaration. Nothing is deleted for being undeclared.

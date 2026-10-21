@@ -164,6 +164,18 @@ failure someone had to diagnose:
   for every renderer that is not GPUI. See `assets/CREDITS.md`.
 - **`avahi`** is named rather than assumed. It used to arrive with
   fedora-bootc by luck, and kuma's composed base does not carry it.
+- **the portal routing is pinned by interface, not left to ordering.**
+  niri's own `niri-portals.conf` resolves the portal backends with a
+  `default=gnome;gtk` fallback, and that implicit route worked — until
+  it mattered. The derived `/etc/xdg-desktop-portal/niri-portals.conf`
+  names the backends outright: FileChooser to gtk (the gnome backend
+  advertises the interface but delegates it to a package the image does
+  not ship), ScreenCast and RemoteDesktop to gnome (which implements
+  both, through niri's Mutter interface support). Each pin is guarded by
+  a build-failing grep of the `.portal` file it names, because the pin
+  is only as good as the backend's advertisement — if an update drops
+  or renames an interface, the build says so instead of routing the
+  camera and the screen to a backend that cannot serve them.
 
 ## What you can change
 

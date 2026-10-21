@@ -7,6 +7,7 @@ path. New words are in [the glossary](glossary.md).
 
 - [What happens to changes you make by hand](#what-happens-to-changes-you-make-by-hand)
 - [What updates itself, and what waits for you](#what-updates-itself-and-what-waits-for-you)
+- [Two axes: the declaration, and the release](#two-axes-the-declaration-and-the-release)
 - [Boot health and automatic rollback](#boot-health-and-automatic-rollback)
 - [Where the base system comes from](#where-the-base-system-comes-from)
 - [What every image carries](#what-every-image-carries)

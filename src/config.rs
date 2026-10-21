@@ -1219,15 +1219,26 @@ pub(crate) mod tests {
         ))
         .unwrap();
 
-        // What the signing steps produce a bundle for. Quoted, which is
-        // what separates a command the workflow runs from the one it
-        // quotes at the reader in the release notes.
-        let signed: Vec<&str> = workflow
+        // What the signing steps produce a bundle for. Two shapes: the
+        // ISO signs with a single-quoted --bundle on its own line, and
+        // the binaries sign in a loop over the BINARIES env list, where
+        // the --bundle is double-quoted inside — no line names an asset,
+        // the list line names all of them. Reading the same line the
+        // workflow does is the point: a binary added to BINARIES is
+        // signed, attached, and checked by the same stroke.
+        let mut signed: Vec<String> = workflow
             .lines()
             .filter_map(|l| l.trim().strip_prefix("--bundle '"))
             .filter_map(|r| r.split_once(".bundle'"))
-            .map(|(base, _)| base)
+            .map(|(base, _)| base.to_string())
             .collect();
+        if workflow.contains("for bin in $BINARIES") {
+            let binaries = workflow
+                .lines()
+                .find_map(|l| l.trim().strip_prefix("BINARIES: "))
+                .expect("the sign step loops over $BINARIES but the list is gone");
+            signed.extend(binaries.split_whitespace().map(String::from));
+        }
         assert!(
             !signed.is_empty(),
             "no cosign sign-blob bundle found; has the signing step moved?"
@@ -1236,35 +1247,44 @@ pub(crate) mod tests {
         let check = |asset: &str| {
             let base = asset.trim_end_matches(".sha256").trim_end_matches(".bundle");
             assert!(
-                signed.contains(&base),
+                signed.iter().any(|s| s == base),
                 "{base} is attached to a release but nothing signs it; SECURITY.md says every release asset is signed"
             );
         };
 
+        // The attach lists ride backslash continuations after a
+        // `gh release create` or `gh release upload` line, one file per
+        // line, quoted (the ISO site) or bare (the binary site). Flags
+        // ride the same continuations and are not files; --notes ends
+        // the list, because the heredoc it opens is prose this parser
+        // must not read. The first quoted argument to either verb is
+        // the tag, not a file — this test has been quietly blind to the
+        // binary list before: its first version read only quoted
+        // tokens, and the bare list never got checked at all.
+        let mut in_list = false;
         for line in workflow.lines() {
             let t = line.trim();
+            let continues = t.ends_with('\\');
 
-            // Assets given on the command's own line. The first quoted
-            // argument to either verb is the tag, not a file.
-            let cmd =
-                t.strip_prefix("gh release create").or_else(|| t.strip_prefix("gh release upload"));
+            let cmd = t
+                .strip_prefix("gh release create")
+                .or_else(|| t.strip_prefix("gh release upload"));
             if let Some(rest) = cmd {
                 for asset in rest.split('\'').skip(1).step_by(2).skip(1) {
                     check(asset);
                 }
+                in_list = continues;
                 continue;
             }
 
-            // Assets on continuation lines, one per line, which is the
-            // shape both sites use today. Read without tracking which
-            // command they belong to: a quoted token alone on a line is
-            // an asset list or a sign-blob subject, and the file has
-            // nothing else shaped that way. The alternative is following
-            // backslash continuations, which the release notes heredoc
-            // breaks by containing lines that end without one.
-            let t = t.trim_end_matches('\\').trim();
-            if let Some(asset) = t.strip_prefix('\'').and_then(|r| r.strip_suffix('\'')) {
-                check(asset);
+            if in_list {
+                let t = t.trim_end_matches('\\').trim();
+                let asset = t.strip_prefix('\'').and_then(|r| r.strip_suffix('\''));
+                let asset = asset.unwrap_or(t);
+                if !t.starts_with("--") && !asset.is_empty() && !asset.contains(' ') {
+                    check(asset);
+                }
+                in_list = continues;
             }
         }
     }
@@ -1362,9 +1382,14 @@ pub(crate) mod tests {
             "curl -LO https://github.com/Letdown2491/kumaos/releases/latest/download/kuma-nostr-x86_64-unknown-linux-musl",
             Proof::Unexecuted("the asset name is asserted by the sibling test; the download itself is not run"),
         ),
-        ("chmod +x kuma-nostrd-x86_64-unknown-linux-musl kuma-nostr-x86_64-unknown-linux-musl", Proof::Unexecuted("plain shell, nothing of kuma's to prove")),
+        (
+            "curl -LO https://github.com/Letdown2491/kumaos/releases/latest/download/nip46-relay-x86_64-unknown-linux-musl",
+            Proof::Unexecuted("the asset name is asserted by the sibling test; the download itself is not run"),
+        ),
+        ("chmod +x kuma-nostrd-x86_64-unknown-linux-musl kuma-nostr-x86_64-unknown-linux-musl nip46-relay-x86_64-unknown-linux-musl", Proof::Unexecuted("plain shell, nothing of kuma's to prove")),
         ("sudo mv kuma-nostrd-x86_64-unknown-linux-musl /usr/local/bin/kuma-nostrd", Proof::Unexecuted("plain shell, nothing of kuma's to prove")),
         ("sudo mv kuma-nostr-x86_64-unknown-linux-musl /usr/local/bin/kuma-nostr", Proof::Unexecuted("plain shell, nothing of kuma's to prove")),
+        ("sudo mv nip46-relay-x86_64-unknown-linux-musl /usr/local/bin/nip46-relay", Proof::Unexecuted("plain shell, nothing of kuma's to prove")),
         // Both of these the dead-disk stage runs for real, which is the
         // only place in the project where "a backup works" is a fact
         // rather than a claim: it seeds a repository, destroys the disk,
@@ -1391,6 +1416,8 @@ pub(crate) mod tests {
             Proof::Runs("scripts/smoke.sh", "install --disk \"$raw\" --image"),
         ),
         ("kuma doctor", Proof::Runs("scripts/smoke.sh", "kuma doctor --json")),
+        ("kuma upgrade --check", Proof::Runs("scripts/smoke.sh", "kuma upgrade --check --json")),
+        ("kuma upgrade --yes", Proof::Runs("scripts/smoke.sh", "kuma upgrade --yes --json")),
         ("kuma update --check", Proof::Runs("scripts/smoke.sh", "update --check")),
         ("kuma update --yes", Proof::Unexecuted("builds and stages a deployment; nothing runs it")),
         ("kuma rollback --yes", Proof::Unexecuted("mutates the boot order; nothing runs it")),

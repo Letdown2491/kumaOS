@@ -17,6 +17,13 @@ Turning it off later is safe. The key lives in your login keyring and the
 pairings in the daemon's own state, both outside the system image, so an
 update or a re-enable finds everything where it was left.
 
+The binaries and units ride in **every** image, enabled or not — the
+declaration's switch decides a systemd preset, not what gets shipped.
+That is what keeps "off" honest: a disabled layer is a preset pointing
+at units that exist, not an image that was built without them, and
+turning the switch on is a declaration change rather than a different
+recipe.
+
 ## Setup and pairing
 
 Setup happens once, on the machine:

@@ -46,13 +46,16 @@ between runs, and nothing promises they will not gain detail.
   rather than acting: the machine is already doing the thing an agent
   would otherwise tell it to do.
 - **Ask before doing.** `check --json` validates a declaration,
-  `update --check --json` reports whether the base moved (or, for a composed
-  base, every package that has and its advisory severity), `diff --json` reports
+  `upgrade --check --json` reports whether a kumaOS release has moved and
+  which lane would run (fetch on a registry origin, delta on a local
+  build), `update --check --json` reports whether the base moved (or, for a
+  composed base, every package that has and its advisory severity),
+  `diff --json` reports
   drift, `snapshot --json` lists what this machine has kept, and
   `backup --json` reports the offsite repository, whether this machine has
   the credential the declaration names, and when a copy last completed.
   `hibernate --json` reports what a swapfile would cost and where it would go.
-  All six change nothing, and `snapshot --restore --json`,
+  All seven change nothing, and `snapshot --restore --json`,
   `backup --restore --json` and `hibernate --off --json` stay dry runs naming
   what they would overwrite or remove until `--yes`.
 
@@ -95,8 +98,9 @@ between runs, and nothing promises they will not gain detail.
   report.
 - **Write.** `kuma schema` prints the JSON Schema for `kuma.toml`, generated
   from the same types that parse it, so it cannot drift from reality.
-- **Mutate.** `build`, `switch`, `update`, `rollback`, `sync`, `add`,
-  `capture`, `remove`, `clean`, `hibernate`, and `install` accept `--json`
+- **Mutate.** `build`, `switch`, `update`, `upgrade`, `rollback`, `sync`,
+  `add`, `capture`, `remove`, `clean`, `hibernate`, and `install` accept
+  `--json`
   and emit exactly one document on stdout: `{"ok": true, …}` with result
   fields and next `actions`, or `{"ok": false, "error": …}` with a non-zero
   exit. A verb that ran as a preview because its `--yes` was missing marks
@@ -104,8 +108,9 @@ between runs, and nothing promises they will not gain detail.
   effect in the document alone. Progress and subprocess output move to
   stderr. The read verbs answer with the same failure document when they
   fail: no `--json` run of kuma ends with an unparseable stdout.
-- **Nothing changes what's running without a reboot.** `switch`, `update` and
-  `rollback` gate on `--yes`, and even then only stage a deployment.
+- **Nothing changes what's running without a reboot.** `switch`, `update`,
+  `upgrade` and `rollback` gate on `--yes`, and even then only stage a
+  deployment.
 
 `kuma install` is the one exception, and worth understanding before driving
 it. It writes a disk immediately and cannot be undone: no staged deployment

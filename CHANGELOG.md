@@ -2,6 +2,69 @@
 
 ## Unreleased
 
+- **`kuma upgrade` moves a machine to a newer kumaOS release without
+  the codebase.** Until now the only way a machine's release moved was
+  `kuma update` — a full rebuild — which meant every machine needed the
+  declarations, the toolchain, and the patience that a build costs.
+  The release axis is its own verb now, with two lanes picked by how
+  the machine got kumaOS. A machine whose origin is a published image
+  (installed from the ISO or rebased) takes the fetch lane: `upgrade`
+  is `bootc upgrade` against the moving release tag, and the machine
+  takes the newer image whole. A machine that builds locally takes the
+  delta lane: kuma fetches the newest release, reads the declaration
+  baked into it, compiles this machine's declaration as per-field
+  divergences on top, and stages the result — release binaries, local
+  divergence, one image. Both lanes answer `--check` (metadata only),
+  speak `--json`, gate on `--yes`, and stage without rebooting.
+  [Two axes](docs/concepts.md#two-axes-the-declaration-and-the-release)
+  is the name for the whole story.
+
+- **A delta build refuses what it cannot carry, and says which.** The
+  delta compiler reads the release's baked declaration and rebuilds
+  only what diverged. Sections a delta cannot faithfully carry — the
+  account, the backup target, the CA certificates, the timezone, the
+  hostname, a different desktop, a `[nostr]` asking to serve a
+  tailnet, the brew machinery, or a release whose base schema is newer
+  than the machine's kuma understands — refuse the build by name,
+  pointing at `kuma update` as the road. Unknown sections pass through
+  ignored; a known section that fails to parse refuses. Every delta
+  writes both slots of `kuma.lock`: the base the release was built
+  from, and the release itself.
+
+- **The nostr layer ships in every image; the switch decides whether
+  it runs.** The daemon, the CLI, and the relay used to be baked only
+  when the declaration armed them. Now they are always in the image —
+  enablement is a systemd preset the `[nostr]` switch decides — so
+  "off" means the units exist and are not enabled, rather than an
+  image that was built without them, and turning the layer on is a
+  declaration change rather than a different recipe. A `[nostr]`
+  asking to serve a tailnet still requires tailscaled, as before. The
+  release page carries the relay beside the pair now, since every
+  compose stages all three from beside the running kuma and a release
+  binary user had no road to the third.
+
+- **ScreenCast and RemoteDesktop route to the gnome portal by name.**
+  The image's portal routing relied on niri's `default=gnome;gtk`
+  ordering to land screencast on the one backend that implements it —
+  an ordering a niri update could reorder silently, sending the camera
+  and the screen to gtk, which implements neither. Both interfaces are
+  appended to the derived `niri-portals.conf` beside the FileChooser
+  pin, and the build greps `gnome.portal` for both: if a future
+  xdg-desktop-portal-gnome stops advertising either, the build fails
+  naming it instead of shipping a desktop that cannot share its screen.
+
+- **A stale kumaui ride refuses to compose.** The image build stages
+  whatever kumaui binaries sit beside the running kuma, and staging
+  checked presence, not identity — 44.9.0's first compose shipped an
+  older kumaui under the new version's name while the changelog
+  claimed the ride. Now every staged binary answers for itself: at
+  compose time each sibling's `--version` is compared against what the
+  build claims it is. The kumaui five answer to the pin, which rides
+  inside the kuma binary — version and commit sha both — and the nostr
+  pair answers to this kuma's own version. A mismatch refuses the
+  compose naming both stamps; `KUMA_ALLOW_KUMAUI_MISMATCH=1` lets a
+  deliberate one through, loudly.
+
 ## v44.9.0 (2026-10-19)
 
 - **The session's subprocess reads can no longer hang, and the Wi-Fi
