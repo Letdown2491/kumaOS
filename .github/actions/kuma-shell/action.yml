@@ -140,17 +140,19 @@ runs:
         # caller's stable: RUSTUP_TOOLCHAIN is unset so rustup reads the
         # tree's file and installs what it names.
         unset RUSTUP_TOOLCHAIN
-        # The stamp the gate verifies: the local build gets KUMA_GIT_SHA
-        # from build.sh, which passes it into the container for every
-        # cargo invocation; a runner build has no build.sh, so the sha
-        # comes from the checkout this step pinned — stamp and pin can
-        # then only disagree if the checkout itself is wrong.
-        export KUMA_GIT_SHA="$(git rev-parse HEAD)"
         # Release, always: these binaries run as the guest's session and
         # greeter and ship in published images, and a debug gpui build is
         # a memory hog no session should be handed. There is no debug
         # shell to stage, here or anywhere.
         cd "$GITHUB_WORKSPACE/kumaui"
+        # The stamp the gate verifies: the local build gets KUMA_GIT_SHA
+        # from build.sh, which passes it into the container for every
+        # cargo invocation; a runner build has no build.sh, so the sha
+        # comes from the checkout this step pinned — stamp and pin can
+        # then only disagree if the checkout itself is wrong. Read here,
+        # AFTER the cd: the same command in the workspace root names
+        # kuma's HEAD, not kumaui's, and the gate refuses the ride.
+        export KUMA_GIT_SHA="$(git rev-parse HEAD)"
         # Four packages, five binaries. kuma-greeter is kuma-shell's
         # sibling bin (src/bin/kuma-greeter.rs), and the image's greetd
         # config points at both roads — the shell as the session, the
