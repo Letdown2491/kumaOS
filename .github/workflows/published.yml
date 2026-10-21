@@ -39,6 +39,14 @@ on:
         required: false
         type: string
         default: ""
+      delta_target:
+        description: >-
+          The release the delta-lane gate upgrades a published N-1
+          machine onto. Empty skips the lap; publish.yml names the
+          staged digest, which is what makes the gate pre-promote.
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       image:
@@ -49,6 +57,12 @@ on:
         description: >-
           Override the cross-version fixture. Empty derives the release
           before this one from the registry.
+        required: false
+        default: ""
+      delta_target:
+        description: >-
+          The release the delta-lane gate upgrades a published N-1
+          machine onto. Empty skips the lap.
         required: false
         default: ""
   # No schedule. There was a weekly one, on the reasoning that a published
@@ -208,5 +222,62 @@ jobs:
         if: failure() || cancelled()
         with:
           name: console-cross-version
+          path: vm-smoke/console-published.log
+          if-no-files-found: warn
+
+  # The delta lane, asked on the road (#45). Installs the published N-1
+  # -- the release the registry served before this run -- as a
+  # localhost-origin machine, which is the lane's own inference, and
+  # upgrades it onto the staged bytes through `kuma upgrade`'s delta
+  # arm: the machine's declaration compiled onto the release's digest,
+  # staged, rebooted into, and asserted healthy with the machine's
+  # content alive in it. Every other lap here installs the version it
+  # upgrades to; this is the only one where the machine's binary is
+  # older than the machinery around it, which is the condition every
+  # published upgrade actually runs under.
+  #
+  # The fixture is derived the cross-version way rather than read off
+  # the moving tag: on a same-version re-publish the moving tag names
+  # the bytes under test, and a gate whose machine starts on them
+  # asserts nothing.
+  delta-lane:
+    if: inputs.delta_target != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: the release before this one
+        id: fixture
+        run: |
+          set -euo pipefail
+          repo="ghcr.io/letdown2491/kuma"
+          command -v skopeo >/dev/null || sudo apt-get install -y -qq skopeo
+          # This checkout IS the version being published, so the
+          # exclusion reads the same Cargo.toml the compose built from.
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          previous=$(skopeo list-tags "docker://$repo" \
+            | jq -r '.Tags[] | select(startswith("niri-"))' \
+            | sed 's/^niri-//' \
+            | grep -vx "$version" \
+            | sort -V | tail -1)
+          [ -n "$previous" ] || { echo "::error::no pinned niri-* tag older than $version"; exit 1; }
+          echo "upgrading from $previous to $version through the delta lane"
+          echo "from=$repo:niri-$previous" >> "$GITHUB_OUTPUT"
+
+      - name: upgrade a published machine through the delta lane
+        uses: ./.github/actions/install-boot
+        with:
+          smoke_args: >-
+            --published-delta ${{ steps.fixture.outputs.from }}
+            --delta-target ${{ inputs.delta_target }}
+
+      - name: guest console
+        if: failure() || cancelled()
+        run: tail -200 vm-smoke/console-published.log || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: failure() || cancelled()
+        with:
+          name: console-delta-lane
           path: vm-smoke/console-published.log
           if-no-files-found: warn

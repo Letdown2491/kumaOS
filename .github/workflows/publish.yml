@@ -19,8 +19,10 @@
 # The shape is compose, stage, prove, promote. The compose builds the
 # image; the audit checks it; the push puts it on a staging tag nobody
 # tracks; the validation laps install and boot THOSE bytes from the
-# registry; and the promote job moves the two real tags only if every lap
-# came back green. The order is not style: two of the first three
+# registry (one of them arrives on the published N-1 and leaves on these
+# bytes, the delta lane — #45); and the promote job moves the two real
+# tags only if every lap came back green. The order is not style: two of
+# the first three
 # publishes failed their validations (44.3.0's signatures the fleet's own
 # policy could not read, 44.6.0's greeter segfault), and under the old
 # order the tags were already live when the laps said so — the laps could
@@ -298,6 +300,12 @@ jobs:
     uses: ./.github/workflows/published.yml
     with:
       image: ${{ needs.publish.outputs.repo }}@${{ needs.publish.outputs.digest }}
+      # The delta gate (#45) rides the same call: its machine is the
+      # published N-1 and its release is these bytes, so a machine the
+      # registry already serves must be able to take the delta lane onto
+      # exactly this digest before promote moves a tag. The same
+      # digest pin the laps boot is the pin the gate upgrades onto.
+      delta_target: ${{ needs.publish.outputs.repo }}@${{ needs.publish.outputs.digest }}
 
   # The tags move here, and only here, and only by digest: `crane tag`
   # re-points a registry tag at a manifest that is already stored, which

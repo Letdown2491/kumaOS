@@ -3033,29 +3033,46 @@ run_delta_arm() {
 
     start_delta_registry
     local rel="127.0.0.1:$DELTA_PORT/kuma"
-    # The throwaway container runs long enough for one exec to
-    # diverge it: the package set moves both ways (git-core-doc out,
-    # sl in — sl because it is tiny and cannot collide with anything
-    # the example or the lap names), and the baked declaration is
-    # edited to describe exactly that filesystem, which is what
-    # makes the divergence a release change rather than a mutation
-    # nothing reads. podman commit works on containers, not images,
-    # which is why the container is committed afterward.
-    local cid
-    cid=$(podman run -d "$machine_tag" sleep 600) ||
-        bad "cannot instantiate the image to fabricate the release"
-    podman exec "$cid" /bin/bash -ec '
-        dnf -y remove git-core-doc
-        dnf -y install sl
-        sed -i -e "s/, \"git-core-doc\"//" -e "s/^rpm = \[\"/rpm = [\"sl\", \"/" /usr/lib/kuma/kuma.toml
-    ' ||
-        { podman rm -f "$cid" >/dev/null 2>&1; bad "cannot diverge the release's content"; }
-    podman commit --change 'LABEL io.kuma.smoke=delta-release' "$cid" "$rel:$release_tag" >/dev/null ||
-        { podman rm -f "$cid" >/dev/null 2>&1; bad "cannot commit the release layer"; }
-    podman rm -f "$cid" >/dev/null 2>&1
-    podman push -q --tls-verify=false "$rel:$release_tag" >/dev/null ||
-        bad "cannot push the release to the lap's registry"
-    ok "the release is up on $rel:$release_tag, content-diverged both ways"
+    if [ -n "$target_ref" ]; then
+        # The release road's gate: the target is the road's own
+        # artifact, pulled by the reference the caller pinned (repo@digest
+        # on the publish road, so the gate judges the exact bytes promote
+        # will name) and pushed to the lap's registry as-is. Nothing is
+        # fabricated and the release's own content is not touched -- the
+        # divergence under test is the machine's alone, and the
+        # assertions after the reboot know that (the both-ways checks
+        # belong to the fabricated arm below).
+        local iid
+        iid=$(podman pull -q "$target_ref") ||
+            bad "cannot pull the release the road built ($target_ref)"
+        podman push -q --tls-verify=false "$iid" "$rel:$release_tag" >/dev/null ||
+            bad "cannot push the road's release to the lap's registry"
+        ok "the release is the road's own image, up on $rel:$release_tag"
+    else
+        # The throwaway container runs long enough for one exec to
+        # diverge it: the package set moves both ways (git-core-doc out,
+        # sl in — sl because it is tiny and cannot collide with anything
+        # the example or the lap names), and the baked declaration is
+        # edited to describe exactly that filesystem, which is what
+        # makes the divergence a release change rather than a mutation
+        # nothing reads. podman commit works on containers, not images,
+        # which is why the container is committed afterward.
+        local cid
+        cid=$(podman run -d "$machine_tag" sleep 600) ||
+            bad "cannot instantiate the image to fabricate the release"
+        podman exec "$cid" /bin/bash -ec '
+            dnf -y remove git-core-doc
+            dnf -y install sl
+            sed -i -e "s/, \"git-core-doc\"//" -e "s/^rpm = \[\"/rpm = [\"sl\", \"/" /usr/lib/kuma/kuma.toml
+        ' ||
+            { podman rm -f "$cid" >/dev/null 2>&1; bad "cannot diverge the release's content"; }
+        podman commit --change 'LABEL io.kuma.smoke=delta-release' "$cid" "$rel:$release_tag" >/dev/null ||
+            { podman rm -f "$cid" >/dev/null 2>&1; bad "cannot commit the release layer"; }
+        podman rm -f "$cid" >/dev/null 2>&1
+        podman push -q --tls-verify=false "$rel:$release_tag" >/dev/null ||
+            bad "cannot push the release to the lap's registry"
+        ok "the release is up on $rel:$release_tag, content-diverged both ways"
+    fi
 
     # The guest's one unlocking, written down before the verb runs:
     # the lap's registry is plain HTTP, and both skopeo and podman
