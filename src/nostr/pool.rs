@@ -312,6 +312,7 @@ fn one_relay(
         if stop.load(Ordering::SeqCst) {
             return;
         }
+        let connected = std::time::Instant::now();
         match connect_and_serve(&url, bunker_pubkey, &inbound, &status, &outbound, &stop, timing) {
             Ok(()) => return,
             Err(e) => {
@@ -323,8 +324,17 @@ fn one_relay(
                 // The reason goes to stderr, where the unit's journal
                 // holds it; the status channel is what surfaces read.
                 eprintln!("kuma-nostrd: {url}: {e:#}");
+                // A connection that held longer than the ceiling's own
+                // reach was a healthy road, not the retry of a dying
+                // one: its next reconnect goes from the floor again.
+                // Without the reset, one flap to the max costs every
+                // later recovery a full minute, forever.
                 std::thread::sleep(backoff);
-                backoff = (backoff * 2).min(BACKOFF_MAX);
+                if connected.elapsed() > BACKOFF_MAX {
+                    backoff = BACKOFF_START;
+                } else {
+                    backoff = (backoff * 2).min(BACKOFF_MAX);
+                }
             }
         }
     }

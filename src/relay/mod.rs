@@ -52,6 +52,14 @@ pub const RATE_LIMIT_PER_MINUTE: usize = 100;
 /// NIP-11 MaxLimit; larger asks are clamped.
 pub const MAX_LIMIT: usize = 100;
 
+/// The event store's hard ceiling. Per-pubkey budgets bound one key;
+/// the aggregate is bounded only here, and without it a flood of
+/// throwaway keys grows the store at (keys × rate) for the whole TTL.
+/// A real relay's occupancy — a handful of bunkers trading
+/// single-digit events per minute — sits four orders of magnitude
+/// under it.
+pub const MAX_EVENTS: usize = 50_000;
+
 /// The door's config: the three numbers an operator or the interop
 /// lane can set, and the defaults the original carries.
 #[derive(Debug, Clone, Copy)]
@@ -242,10 +250,30 @@ impl EventStore {
     /// rate gate between the two beats.
     pub fn insert(&mut self, event: Event, now: u64) -> Result<bool, Rejected> {
         self.admission(&event, now)?;
+        self.insert_admitted(event, now)
+    }
+
+    /// The door's second half, for a caller standing between admission
+    /// and here holding the answers: dedup and store, no re-verify.
+    /// The relay's per-event path is exactly that caller — admission,
+    /// then the pubkey's budget, then this — and one schnorr per event
+    /// is its ceiling, not two.
+    pub fn insert_admitted(&mut self, event: Event, now: u64) -> Result<bool, Rejected> {
         if self.events.iter().any(|s| s.event.id == event.id) {
             return Err(Rejected::Duplicate);
         }
         self.events.push(Stored { event, received_at: now });
+        // The per-pubkey budget bounds one key, not the aggregate: a
+        // flood of throwaway keys is bounded only here. The cap sheds
+        // the oldest received — arrival order is push order, so the
+        // front is the oldest — which turns "the relay dies of memory"
+        // into "the flood's oldest events age out early". A real relay
+        // carries single-digit connections of single-event-per-minute
+        // traffic; the cap is orders of magnitude above that.
+        let excess = self.events.len().saturating_sub(MAX_EVENTS);
+        if excess > 0 {
+            self.events.drain(0..excess);
+        }
         Ok(true) // fresh, held
     }
 
@@ -315,6 +343,14 @@ impl RateLimiter {
         }
         self.budget.push_back(now);
         true
+    }
+
+    /// When this limiter last admitted anything, if ever. The relay's
+    /// sweeper reads it to tell a live key from a flood's throwaway:
+    /// past the idle floor, the window has expired either way, so
+    /// removing the entry is invisible to an honest client.
+    pub fn last_seen(&self) -> Option<u64> {
+        self.budget.back().copied()
     }
 }
 

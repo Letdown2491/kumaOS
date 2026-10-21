@@ -12,8 +12,8 @@
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -27,12 +27,20 @@ use kuma::relay::{EventStore, RateLimiter, Rejected, RelayFilter};
 /// The shared server state: each connection's outbound queue and its
 /// subscriptions, found by connection id.
 type Subscriptions = Arc<Mutex<HashMap<u64, Vec<(String, RelayFilter)>>>>;
-type Outbound = Arc<Mutex<HashMap<u64, Sender<Message>>>>;
+type Outbound = Arc<Mutex<HashMap<u64, (SyncSender<Message>, Arc<AtomicBool>)>>>;
 
 /// The heartbeat of every connection thread: outbound frames drain on
 /// this cadence. Long enough that an idle relay costs nothing; short
 /// enough that a queued answer goes out before its reader gives up.
 const BEAT: Duration = Duration::from_secs(1);
+
+/// How deep a connection's outbound queue may get before the relay
+/// decides the reader stopped reading. Real clients queue single
+/// digits; the cap is generosity itself. A queue that will not take a
+/// frame means a peer holding the socket open and reading nothing —
+/// without a cap, that peer's queue grows at the publish rate for as
+/// long as it holds on.
+const QUEUE_CAP: usize = 1_000;
 
 #[derive(Parser)]
 #[command(
@@ -58,6 +66,46 @@ struct Args {
     /// this port's agree: a hundred.
     #[arg(long, default_value_t = kuma::relay::RATE_LIMIT_PER_MINUTE)]
     rate_limit: usize,
+}
+
+/// How long a pubkey's budget outlives its pubkey's last event. A
+/// limiter idle this long holds an expired window either way — the
+/// sliding minute pops the same entries on the next admit — so
+/// removing it is invisible to an honest client, and it is what
+/// reclaims a flood's throwaway keys, one per event, whose otherwise
+/// immortal entries would outlive the flood by forever.
+const LIMITER_IDLE_SECS: u64 = 600;
+
+/// The limiter map's hard ceiling, the bunker's shed-oldest rule
+/// copied: even a flood outpacing the idle sweep cannot grow the map
+/// past this. Twenty thousand keys is the honest-client count times
+/// nobody's margin — the map's whole job is one entry per bunkered
+/// pubkey.
+const LIMITER_CAP: usize = 20_000;
+
+/// Shed the idle keys, then — if a flood outpaced the sweeper's beat —
+/// the oldest, down to nine tenths of the cap so the next few inserts
+/// do not re-sweep per event. Cost is a sort of the map, paid only
+/// when the cap has actually been reached.
+fn sweep_limiters(
+    limiters: &mut HashMap<nostr::key::PublicKey, RateLimiter>,
+    now: u64,
+) {
+    let floor = now.saturating_sub(LIMITER_IDLE_SECS);
+    limiters.retain(|_, lim| lim.last_seen().map_or(false, |at| at >= floor));
+    if limiters.len() < LIMITER_CAP {
+        return;
+    }
+    let target = LIMITER_CAP * 9 / 10;
+    let mut by_age: Vec<(nostr::key::PublicKey, u64)> = limiters
+        .iter()
+        .map(|(key, lim)| (*key, lim.last_seen().unwrap_or(0)))
+        .collect();
+    by_age.sort_unstable_by_key(|&(_, at)| at);
+    let shed = limiters.len().saturating_sub(target);
+    for (key, _) in by_age.into_iter().take(shed) {
+        limiters.remove(&key);
+    }
 }
 
 fn main() -> Result<()> {
@@ -88,12 +136,15 @@ fn main() -> Result<()> {
     // the Go original's sweepLoop runs on a quarter of the TTL, never
     // under fifteen seconds, whether or not anyone is connected. A
     // sweep tied to a connection's read loop dies with the connection
-    // and lags the TTL by a minute.
+    // and lags the TTL by a minute. The limiter map rides the same
+    // beat: its idle keys are reclaims, not resets.
     let evictor_store = store.clone();
+    let evictor_limiters = limiters.clone();
     let every = (args.keep_minutes * 60 / 4).max(15);
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(every));
         evictor_store.lock().expect("the event store").evict(now_secs());
+        sweep_limiters(&mut evictor_limiters.lock().expect("the rate limiter map"), now_secs());
     });
 
     for stream in listener.incoming() {
@@ -138,8 +189,16 @@ fn one_connection(
 ) -> Result<()> {
     let mut socket = tungstenite::accept(stream)?;
     socket.get_mut().set_read_timeout(Some(BEAT))?;
-    let (tx, rx): (Sender<Message>, Receiver<Message>) = channel();
-    outbound.lock().expect("the outbound map").insert(id, tx.clone());
+    // Bounded, with a kick switch: a reader that stops reading must
+    // cost the relay a bounded queue, not an unbounded one. The flag
+    // is what a broadcaster pulls when the queue will not take a
+    // frame; the connection closes itself on the next beat.
+    let kicked = Arc::new(AtomicBool::new(false));
+    let (tx, rx): (SyncSender<Message>, Receiver<Message>) = sync_channel(QUEUE_CAP);
+    outbound
+        .lock()
+        .expect("the outbound map")
+        .insert(id, (tx.clone(), kicked.clone()));
 
     let result = serve_connection(
         id,
@@ -150,6 +209,7 @@ fn one_connection(
         &limiters,
         rate_limit,
         &rx,
+        &kicked,
     );
 
     // Leaving takes the subscriptions and the queue with it: a gone
@@ -169,12 +229,20 @@ fn serve_connection(
     limiters: &Arc<Mutex<HashMap<nostr::key::PublicKey, RateLimiter>>>,
     rate_limit: usize,
     rx: &Receiver<Message>,
+    kicked: &Arc<AtomicBool>,
 ) -> Result<()> {
     loop {
         // Outbound first, on every beat: answers queued by other
         // connections' events go out before this thread blocks again.
         for message in rx.try_iter() {
             socket.send(message)?;
+        }
+        // A broadcaster whose queue would not take a frame pulled this:
+        // the peer held the socket open and read nothing, and the queue
+        // cap decided it had stopped being a subscriber. Gone politely.
+        if kicked.load(Ordering::SeqCst) {
+            socket.close(None)?;
+            return Ok(());
         }
 
         let message = match socket.read() {
@@ -252,8 +320,16 @@ fn serve_connection(
                         // connection's: a reconnect does not refresh a
                         // flood's budget. The capacity is the configured
                         // rate, the same number the Go original takes
-                        // from its env.
+                        // from its env. A key the map has never met is
+                        // the map's only growth, so a new one pays the
+                        // shed toll first: the idle go, then the
+                        // oldest, and the map stays the size of the
+                        // relay's real population however big the
+                        // throwaway-key flood behind this event is.
                         let mut limiters = limiters.lock().expect("the rate limiter map");
+                        if !limiters.contains_key(&event.pubkey) {
+                            sweep_limiters(&mut limiters, now);
+                        }
                         let limiter = limiters
                             .entry(event.pubkey)
                             .or_insert_with(|| RateLimiter::with_capacity(rate_limit));
@@ -263,7 +339,7 @@ fn serve_connection(
                             store
                                 .lock()
                                 .expect("the event store")
-                                .insert(event.clone(), now)
+                                .insert_admitted(event.clone(), now)
                                 .map(|_fresh| ())
                                 .map_err(|rejected| match rejected {
                                     Rejected::Kind(kind) => {
@@ -379,16 +455,42 @@ fn serve_connection(
 
 /// A held event goes to every connection whose subscriptions match —
 /// the sender's own included, because its subscription is its channel.
+/// A queue that will not take a frame means a reader that stopped
+/// reading: the frame is dropped, the connection is kicked (its flag
+/// set, its queue and subscriptions taken away) and it closes itself
+/// on its next beat. Kicks are collected during the walk and executed
+/// after it — the locks are taken subs-then-outbound everywhere, and
+/// a member is not removed from a map mid-iteration.
 fn broadcast(event: &Event, outbound: &Outbound, subscriptions: &Subscriptions) {
-    let subs = subscriptions.lock().expect("the subscription map");
-    for (conn_id, conn_subs) in subs.iter() {
-        for (sub_id, filter) in conn_subs {
-            if filter.matches(event) {
-                let frame = serde_json::json!(["EVENT", sub_id, event]).to_string();
-                if let Some(queue) = outbound.lock().expect("the outbound map").get_mut(conn_id) {
-                    let _ = queue.send(Message::text(frame));
+    let mut kicked: Vec<u64> = Vec::new();
+    {
+        let subs = subscriptions.lock().expect("the subscription map");
+        let mut queues = outbound.lock().expect("the outbound map");
+        for (conn_id, conn_subs) in subs.iter() {
+            for (sub_id, filter) in conn_subs {
+                if filter.matches(event) {
+                    let frame = serde_json::json!(["EVENT", sub_id, event]).to_string();
+                    match queues.get_mut(conn_id) {
+                        Some((queue, _)) => match queue.try_send(Message::text(frame)) {
+                            Ok(()) => {}
+                            Err(TrySendError::Full(_)) => kicked.push(*conn_id),
+                            // Already gone; its own teardown holds the map.
+                            Err(TrySendError::Disconnected(_)) => {}
+                        },
+                        None => {}
+                    }
                 }
             }
+        }
+    }
+    if !kicked.is_empty() {
+        let mut queues = outbound.lock().expect("the outbound map");
+        let mut subs = subscriptions.lock().expect("the subscription map");
+        for conn_id in kicked {
+            if let Some((_, kicked)) = queues.remove(&conn_id) {
+                kicked.store(true, Ordering::SeqCst);
+            }
+            subs.remove(&conn_id);
         }
     }
 }
