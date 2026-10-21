@@ -71,8 +71,8 @@ runs:
         # the boot job's native node booted fine in the same round. The
         # two nodes are indistinguishable to open(); only EGL can tell.
         # mesa's render scan tries every renderD* and lands on one that
-        # GBMs, so an extra vgem costs it one failed probe and saves
-        # the run when the native node cannot.
+        # GBMs — but GBM-at-scan is not EGL-in-use: the natives retire
+        # below, after vgem is confirmed up.
         sudo modprobe vgem 2>/dev/null || true
         if ! ls /sys/module/vgem >/dev/null 2>&1; then
             echo "   .. no vgem module; building it out of tree"
@@ -101,6 +101,26 @@ runs:
         # available" (measured: reproduced locally, byte-identical, on
         # 2026-10-05). The /dev/kvm rule below is the same lesson.
         sudo chmod 666 /dev/dri/renderD* 2>/dev/null || true
+        # A node that opens is not a node EGL can use. The runners'
+        # paravirt GPU presents a node that GBMs at scan time and dies
+        # when virgl first asks it for a context — sixteen minutes into
+        # the lap, a 0-byte console, nothing to read (2026-10-21). Which
+        # node enumerates first varies per runner, so no scan can tell
+        # working from broken; the only deterministic state is vgem and
+        # nothing else. Retire every non-vgem render node now that vgem
+        # is confirmed up, and fail loud here if one refuses — that is
+        # a twenty-second red leg instead of the coin flip re-armed.
+        for devpath in /sys/class/drm/renderD*; do
+            [ -e "$devpath/device/driver" ] || continue
+            drv=$(basename "$(readlink -f "$devpath/device/driver")")
+            [ -n "$drv" ] && [ "$drv" != "vgem" ] || continue
+            dev=$(basename "$(readlink -f "$devpath/device")")
+            if ! echo "$dev" | sudo tee "$devpath/device/driver/unbind" >/dev/null; then
+                echo "native render node $devpath (driver $drv) refused to retire; the EGL pick stays a coin flip (#47)"
+                exit 1
+            fi
+            echo "   .. retired native render node $devpath (driver $drv)"
+        done
         # The check is the qemu user's, not root's: ls sees a node root
         # owns, open is what qemu needs.
         node=""
