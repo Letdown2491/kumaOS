@@ -243,9 +243,10 @@ refuses a disk with anything in use on it, asking `lsblk` rather than only
 the mount table.
 
 **Publishing an image.** A `v*` tag does it: the tag dispatches
-`.github/workflows/publish-tag.yml`, which publishes both tiers — niri then
-cosmic, sequentially — by running `.github/workflows/publish.yml` once per
-tier. Each run builds from a committed example, runs
+`.github/workflows/publish-tag.yml`, which publishes the niri image —
+the tier the registry has ever carried — by running
+`.github/workflows/publish.yml` for it. Each run builds from a committed
+example, runs
 `scripts/publish-audit.sh` against the result *before* touching the
 registry, and refuses to push
 unsigned unless asked to. The audit is the interesting part: a published

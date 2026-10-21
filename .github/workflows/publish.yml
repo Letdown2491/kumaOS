@@ -1,9 +1,10 @@
 # Publish a kuma image to ghcr.
 #
 # One image per run: dispatch it by hand for a one-off re-publish of a
-# single tier, or cut a release tag — publish-tag.yml dispatches it once
-# per tier (niri, then cosmic), signed always, and fails the tag run if
-# either leg does. The two roads share a concurrency group, because the
+# tier, or cut a release tag — publish-tag.yml dispatches it for niri
+# (the tier the registry has ever carried; see that file's header for
+# why the tag road is niri-only), signed always, and fails the tag run
+# if the leg does. The two roads share a concurrency group, because the
 # one race this pipeline cannot survive is two promotes moving the
 # moving tags at the same time; a run that arrives while another holds
 # the group queues, it does not cancel.

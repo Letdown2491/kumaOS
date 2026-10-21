@@ -1,27 +1,37 @@
-# Publish both release tiers when a release tag lands.
+# Publish the niri image when a release tag lands.
 #
 # The other half of "a tag is a release trigger". release.yml cuts the
-# release page; this publishes the images the release page describes —
-# and the ordering matters in one direction only: until both legs are
+# release page; this publishes the image the release page describes —
+# and the ordering matters in one direction only: until the leg is
 # green, `kuma upgrade --check` on the previous release reports
 # "current" forever, and an ISO installed in the meantime strands its
 # machine on the release lane. A red leg here is a red release: the
 # moving tags have not moved (publish.yml promotes only after its own
 # validation laps), and the run fails with the failed leg's URL.
 #
+# Why only niri: the registry's own history. Every version ghcr has
+# ever carried is `niri` / `niri-<version>` — no cosmic tag of any kind
+# has ever existed, so no machine could be on one, and the tag road
+# publishes the tier machines actually run. Publishing a first-ever
+# cosmic image — a tier that has never been through this road, composed
+# from a declaration no publish has ever validated — is not something a
+# tag push should decide unattended. When that day comes, the tier
+# returns here: append it to the loop below and the road carries it,
+# signed and lap-proven like niri.
+#
 # Why dispatch instead of an `on: push: tags:` block in publish.yml
-# itself: a release is TWO images (niri and cosmic), and publish.yml
-# is one image per run — a structure whose step bodies carry the
-# staging/prove/promote history of three failed publishes. The
-# dispatcher loops the proven pipeline per tier and keeps that file
-# byte-identical; a one-off re-publish of a single tier stays a manual
-# dispatch of publish.yml exactly as it was.
+# itself: publish.yml is one image per run — a structure whose step
+# bodies carry the staging/prove/promote history of three failed
+# publishes — and the tag road keeps that file byte-identical, calling
+# the proven pipeline rather than forking it. A one-off re-publish of a
+# tier (cosmic included, when wanted) stays a manual dispatch of
+# publish.yml exactly as it was.
 #
 # The legs run sequentially because the run-matching is honest that
 # way: `gh run list` cannot show a run's inputs, so "the newest
 # matching run is the one I just dispatched" needs one leg in flight
-# at a time. It is also gentler on the validation batteries, which are
-# the long half of each leg.
+# at a time. It is also gentler on the validation battery, which is
+# the long half of a leg.
 #
 # release.yml fires on the same tag push and runs in parallel; the two
 # share nothing. Its ISO is composed from this tree by the packaged
@@ -70,7 +80,7 @@ jobs:
       # window — the newest run created after this leg started is this
       # leg's, because the legs are sequential and a queued older run
       # was created before the window opened.
-      - name: publish each tier, watching to green
+      - name: publish niri, watching to green
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
@@ -109,7 +119,11 @@ jobs:
             echo "### Published \`${TAG}\`"
             echo
           } >> "$GITHUB_STEP_SUMMARY"
-          for example in niri cosmic; do
+          # niri only — see the header. The loop shape stays: a leg's
+          # matching-window bookkeeping is identical per tier, and the
+          # day cosmic (or any tier) earns a publish, its name joins
+          # this list and nothing else changes.
+          for example in niri; do
             started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
             gh workflow run publish.yml --ref "$TAG" -f "example=${example}"
             wait_green "$example" "$started"
