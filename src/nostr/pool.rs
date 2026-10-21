@@ -39,6 +39,12 @@ pub(crate) const SUBSCRIPTION_ID: &str = "kuma-bunker";
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
 const BACKOFF_START: Duration = Duration::from_secs(1);
 
+/// The frame log's sample period: one frame line per road per period,
+/// suppressed frames counted and named when the sample resumes. The
+/// wire's own rate, not this number, is what a flood's cost would
+/// otherwise be.
+const FRAME_SAMPLE: Duration = Duration::from_secs(10);
+
 /// How a road probes a quiet wire. The beat is one second (the read
 /// timeout); every so many beats the road sends a ping, and so many
 /// pings may go unanswered — no inbound frame of any kind between
@@ -366,6 +372,13 @@ fn connect_and_serve(
     // unanswered count.
     let mut beats_since_ping: u32 = 0;
     let mut unanswered: u32 = 0;
+    // The frame log's sampler: one line per sample period, with the
+    // suppressed count named when the sample resumes. Per-frame was a
+    // journald flood in waiting — a relay redelivering its backlog or
+    // a peer spraying garbage wrote at the wire's rate, uncapped.
+    let mut last_frame =
+        std::time::Instant::now().checked_sub(FRAME_SAMPLE).unwrap_or_else(std::time::Instant::now);
+    let mut suppressed: u64 = 0;
 
     loop {
         if stop.load(Ordering::SeqCst) {
@@ -389,13 +402,23 @@ fn connect_and_serve(
         match socket.read() {
             Ok(Message::Text(text)) => {
                 unanswered = 0;
-                eprintln!("kuma-nostrd: frame: {}", text.chars().take(120).collect::<String>());
                 let events = events_from_relay_message(&text, SUBSCRIPTION_ID);
-                if !events.is_empty() {
-                    // One line per bunker-addressed event: when an app's
-                    // ask never becomes a prompt, this is the line that
-                    // says whether the relay ever spoke.
-                    eprintln!("kuma-nostrd: relayed {} event(s) from the wire", events.len());
+                if last_frame.elapsed() >= FRAME_SAMPLE {
+                    if suppressed > 0 {
+                        eprintln!("kuma-nostrd: {url}: {suppressed} frame(s) arrived between samples");
+                        suppressed = 0;
+                    }
+                    eprintln!("kuma-nostrd: frame: {}", text.chars().take(120).collect::<String>());
+                    if !events.is_empty() {
+                        // One line per bunker-addressed event batch:
+                        // when an app's ask never becomes a prompt,
+                        // this is the line that says whether the relay
+                        // ever spoke.
+                        eprintln!("kuma-nostrd: relayed {} event(s) from the wire", events.len());
+                    }
+                    last_frame = std::time::Instant::now();
+                } else {
+                    suppressed += 1;
                 }
                 for event in events {
                     let _ = inbound.send(event);

@@ -206,11 +206,29 @@ pub struct Vault<S: SecretStore> {
     /// blob last said. A secret without an entry here pairs under the
     /// client's own metadata claim, or under nothing.
     labels: std::collections::HashMap<String, String>,
+    /// The cached answer to "does a vault exist": every `status` asks,
+    /// and each answer used to be a fresh D-Bus connection plus a full
+    /// secret read — held under the daemon mutex — for a fact that
+    /// changes only when this vault itself writes or destroys. The
+    /// store's own mutating paths keep it honest.
+    stored_cache: std::sync::Mutex<Option<bool>>,
 }
 
 impl<S: SecretStore> Vault<S> {
     pub fn new(store: S) -> Self {
-        Self { store, key: None, secrets: Vec::new(), labels: std::collections::HashMap::new() }
+        Self {
+            store,
+            key: None,
+            secrets: Vec::new(),
+            labels: std::collections::HashMap::new(),
+            stored_cache: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// The cache's one write door: the mutating paths say what became
+    /// true, and `stored`'s polls believe it until the next one.
+    fn note_stored(&self, exists: bool) {
+        *self.stored_cache.lock().expect("the vault cache") = Some(exists);
     }
 
     pub fn is_unlocked(&self) -> bool {
@@ -250,9 +268,17 @@ impl<S: SecretStore> Vault<S> {
 
     /// Whether a vault exists in the store, without opening it: what
     /// `status` reports and what distinguishes "locked" from "never set
-    /// up" for every caller downstream.
+    /// up" for every caller downstream. The answer is cached — the
+    /// polls arrive at the panel's cadence, the fact changes when this
+    /// vault writes or destroys — so the cost is one store read per
+    /// change, not per poll.
     pub async fn stored(&self) -> Result<bool> {
-        Ok(self.store.load().await?.is_some())
+        if let Some(cached) = *self.stored_cache.lock().expect("the vault cache") {
+            return Ok(cached);
+        }
+        let exists = self.store.load().await?.is_some();
+        *self.stored_cache.lock().expect("the vault cache") = Some(exists);
+        Ok(exists)
     }
 
     /// The bunker's public identity, read from the blob without
@@ -334,6 +360,7 @@ impl<S: SecretStore> Vault<S> {
             blob.secrets = vec![generate_wrap()?];
         }
         self.store.save(&serde_json::to_vec(&blob).context("serializing the vault blob")?).await?;
+        self.note_stored(true);
         self.secrets = blob.secrets;
         self.labels = blob.labels;
         self.key = Some(key);
@@ -363,6 +390,7 @@ impl<S: SecretStore> Vault<S> {
         }
         blob.secrets.push(fresh.clone());
         self.store.save(&serde_json::to_vec(&blob).context("serializing the vault blob")?).await?;
+        self.note_stored(true);
         self.secrets = blob.secrets;
         self.labels = blob.labels;
         Ok(fresh)
@@ -383,6 +411,7 @@ impl<S: SecretStore> Vault<S> {
         }
         blob.labels.remove(secret);
         self.store.save(&serde_json::to_vec(&blob).context("serializing the vault blob")?).await?;
+        self.note_stored(true);
         self.secrets = blob.secrets;
         self.labels = blob.labels;
         Ok(true)
@@ -402,6 +431,7 @@ impl<S: SecretStore> Vault<S> {
         blob.labels = std::collections::HashMap::new();
         blob.v = BLOB_VERSION;
         self.store.save(&serde_json::to_vec(&blob).context("serializing the vault blob")?).await?;
+        self.note_stored(true);
         self.secrets = blob.secrets;
         self.labels = blob.labels;
         Ok(fresh)
@@ -415,7 +445,11 @@ impl<S: SecretStore> Vault<S> {
         self.lock();
         self.secrets = Vec::new();
         self.labels = std::collections::HashMap::new();
-        self.store.remove().await
+        let removed = self.store.remove().await;
+        if removed.is_ok() {
+            self.note_stored(false);
+        }
+        removed
     }
 
     /// The shared body of `setup` and a future import-with-replace:
@@ -426,6 +460,7 @@ impl<S: SecretStore> Vault<S> {
         let wrap = generate_wrap()?;
         let blob = VaultBlob::new(key, wrap, vec![generate_wrap()?])?;
         self.store.save(&serde_json::to_vec(&blob).context("serializing the vault blob")?).await?;
+        self.note_stored(true);
         self.secrets = blob.secrets;
         self.key = Some(key.clone());
         Ok(())
