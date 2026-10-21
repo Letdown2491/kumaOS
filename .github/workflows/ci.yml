@@ -360,6 +360,38 @@ jobs:
           path: vm-smoke/console-${{ matrix.example }}.log
           if-no-files-found: warn
 
+  # The delta lap: `kuma upgrade`, run on the booted machine, the new
+  # machinery of issue #38 proven end to end — registry read, compile,
+  # guest-side build, bootc switch, and the declaration alive in the
+  # booted deployment. It rides the boot stage whole (the machine has to
+  # exist and be healthy first), so this job re-runs the boot battery in
+  # front of the delta half. Separate from `boot` because its failures
+  # are about the upgrade lane, not about whether the image boots, and
+  # one red job should say which question failed.
+  boot-delta:
+    runs-on: ubuntu-24.04
+    needs: when
+    if: >-
+      github.event_name != 'pull_request' &&
+      !startsWith(github.ref, 'refs/tags/') &&
+      (github.event_name != 'schedule' || needs.when.outputs.daily == 'true')
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: smoke (boot + delta upgrade)
+        uses: ./.github/actions/install-boot
+        with:
+          smoke_args: --boot --delta niri
+      - name: guest console
+        if: failure() || cancelled()
+        run: tail -200 vm-smoke/console-niri.log || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: failure() || cancelled()
+        with:
+          name: console-boot-delta
+          path: vm-smoke/console-niri.log
+          if-no-files-found: warn
+
   # The only job that installs and boots an image built from THIS TREE.
   #
   # That makes it the only place an unreleased change to install-time or

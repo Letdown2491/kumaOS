@@ -1843,6 +1843,22 @@ enum UpgradeLane {
 }
 
 fn upgrade_lane(desktop: config::Desktop, booted: &deployment::Slot) -> UpgradeLane {
+    // KUMA_RELEASE_REPO aims the Delta lane at a registry the caller
+    // controls. It exists for the smoke's delta lap, which proves the
+    // lane on a booted machine against a release the lap fabricates;
+    // no real deployment carries the variable, and the published repo
+    // is the only inference anything else should ever see.
+    let override_repo = std::env::var("KUMA_RELEASE_REPO")
+        .ok()
+        .map(|repo| repo.trim().to_string())
+        .filter(|repo| !repo.is_empty());
+    upgrade_lane_in(override_repo.as_deref().unwrap_or_else(|| published_repo()), desktop, booted)
+}
+
+/// `upgrade_lane` with the release repo named by the caller, so the
+/// override is testable without mutating process-global env state from
+/// a parallel test harness.
+fn upgrade_lane_in(repo: &str, desktop: config::Desktop, booted: &deployment::Slot) -> UpgradeLane {
     let Some(tag) = desktop.release_tag() else {
         return UpgradeLane::Headless;
     };
@@ -1852,7 +1868,7 @@ fn upgrade_lane(desktop: config::Desktop, booted: &deployment::Slot) -> UpgradeL
     if !local && !image.is_empty() {
         return UpgradeLane::Fetch { origin: image.to_string() };
     }
-    UpgradeLane::Delta { inferred: format!("{}:{tag}", published_repo()) }
+    UpgradeLane::Delta { inferred: format!("{}:{tag}", repo) }
 }
 
 fn upgrade_check(deps: &deployment::Deployments, origin: &str, fetch: bool, json: bool) -> Result<()> {
@@ -4715,6 +4731,22 @@ mod tests {
             upgrade_lane(config::Desktop::None, &booted),
             UpgradeLane::Headless
         ));
+    }
+
+    #[test]
+    fn the_release_repo_is_the_deltas_inference_seam() {
+        // The delta lap aims the lane at a registry the lap controls by
+        // naming it in KUMA_RELEASE_REPO; the seam is what that variable
+        // feeds. The inference is otherwise the published repo — the
+        // smoke's registry reference must never leak into a real
+        // machine's answer, so the default path is its own assertion.
+        let booted = slot("localhost/kuma:latest", "containers-storage");
+        let UpgradeLane::Delta { inferred } =
+            upgrade_lane_in("10.0.2.2:19001/kuma", config::Desktop::Niri, &booted)
+        else {
+            panic!("a local build must take the delta lane");
+        };
+        assert_eq!(inferred, "10.0.2.2:19001/kuma:niri");
     }
 
     #[test]

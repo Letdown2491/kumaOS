@@ -35,6 +35,18 @@
 #   scripts/smoke.sh --published <image> --encrypted   # LUKS, unlocked
 #                                                      # at the console
 #   scripts/smoke.sh --published <image> --hibernate --secure-boot
+#   scripts/smoke.sh --boot --delta niri   # boot, then `kuma upgrade`
+#                                          # on the booted machine
+#
+# --delta rides the boot stage and, after the boot assertions pass,
+# drives `kuma upgrade` on the booted machine itself: the delta lane's
+# registry read, baked-declaration read, unit probe, compile, guest-side
+# build and bootc switch, then a reboot and the assertion that the
+# machine came back as the declaration it was told to be. The release it
+# upgrades to is this run's own image, one empty layer forward, pushed
+# to a registry on the runner; the lane is aimed there through
+# KUMA_RELEASE_REPO, an override that exists for this lap and is unset
+# on every real machine. Nothing here publishes to the real repo.
 #
 # --hibernate installs with a swapfile, then asks the machine to suspend
 # to disk and come back. It is the only stage where the verdict is not
@@ -149,6 +161,7 @@ ISO_MAX_BYTES=${ISO_MAX_BYTES:-1900000000}
 PUBLISHED=""
 DEAD_DISK=0
 UPGRADE_TO=""
+DELTA=0
 ENCRYPTED=0
 HIBERNATE=0
 SECURE_BOOT=0
@@ -163,6 +176,7 @@ while [ $# -gt 0 ]; do
         --published) PUBLISHED=${2:?--published needs an image reference}; shift ;;
         --dead-disk) DEAD_DISK=1 ;;
         --upgrade-to) UPGRADE_TO=${2:?--upgrade-to needs an image reference}; shift ;;
+        --delta) DELTA=1 ;;
         --encrypted) ENCRYPTED=1 ;;
         --hibernate) HIBERNATE=1 ;;
         --secure-boot) SECURE_BOOT=1 ;;
@@ -2852,6 +2866,36 @@ stop_s3() {
     podman rm -f kuma-smoke-s3 >/dev/null 2>&1 || true
 }
 
+# The delta lap's registry. The lane's `kuma upgrade` inside the guest
+# pulls the release over plain HTTP from the runner, the same road the
+# guest already reaches the S3 mock by; the signature policy the image
+# bakes accepts it by default (its narrow rule names only the published
+# repo, and the default is insecureAcceptAnything), and the guest-side
+# insecure allowance is written by the lap before it runs the verb.
+DELTA_PORT=19001
+DELTA_IMAGE=docker.io/library/registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+
+start_delta_registry() {
+    podman rm -f kuma-smoke-delta-registry >/dev/null 2>&1 || true
+    podman run -d --name kuma-smoke-delta-registry \
+        -p "127.0.0.1:$DELTA_PORT:5000" \
+        "$DELTA_IMAGE" >/dev/null \
+        || bad "cannot start the delta lap's registry"
+    # /v2/ is the registry handshake; a server that answers at all is
+    # what this wait is for.
+    local waited=0
+    until curl -s -o /dev/null "http://127.0.0.1:$DELTA_PORT/v2/" 2>/dev/null; do
+        sleep 1
+        waited=$((waited + 1))
+        [ $waited -lt 60 ] || bad "the delta registry never came up on $DELTA_PORT"
+    done
+    ok "the delta registry is up on $DELTA_PORT"
+}
+
+stop_delta_registry() {
+    podman rm -f kuma-smoke-delta-registry >/dev/null 2>&1 || true
+}
+
 # A declaration that backs up, derived from the committed one rather than
 # written here, so this stage cannot drift into testing a machine nobody
 # ships.
@@ -3680,6 +3724,143 @@ smoke_boot() {
         [ "$(guest systemctl is-active display-manager.service)" = active ] \
             || bad "greeter is not running"
         ok "greeter is up"
+    fi
+
+    # --- the delta half -------------------------------------------------
+    #
+    # The cross-version lap (the published stage) proves the fetch path:
+    # bootc pulling a newer release off the origin. This proves the delta
+    # path — kuma's own upgrade verb run ON the machine — because the
+    # lane is new machinery and every half of it runs together here for
+    # the first time: the registry read, the baked-declaration read, the
+    # unit probe, the compile, the guest-side build, and the bootc switch
+    # that the reboot below asks the machine to keep.
+    #
+    # The release is this run's own image, one empty layer forward,
+    # pushed to the runner's registry. The empty layer is what makes it
+    # NEWER than what is booted — without it the lane's digest check
+    # reads "already current" and the lap proves a refusal. The machine
+    # declares two things the release does not carry (a package and an
+    # armed nostr layer), and the assertions after the reboot are about
+    # exactly those two surviving into the booted deployment.
+    if [ $DELTA -eq 1 ]; then
+        case "$name" in
+            niri | cosmic) ;;
+            *) bad "--delta needs a desktop example; $name has no release tag" ;;
+        esac
+
+        booted_digest() {
+            gsudo bootc status --format json 2>/dev/null |
+                python3 -c 'import sys,json; print(json.load(sys.stdin)["status"]["booted"]["image"]["imageDigest"])'
+        }
+
+        start_delta_registry
+        local rel="127.0.0.1:$DELTA_PORT/kuma"
+        # One empty layer forward. podman commit works on containers,
+        # not images, which is why the throwaway container exists.
+        local cid
+        cid=$(podman create "$tag") || bad "cannot instantiate the image to fabricate the release"
+        podman commit --change 'LABEL io.kuma.smoke=delta-release' "$cid" "$rel:$name" >/dev/null ||
+            { podman rm -f "$cid" >/dev/null 2>&1; bad "cannot commit the release layer"; }
+        podman rm -f "$cid" >/dev/null 2>&1
+        podman push -q --tls-verify=false "$rel:$name" >/dev/null ||
+            bad "cannot push the release to the lap's registry"
+        ok "the release is up on $rel:$name"
+
+        # The guest's one unlocking, written down before the verb runs:
+        # the lap's registry is plain HTTP, and both skopeo and podman
+        # read this file. The baked policy needs nothing — its default
+        # accepts anything its narrow signing rule does not name, and
+        # the rule names only the published repo.
+        local regconf
+        regconf=$(printf '[[registry]]\nlocation = "10.0.2.2:%d/kuma"\ninsecure = true\n' "$DELTA_PORT")
+        printf 'kuma\n%s\n' "$regconf" |
+            ssh "${ssh_opts[@]}" "sudo -S -p '' tee /etc/containers/registries.conf.d/90-smoke-delta.conf >/dev/null" \
+                2>>"vm-smoke/gsudo-$name.err" ||
+            bad "cannot point the guest at the lap's registry"
+        ok "the guest accepts the lap's registry over plain HTTP"
+
+        # The machine's declaration starts as the release's baked one and
+        # diverges by exactly what the post-reboot assertions name. `kuma
+        # add` because the divergence should be made the way a user makes
+        # it, and because hand-editing the rpm line here would only
+        # re-test sed. The nostr arm is a plain append: the examples
+        # leave the section commented out, so it does not exist yet.
+        gsudo "sh -c 'cat /usr/lib/kuma/kuma.toml > /root/kuma.toml'" ||
+            bad "cannot seed the machine's declaration from the baked one"
+        gsudo "kuma add --rpm cowsay --config /root/kuma.toml" >/dev/null ||
+            bad "cannot add the delta's package to the declaration"
+        gsudo "sh -c 'printf \"\n[nostr]\nenable = true\n\" >> /root/kuma.toml'" ||
+            bad "cannot arm nostr in the machine's declaration"
+        ok "the machine's declaration diverges from the release"
+
+        # The verb runs as root so its internal sudo calls (skopeo,
+        # bootc, the stage) are passwordless; the kuma account's wheel
+        # sudo needs a password no non-interactive session can answer.
+        # --json because the assertions parse, not grep prose.
+        local before after want
+        before=$(booted_digest) || bad "could not read the booted digest before the upgrade"
+        gsudo "env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --check --json --config /root/kuma.toml" \
+            >"$dir/upgrade-check.json" ||
+            bad "the delta lane's check failed on the booted machine"
+        python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+assert d["lane"] == "delta", d
+assert d["current"] is False, d
+assert d["release"]["digest"], d' "$dir/upgrade-check.json" ||
+            bad "the check did not report a newer release on the delta lane"
+        want=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["release"]["digest"])' \
+            "$dir/upgrade-check.json")
+        ok "the check reports a newer release ($want)"
+
+        gsudo "env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --yes --json --config /root/kuma.toml" \
+            >"$dir/upgrade-yes.json" ||
+            bad "the delta upgrade failed on the booted machine"
+        python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+assert d["staged"] is True, d
+assert d["digest"] == sys.argv[2], d' "$dir/upgrade-yes.json" "$want" ||
+            bad "the delta upgrade did not stage the release it checked"
+        # The lock names the release the delta compiled from; it is
+        # written beside the declaration (/root/kuma.lock here), which
+        # dies with the reboot — so the read is before it, and asserts
+        # that the lane wrote it at all.
+        gsudo "grep -F $want /root/kuma.lock" >/dev/null ||
+            bad "the delta left no release record in the lock"
+        ok "the delta staged, and the lock names the release"
+
+        echo "   .. rebooting into the delta"
+        gsudo "systemctl reboot" >/dev/null 2>&1 || true
+        local gone=0
+        while guest true 2>/dev/null && [ $gone -lt 60 ]; do sleep 2; gone=$((gone + 2)); done
+        await_healthy_boot "$qemu" "$log" \
+            "the delta machine came back" \
+            "greenboot says the delta deployment is healthy" \
+            " after the delta upgrade" 1800
+
+        after=$(booted_digest) || bad "could not read the booted digest after the upgrade"
+        [ "$before" != "$after" ] ||
+            bad "still booted on $before after the delta upgrade; nothing actually moved"
+        ok "moved from ${before:0:19} to ${after:0:19}"
+
+        # The two divergences, alive in the booted deployment. rpm -q
+        # rather than a file probe: the delta's dnf ran at build time,
+        # and "the package is in the image" is the claim.
+        gsudo "rpm -q cowsay" | grep -q cowsay ||
+            bad "the delta's package is not in the booted deployment"
+        ok "the delta's package is installed"
+        local rebaked
+        rebaked=$(gsudo "cat /usr/lib/kuma/kuma.toml")
+        printf '%s\n' "$rebaked" | grep -q cowsay ||
+            bad "the booted deployment's baked declaration is not the machine's"
+        printf '%s\n' "$rebaked" | grep -A1 '^\[nostr\]' | grep -q "enable = true" ||
+            bad "the booted deployment's declaration does not arm nostr"
+        ok "the declaration was re-baked onto the deployment"
+        gsudo "systemctl --global is-enabled kuma-nostrd.service" | grep -qx enabled ||
+            bad "the armed nostr layer is not enabled on the delta deployment"
+        ok "the armed nostr layer is enabled"
+
+        stop_delta_registry
     fi
 
     # Shutting down is not what this test is about, and the guest's test
