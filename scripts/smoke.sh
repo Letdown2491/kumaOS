@@ -155,14 +155,20 @@ ensure_render_node() {
 BOOT=0
 ISO=0
 INSTALL=0
-# The ISO rides a GitHub release, and a release asset is capped at 2 GB.
-# Failing below the cap rather than at it: an ISO that only just fits is
-# one desktop package away from not fitting, and finding that out when a
-# tag is already pushed means a release with no installer. 1.90 GB was
-# the 44.9.0 budget; the compose engines landed in the base since (the
-# delta verb needs podman and skopeo on every machine), and the 44.10.0
-# ISO measured 1.94 GB. Still 50 MB under the asset cap on purpose.
-ISO_MAX_BYTES=${ISO_MAX_BYTES:-1950000000}
+# The ISO rides a GitHub release, and a release asset is capped at 2 GiB
+# (2,147,483,648 bytes). Failing below the cap rather than at it: an ISO
+# that only just fits is one desktop package away from not fitting, and
+# finding that out when a tag is already pushed means a release with no
+# installer. 1.90 GB was the 44.9.0 budget; the compose engines landed
+# in the base since (the delta verb needs podman and skopeo on every
+# machine), and the 44.10.0 ISO measured 1.94 GB — until the base's
+# live-resolved rpm set drifted 100 MB in one afternoon and composed
+# 1.96 GB against a 1.95 budget (2026-10-21, twice in one day, while
+# the release's own ISO composed 1.86 GB between the two). A budget
+# that sits between two real compositions is a coin flip, so the
+# headroom is now against the cap's true bytes, not a guess at the
+# ISO's growth rate.
+ISO_MAX_BYTES=${ISO_MAX_BYTES:-2050000000}
 PUBLISHED=""
 DEAD_DISK=0
 UPGRADE_TO=""
