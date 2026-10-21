@@ -30,6 +30,26 @@
   every machine can run is kuma's dependency, not another package's
   recommendation.
 
+- **The upgrade lanes stop stranding images, and the nostr layer
+  stops writing at the rate it thinks.** A resource audit's findings,
+  closed. The delta lane pulled the full release as scaffolding and
+  never removed it — a year of monthly upgrades left every release
+  behind, gigabytes apiece — and `stage`'s sync into root storage left
+  the previous root copy dangling each time; both are reclaimed at the
+  source now, and the upgrade path's registry reads are bounded the
+  way the update path's already were, so a stalled registry cannot
+  hold the verb forever. The nostr layer's churning paths stopped
+  churning: the policy engine's per-decision file rewrites are batched
+  to one write per five seconds (a flood no longer rewrites the log
+  file per attack event, and structural changes still persist at
+  once), the vault-exists answer the panel polls is cached between
+  actual changes instead of re-asking the Secret Service per poll, the
+  relay's per-pubkey limiter map and event store gained the shed-oldest
+  bounds the bunker's own caches always had, a slow-reading relay
+  client is kicked instead of queued for forever, and the relay roads'
+  reconnect backoff resets after a healthy connection instead of
+  costing every later recovery a full minute.
+
 - **A delta build refuses what it cannot carry, and says which.** The
   delta compiler reads the release's baked declaration and rebuilds
   only what diverged. Sections a delta cannot faithfully carry — the
