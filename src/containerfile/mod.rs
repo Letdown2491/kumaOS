@@ -1009,16 +1009,19 @@ mod tests {
         // The default base is kuma's own composed one, content-addressed
         // so the FROM is deterministic before any compose has run.
         assert!(out.contains("FROM localhost/kuma-base:m"));
-        // Three dnf layers even in a minimal image, and all three are
+        // Four dnf layers even in a minimal image, and all four are
         // promises rather than features: greenboot's never-worse-than-
         // before rollback, the FUSE 2 pair that lets a downloaded
-        // AppImage run without a declaration naming it, and plymouth
+        // AppImage run without a declaration naming it, plymouth
         // drawing the LUKS prompt on any encrypted machine this image
-        // ever becomes. Everything else is opt-in, and the count is what
-        // keeps it that way.
-        assert_eq!(out.matches("dnf -y install").count(), 3);
+        // ever becomes, and desktop-file-utils for the nostr layer's
+        // build-time cache — the layer ships in every variant, and in
+        // a minimal one no other list carries the tool. Everything
+        // else is opt-in, and the count is what keeps it that way.
+        assert_eq!(out.matches("dnf -y install").count(), 4);
         assert!(out.contains(&dnf_install("greenboot")));
         assert!(out.contains(&dnf_install("fuse fuse-libs")));
+        assert!(out.contains(&dnf_install("desktop-file-utils")));
         assert!(out.contains(&dnf_install(
             "plymouth plymouth-plugin-script plymouth-plugin-label dejavu-sans-fonts"
         )));

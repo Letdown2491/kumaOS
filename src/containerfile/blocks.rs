@@ -4694,6 +4694,12 @@ fn nostr(e: &mut Emitter<'_>) {
     // The scheme handler wires a nostrconnect:// link to the shell's
     // panel — the panel itself lives in kuma-shell, which this block
     // never had to carry.
+    // The cache's tool, named rather than assumed: the layer ships in
+    // every variant now, and the minimal ones carry no desktop list —
+    // desktop-file-utils rode those lists' closures before the delta
+    // compiler started diverging content, and the RUN below died
+    // exit 127 the first time a variant without them composed.
+    e.raw(&dnf_install("desktop-file-utils"));
     e.copy(&panel_desktop, "/usr/share/applications/kuma-nostr-panel.desktop");
     // The cache behind the pin: chooser enumeration (the portal's
     // registered/recommended lists) is built from mimeinfo.cache, and
