@@ -1083,16 +1083,18 @@ mod tests {
 
     /// Out of sync — the image reports a release the running kuma is
     /// not — the probe says so, and names the delta for what it is.
+    /// The version is hardcoded one past the tree's on purpose: it
+    /// moves with every release bump, and the break is the review.
     #[test]
     fn a_delta_built_image_out_of_sync_says_what_it_reports() {
         let snap = classify(&workspace(
             loaded(),
-            Some(image_delta(Some("44.9.0"), Some("44.10.0"))),
+            Some(image_delta(Some("44.9.0"), Some("44.11.0"))),
             kuma_machine(false, vec![], Some("sha256:aaa")),
         ));
         assert_eq!(snap.state, "stale-build");
         assert!(snap.headline.contains("delta-built"), "{}", snap.headline);
-        assert!(snap.headline.contains("44.10.0"), "{}", snap.headline);
+        assert!(snap.headline.contains("44.11.0"), "{}", snap.headline);
     }
 
     /// An edit is the more familiar reason to rebuild and the edge is the

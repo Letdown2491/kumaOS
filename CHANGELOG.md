@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## v44.10.0 (2026-10-21)
+
+- **The kumaui pin rides to v0.5.0, whose substance is the Kuma
+  Updates chip.** The bar carries the update story built in now: fed
+  by `kuma update --check --json` at boot and every four hours after,
+  it shows the moved-package count and tints while updates wait, stays
+  out of the bar entirely on a machine without kuma, and its Update
+  now runs the full rebuild under pkexec with the build's steps
+  streaming into the panel and a Restart now waiting at the end.
+  Behind the chip, the ride carries night light that says Always or
+  Scheduled out loud, and a signer's panel that opens on the asks when
+  asks are pending instead of on the last tab a person chose.
+
 - **`kuma upgrade` moves a machine to a newer kumaOS release without
   the codebase.** Until now the only way a machine's release moved was
   `kuma update` — a full rebuild — which meant every machine needed the
@@ -93,8 +106,11 @@
   older kumaui under the new version's name while the changelog
   claimed the ride. Now every staged binary answers for itself: at
   compose time each sibling's `--version` is compared against what the
-  build claims it is. The kumaui five answer to the pin, which rides
-  inside the kuma binary — version and commit sha both — and the nostr
+  build claims it is. The kumaui five answer to the pin's commit —
+  the ride is the commit, and each app carries its own version line
+  because a release changes some apps and not others, so kuma-files
+  may still say 0.4.1 on a v0.5.0 ride — with the version demanded of
+  kuma-shell alone, whose version the release tag names. The nostr
   pair answers to this kuma's own version. A mismatch refuses the
   compose naming both stamps; `KUMA_ALLOW_KUMAUI_MISMATCH=1` lets a
   deliberate one through, loudly.
