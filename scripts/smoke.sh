@@ -3052,6 +3052,21 @@ run_delta_arm() {
         bad "cannot arm nostr in the machine's declaration"
     ok "the machine's declaration diverges from the release"
 
+    # The lane gate reads the booted image's origin, and --update-from
+    # above wrote the never-fetched placeholder there — a remote ref,
+    # which takes the fetch lane and asks a dead repo (round 4's
+    # finding: the guest's check died on ghcr.io/example before the
+    # override ever mattered). The delta arm's machine must read as
+    # localhost-origin — the stage header's own requirement — so the
+    # origin goes back to the tag the machine was installed from. ostree
+    # keeps one origin file per deployment, keyed by content, and bootc
+    # re-reads it on the next status call; the grep is the assert, since
+    # a sed that matches nothing also exits zero.
+    gsudo "sh -c 'sed -i \"s#ostree-unverified-registry:ghcr.io/example/kuma:niri#ostree-unverified-registry:$image#\" /ostree/deploy/default/deploy/*.origin'" ||
+        bad "cannot re-point the guest's origin at its own tag"
+    gsudo bootc status | grep -q "localhost/" ||
+        bad "the guest's booted origin did not become the localhost tag"
+
     # The verb runs as root so its internal sudo calls (skopeo,
     # bootc, the stage) are passwordless; the kuma account's wheel
     # sudo needs a password no non-interactive session can answer.
