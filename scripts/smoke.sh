@@ -43,10 +43,12 @@
 # registry read, baked-declaration read, unit probe, compile, guest-side
 # build and bootc switch, then a reboot and the assertion that the
 # machine came back as the declaration it was told to be. The release it
-# upgrades to is this run's own image, one empty layer forward, pushed
-# to a registry on the runner; the lane is aimed there through
-# KUMA_RELEASE_REPO, an override that exists for this lap and is unset
-# on every real machine. Nothing here publishes to the real repo.
+# upgrades to is this run's own image with its content pushed forward —
+# a package added, a package dropped, the baked declaration edited to
+# match — pushed to a registry on the runner; the lane is aimed there
+# through KUMA_RELEASE_REPO, an override that exists for this lap and
+# is unset on every real machine. Nothing here publishes to the real
+# repo.
 #
 # --hibernate installs with a swapfile, then asks the machine to suspend
 # to disk and come back. It is the only stage where the verdict is not
@@ -3736,13 +3738,19 @@ smoke_boot() {
     # unit probe, the compile, the guest-side build, and the bootc switch
     # that the reboot below asks the machine to keep.
     #
-    # The release is this run's own image, one empty layer forward,
-    # pushed to the runner's registry. The empty layer is what makes it
-    # NEWER than what is booted — without it the lane's digest check
-    # reads "already current" and the lap proves a refusal. The machine
-    # declares two things the release does not carry (a package and an
-    # armed nostr layer), and the assertions after the reboot are about
-    # exactly those two surviving into the booted deployment.
+    # The release is this run's own image with its CONTENT pushed
+    # forward, pushed to the runner's registry. Content is the point:
+    # against a content-identical release, the delta's compile has
+    # nothing to reconcile and the lap would prove the machinery on an
+    # input it will never see again. So the fabrication diverges the
+    # release in both directions, and the compiler's rule — the
+    # declaration wins — decides what the assertions get to demand:
+    # the release drops git-core-doc (the machine's declaration keeps
+    # it, so the delta reinstalls it), and the release gains sl, which
+    # the machine's declaration does not name (so the delta removes it
+    # — the release's new curated packages are the delta's documented
+    # ceiling, and this is that ceiling, exercised rather than
+    # described).
     if [ $DELTA -eq 1 ]; then
         case "$name" in
             niri | cosmic) ;;
@@ -3756,16 +3764,29 @@ smoke_boot() {
 
         start_delta_registry
         local rel="127.0.0.1:$DELTA_PORT/kuma"
-        # One empty layer forward. podman commit works on containers,
-        # not images, which is why the throwaway container exists.
+        # The throwaway container runs long enough for one exec to
+        # diverge it: the package set moves both ways (git-core-doc out,
+        # sl in — sl because it is tiny and cannot collide with anything
+        # the example or the lap names), and the baked declaration is
+        # edited to describe exactly that filesystem, which is what
+        # makes the divergence a release change rather than a mutation
+        # nothing reads. podman commit works on containers, not images,
+        # which is why the container is committed afterward.
         local cid
-        cid=$(podman create "$tag") || bad "cannot instantiate the image to fabricate the release"
+        cid=$(podman run -d "$tag" sleep 600) ||
+            bad "cannot instantiate the image to fabricate the release"
+        podman exec "$cid" /bin/bash -ec '
+            dnf -y remove git-core-doc
+            dnf -y install sl
+            sed -i -e "s/, \"git-core-doc\"//" -e "s/^rpm = \[\"/rpm = [\"sl\", \"/" /usr/lib/kuma/kuma.toml
+        ' ||
+            { podman rm -f "$cid" >/dev/null 2>&1; bad "cannot diverge the release's content"; }
         podman commit --change 'LABEL io.kuma.smoke=delta-release' "$cid" "$rel:$name" >/dev/null ||
             { podman rm -f "$cid" >/dev/null 2>&1; bad "cannot commit the release layer"; }
         podman rm -f "$cid" >/dev/null 2>&1
         podman push -q --tls-verify=false "$rel:$name" >/dev/null ||
             bad "cannot push the release to the lap's registry"
-        ok "the release is up on $rel:$name"
+        ok "the release is up on $rel:$name, content-diverged both ways"
 
         # The guest's one unlocking, written down before the verb runs:
         # the lap's registry is plain HTTP, and both skopeo and podman
@@ -3843,16 +3864,35 @@ assert d["digest"] == sys.argv[2], d' "$dir/upgrade-yes.json" "$want" ||
             bad "still booted on $before after the delta upgrade; nothing actually moved"
         ok "moved from ${before:0:19} to ${after:0:19}"
 
-        # The two divergences, alive in the booted deployment. rpm -q
-        # rather than a file probe: the delta's dnf ran at build time,
-        # and "the package is in the image" is the claim.
+        # The divergences, alive in the booted deployment — the
+        # machine's and the release's, decided the compiler's way. rpm
+        # -q rather than a file probe: the delta's dnf ran at build
+        # time, and "the package is in the image" is the claim.
         gsudo "rpm -q cowsay" | grep -q cowsay ||
             bad "the delta's package is not in the booted deployment"
         ok "the delta's package is installed"
+        # The release dropped git-core-doc and the machine's declaration
+        # kept it, so the install layer ran against a release that
+        # genuinely lacked the package.
+        gsudo "rpm -q git-core-doc 2>/dev/null" | grep -q git-core-doc ||
+            bad "the release trimmed git-core-doc and the delta did not reinstall it"
+        ok "the release's trim was reinstated by the declaration"
+        # The release gained sl and the machine's declaration does not
+        # name it: the removal layer had to run, because the declaration
+        # wins — the release's extra curated package is the delta's
+        # documented ceiling, and this is that ceiling, enforced.
+        if gsudo "rpm -q sl 2>/dev/null" | grep -q '^sl'; then
+            bad "the release's extra package survived the delta; the declaration does not name it"
+        fi
+        ok "the release's extra package was stripped"
         local rebaked
         rebaked=$(gsudo "cat /usr/lib/kuma/kuma.toml")
         printf '%s\n' "$rebaked" | grep -q cowsay ||
             bad "the booted deployment's baked declaration is not the machine's"
+        printf '%s\n' "$rebaked" | grep -q git-core-doc ||
+            bad "the re-baked declaration lost the package the machine's declaration keeps"
+        printf '%s\n' "$rebaked" | grep -q '"sl"' &&
+            bad "the re-baked declaration names the release's extra; the declaration wins"
         printf '%s\n' "$rebaked" | grep -A1 '^\[nostr\]' | grep -q "enable = true" ||
             bad "the booted deployment's declaration does not arm nostr"
         ok "the declaration was re-baked onto the deployment"
