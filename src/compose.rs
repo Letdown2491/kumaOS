@@ -170,6 +170,21 @@ packages:
   - openssh-clients   # the server ships; a machine that cannot ssh out is half-wired
   - curl              # fetch anything; fwupd already carries the library
   - less              # the pager systemctl and every pipe over ssh assume
+
+  # the verbs' engines: kuma update rebuilds this machine's image and
+  # kuma upgrade delta-builds the declaration onto a release, and both
+  # shell out to podman and skopeo on the machine itself. Neither was
+  # ever named: podman arrived as distrobox's weak dependency on the
+  # desktops that declare it and nowhere else — a minimal machine's
+  # update was luck too — and skopeo arrived by nothing at all, so the
+  # upgrade verb's first call would die on a missing binary. Named in
+  # the base by the same rule as sudo and chrony above: the machinery
+  # every machine can run is kuma's dependency, not distrobox's
+  # recommendation. (The delta lane is desktop-tier and headless
+  # refuses it first, but update builds on every tier, and the pair is
+  # one dependency of one machinery.)
+  - podman
+  - skopeo
 "#
     )
 }
@@ -398,6 +413,21 @@ mod tests {
             "less",            // the pager everything assumes
         ] {
             assert!(out.contains(&format!("- {pkg}")), "{pkg} left the base's operating tools");
+        }
+    }
+
+    /// The verbs' engines, named for the same reason the operating tools
+    /// are: kuma update and kuma upgrade both shell out to podman and
+    /// skopeo on the machine itself, and before this list neither binary
+    /// was anyone's declared dependency — podman rode distrobox's weak
+    /// recommendation on the desktops that declare it, and skopeo rode
+    /// nothing, so the upgrade verb's first call died on a missing
+    /// binary. A minimal machine's update was the same luck.
+    #[test]
+    fn the_base_carries_the_verbs_engines() {
+        let out = manifest(&config("schema_version = 1"));
+        for pkg in ["podman", "skopeo"] {
+            assert!(out.contains(&format!("- {pkg}")), "{pkg} left the base: the verbs' engines are nobody else's dependency");
         }
     }
 

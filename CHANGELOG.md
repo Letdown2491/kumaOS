@@ -19,6 +19,17 @@
   [Two axes](docs/concepts.md#two-axes-the-declaration-and-the-release)
   is the name for the whole story.
 
+- **The verbs' engines ship in the base.** Both `kuma update` (a full
+  rebuild on the machine) and the upgrade verb's delta lane shell out
+  to podman and skopeo on the machine itself, and neither binary was
+  ever a declared dependency: podman arrived as distrobox's weak
+  recommendation on the desktops that declare it — a minimal machine's
+  update was luck too — and skopeo arrived by nothing at all, so an
+  upgrade's first call would have died on a missing binary. The base
+  names both now, by the same rule as sudo and chrony: the machinery
+  every machine can run is kuma's dependency, not another package's
+  recommendation.
+
 - **A delta build refuses what it cannot carry, and says which.** The
   delta compiler reads the release's baked declaration and rebuilds
   only what diverged. Sections a delta cannot faithfully carry — the
