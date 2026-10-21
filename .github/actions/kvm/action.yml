@@ -117,12 +117,29 @@ runs:
         # every qemu site takes it as egl-headless's render-node.
         vgem_node=""
         for candidate in /sys/class/drm/renderD*; do
-            drv=$(basename "$(readlink -f "$candidate/device/driver" 2>/dev/null)")
-            [ "$drv" = "vgem" ] || continue
-            vgem_node="/dev/$(basename "$candidate")"
-            break
+            # Two names, because vgem carries either depending on the
+            # kernel: platform-bus vgem (older in-tree) binds a driver
+            # named vgem, while 6.17's faux-bus vgem — the vendored copy
+            # above included — binds a generic faux_driver and names the
+            # DEVICE vgem instead. The device name is the stable key;
+            # the runner's native nodes answer with a PCI address or a
+            # GPU driver name, never vgem. (The first lap keyed on the
+            # driver alone and every runner missed: driver=faux_driver,
+            # measured 2026-10-21.)
+            dev=$(basename "$(readlink -f "$candidate/device" 2>/dev/null)" 2>/dev/null)
+            drv=$(basename "$(readlink -f "$candidate/device/driver" 2>/dev/null)" 2>/dev/null)
+            if [ "$dev" = "vgem" ] || [ "$drv" = "vgem" ]; then
+                vgem_node="/dev/$(basename "$candidate")"
+                break
+            fi
         done
         [ -n "$vgem_node" ] || {
+            # What the failure leaves behind is the next diagnosis's
+            # input: the class directory as the kernel presented it.
+            ls -la /sys/class/drm/ >&2 || true
+            for candidate in /sys/class/drm/renderD*; do
+                echo "$candidate device=$(readlink -f "$candidate/device" 2>/dev/null) driver=$(readlink -f "$candidate/device/driver" 2>/dev/null)" >&2
+            done
             echo "vgem loaded but no vgem-driven render node appeared; qemu's EGL has nothing to pin"
             exit 1
         }
