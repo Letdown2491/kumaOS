@@ -3,7 +3,7 @@ mod emit;
 
 use crate::config::{Config, Desktop};
 use crate::seam;
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -174,15 +174,20 @@ pub(crate) fn kumaui_pin() -> Option<(String, String)> {
     None
 }
 
-/// Whether a kumaui stamp is the ride the pin names: the version must
-/// appear, and the `(g<short>)` tail must be a build of the pinned
-/// commit. The version alone cannot make the case — 44.9.0's first
-/// compose shipped an Oct 17 build under the new version's name — and
+/// Whether a kumaui stamp is the ride the pin names: the `(g<short>)`
+/// tail must be a build of the pinned commit — the ride IS the commit,
+/// and each app carries its own version line because a release changes
+/// some apps and not others — plus, where `version` is given (the
+/// binary whose version the release tag names), the stamp must contain
+/// it. The version alone cannot make the case — 44.9.0's first compose
+/// shipped an Oct 17 build under the new version's name — and
 /// `(gunknown)` proves nothing either: a binary built without build.sh
 /// carries no stamp, and a ride with no provenance is not a ride.
-fn stamp_matches_pin(stamp: &str, sha: &str, version: &str) -> bool {
-    if !stamp.contains(version) {
-        return false;
+fn stamp_matches_pin(stamp: &str, sha: &str, version: Option<&str>) -> bool {
+    if let Some(version) = version {
+        if !stamp.contains(version) {
+            return false;
+        }
     }
     let built = stamp.split("(g").nth(1).and_then(|s| s.split(')').next()).unwrap_or("");
     if built.is_empty() || built == "unknown" {
@@ -211,24 +216,44 @@ fn sibling_stamp(parent: &Path, name: &str) -> Result<String> {
     if !out.status.success() {
         bail!("{name} --version exited nonzero; refusing to compose around an unprovable stamp");
     }
-    Ok(format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    ))
+    Ok(format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
 }
 
-/// The stamp gate over every staged sibling. The kumaui five answer to
-/// the pin (the action file's `kumaui-ref` default, version AND build
-/// provenance); the nostr pair
-/// answers to this kuma's own version number, because cargo install
-/// moves all three together and a partial install is exactly the
-/// stale-sibling shape this gate exists for — the compose that shipped
-/// an older kumaui under the new version's name while the changelog
-/// claimed the ride (#42).
+/// What a staged sibling must answer for. The nostr pair answers to
+/// this kuma's own version number, because cargo install moves all
+/// three together and a partial install is exactly the stale-sibling
+/// shape this gate exists for — the compose that shipped an older
+/// kumaui under the new version's name while the changelog claimed
+/// the ride (#42). A kumaui binary answers to the pin's COMMIT: a
+/// release rides a commit, not a version every app shares, because
+/// each kumaui app carries its own version line — a release changes
+/// some apps and not others, so kuma-files may still say 0.4.1 on a
+/// v0.5.0 ride. The version is demanded of kuma-shell alone, whose
+/// version is the one the release tag names.
+enum Expectation {
+    /// The stamp must contain this version string.
+    OwnVersion(String),
+    /// The stamp must be a build of `sha`, and — where `version` is
+    /// given — must contain it too.
+    Pin { sha: String, version: Option<String> },
+}
+
+impl std::fmt::Display for Expectation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Expectation::OwnVersion(version) => write!(f, "version {version}"),
+            Expectation::Pin { sha, version } => match version {
+                Some(v) => write!(f, "version {v} built from {sha}"),
+                None => write!(f, "a build of {sha}"),
+            },
+        }
+    }
+}
+
+/// The stamp gate over every staged sibling.
 ///
 /// Refuse-by-default, and the refusal names both stamps: what the
-/// binary reports and what the pin claims. KUMA_ALLOW_KUMAUI_MISMATCH=1
+/// binary reports and what the pin demands. KUMA_ALLOW_KUMAUI_MISMATCH=1
 /// lets a deliberate mismatch through loudly — the dev loop's road, not
 /// the release road's.
 fn verify_sibling_stamps(parent: &Path, config: &Config) -> Result<()> {
@@ -240,9 +265,9 @@ fn verify_sibling_stamps(parent: &Path, config: &Config) -> Result<()> {
 /// tests can take both branches without mutating process-global env
 /// state from a parallel harness.
 fn verify_sibling_stamps_loud(parent: &Path, config: &Config, loud: bool) -> Result<()> {
-    let mut checks: Vec<(&str, String)> = vec![
-        ("kuma-nostrd", env!("CARGO_PKG_VERSION").to_string()),
-        ("kuma-nostr", env!("CARGO_PKG_VERSION").to_string()),
+    let mut checks: Vec<(&str, Expectation)> = vec![
+        ("kuma-nostrd", Expectation::OwnVersion(env!("CARGO_PKG_VERSION").to_string())),
+        ("kuma-nostr", Expectation::OwnVersion(env!("CARGO_PKG_VERSION").to_string())),
     ];
     if config.system.desktop == Desktop::Niri {
         let Some((pin_sha, pin_version)) = kumaui_pin() else {
@@ -252,19 +277,15 @@ fn verify_sibling_stamps_loud(parent: &Path, config: &Config, loud: bool) -> Res
             );
         };
         for name in ["kuma-shell", "kuma-greeter", "kuma-files", "kuma-term", "kuma-monitor"] {
-            checks.push((name, format!("{pin_version} {pin_sha}")));
+            let version = (name == "kuma-shell").then(|| pin_version.clone());
+            checks.push((name, Expectation::Pin { sha: pin_sha.clone(), version }));
         }
     }
     for (name, expected) in checks {
         let stamp = sibling_stamp(parent, name)?;
-        let ok = if expected.contains(' ') {
-            // A kumaui expectation: version AND build provenance.
-            let mut parts = expected.split(' ');
-            let version = parts.next().unwrap_or_default();
-            let sha = parts.next().unwrap_or_default();
-            stamp_matches_pin(&stamp, sha, version)
-        } else {
-            stamp.contains(&expected)
+        let ok = match &expected {
+            Expectation::OwnVersion(version) => stamp.contains(version),
+            Expectation::Pin { sha, version } => stamp_matches_pin(&stamp, sha, version.as_deref()),
         };
         if ok {
             continue;
@@ -272,13 +293,13 @@ fn verify_sibling_stamps_loud(parent: &Path, config: &Config, loud: bool) -> Res
         if loud {
             eprintln!(
                 "warn: KUMA_ALLOW_KUMAUI_MISMATCH=1 lets this through: {name} reports \
-                 '{}', the pin names {expected}",
+                 '{}', the pin demands {expected}",
                 stamp.trim()
             );
             continue;
         }
         bail!(
-            "{name} reports '{}' but the pin names {expected}; refusing to compose an \
+            "{name} reports '{}' but the pin demands {expected}; refusing to compose an \
              image whose ride does not match. Set KUMA_ALLOW_KUMAUI_MISMATCH=1 to let a \
              deliberate mismatch through.",
             stamp.trim()
@@ -513,10 +534,7 @@ mod tests {
         // same deal the goldens are on.
         assert_eq!(
             kumaui_pin(),
-            Some((
-                "156eb333a8057d68f7f4e49592481907be0acff8".to_string(),
-                "0.4.1".to_string()
-            ))
+            Some(("4ecf19b40420ed4cd13b9c835fd128e8a078615a".to_string(), "0.5.0".to_string()))
         );
     }
 
@@ -526,33 +544,22 @@ mod tests {
     /// deliberate in both directions: a wrong version number, and the
     /// subtler one that started this gate — the right version printed
     /// by a build of the wrong commit.
+    ///
+    /// The four non-shell siblings carry their own version lines, not
+    /// the pin's — the convention the gate encodes: each app version
+    /// tracks its own changes, the commit is what every ride shares.
     fn mismatch_home(shell_stamp: &str) -> tempfile::TempDir {
         let bin_home = tempfile::tempdir().unwrap();
         let (pin_sha, pin_version) = kumaui_pin().unwrap();
         let built = &pin_sha[..7];
         for (name, stamp) in [
-            (
-                "kuma-nostrd",
-                format!("kuma-nostrd {} (gstub)", env!("CARGO_PKG_VERSION")),
-            ),
-            (
-                "kuma-nostr",
-                format!("kuma-nostr {} (gstub)", env!("CARGO_PKG_VERSION")),
-            ),
+            ("kuma-nostrd", format!("kuma-nostrd {} (gstub)", env!("CARGO_PKG_VERSION"))),
+            ("kuma-nostr", format!("kuma-nostr {} (gstub)", env!("CARGO_PKG_VERSION"))),
             ("kuma-shell", shell_stamp.to_string()),
-            (
-                "kuma-greeter",
-                format!("kuma-greeter {pin_version} (g{built})"),
-            ),
-            (
-                "kuma-files",
-                format!("kuma-files {pin_version} (g{built})"),
-            ),
-            ("kuma-term", format!("kuma-term {pin_version} (g{built})")),
-            (
-                "kuma-monitor",
-                format!("kuma-monitor {pin_version} (g{built})"),
-            ),
+            ("kuma-greeter", format!("kuma-greeter {pin_version} (g{built})")),
+            ("kuma-files", format!("kuma-files 0.4.1 (g{built})")),
+            ("kuma-term", format!("kuma-term 0.3.1 (g{built})")),
+            ("kuma-monitor", format!("kuma-monitor 0.2.1 (g{built})")),
         ] {
             let path = bin_home.path().join(name);
             std::fs::write(&path, format!("#!/bin/sh\necho '{stamp}'\n")).unwrap();
@@ -609,6 +616,19 @@ mod tests {
     fn the_override_lets_a_mismatched_ride_through() {
         let cfg = config("schema_version = 1\n[system]\ndesktop = \"niri\"\n");
         gate("kuma-shell 0.0.1 (gunknown)", &cfg, true).unwrap();
+    }
+
+    #[test]
+    fn per_app_versions_ride_the_right_commit() {
+        // A release changes some apps and not others, so each app
+        // carries its own version line while the commit is what every
+        // ride shares: the home the mismatch helper builds is exactly
+        // that — every sibling on the pin's commit, kuma-files on
+        // 0.4.1 and kuma-term on 0.3.1 whatever the tag says — and
+        // with kuma-shell honest about both, the compose passes.
+        let cfg = config("schema_version = 1\n[system]\ndesktop = \"niri\"\n");
+        let pin = kumaui_pin().unwrap();
+        gate(&format!("kuma-shell {} (g{})", pin.1, &pin.0[..7]), &cfg, false).unwrap();
     }
 
     /// The declaration matrix every structural change to the generator

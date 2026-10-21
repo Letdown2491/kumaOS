@@ -44,7 +44,10 @@ drop-in (`~/.config/systemd/user/kuma-nostrd.service.d/override.conf`)
 re-points `ExecStart` at `target/release/kuma-nostrd`, marked TEMPORARY
 until the image ships the fixed daemon. So the deploy is: commit, then
 `cargo build --release` + `cargo install --path .` in the container
-(the CLI comes from `~/.cargo/bin`; the daemon runs from
+(the CLI comes from `~/.local/bin`, where the kumaui build script
+installs the five siblings too — the stamp gate resolves them beside
+the running kuma, so kuma and the kumaui pair must share one home;
+the daemon runs from
 `target/release`), then `systemctl --user restart kuma-nostrd`.
 
 ## The desktop shell's dev loop (44.4.0)
@@ -66,7 +69,7 @@ the logind lock listener, so a quiet moment is a requirement, not a
 preference.
 
 An image build stages the release binaries from beside the kuma that
-runs the build — `current_exe()`'s siblings (`~/.cargo/bin` in
+runs the build — `current_exe()`'s siblings (`~/.local/bin` in
 practice): five kumaui binaries (`kuma-shell`, `kuma-greeter`,
 `kuma-files`, `kuma-term`, `kuma-monitor`), their three `.desktop`
 entries and three icons, plus the nostr pair and `nip46-relay` ALWAYS
