@@ -3728,6 +3728,21 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
              /usr/share/xdg-desktop-portal/portals/gtk.portal"
         ));
 
+        // Screencast and RemoteDesktop are routed by name too, and their
+        // guard has the same shape: the pin is only as good as the
+        // backend's advertisement of the interface, so the build greps
+        // gnome.portal for both and fails if either goes away.
+        assert!(out.contains("org.freedesktop.impl.portal.ScreenCast=gnome;"));
+        assert!(out.contains("org.freedesktop.impl.portal.RemoteDesktop=gnome;"));
+        assert!(out.contains(
+            "grep -q 'org.freedesktop.impl.portal.ScreenCast' \
+             /usr/share/xdg-desktop-portal/portals/gnome.portal"
+        ));
+        assert!(out.contains(
+            "grep -q 'org.freedesktop.impl.portal.RemoteDesktop' \
+             /usr/share/xdg-desktop-portal/portals/gnome.portal"
+        ));
+
         // Written to /etc, so the drift check owns it like any other file
         // kuma has an opinion about.
         let owned = etc_paths(&config("schema_version = 1\n[system]\ndesktop = \"niri\"\n"));

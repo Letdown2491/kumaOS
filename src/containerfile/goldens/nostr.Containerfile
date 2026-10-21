@@ -86,8 +86,10 @@ RUN grep -q '"alacritty"' /usr/share/doc/niri/default-config.kdl \
     && niri validate --config /etc/niri/config.kdl
 RUN grep -q '^\[preferred\]' /usr/share/xdg-desktop-portal/niri-portals.conf \
     && grep -q 'org.freedesktop.impl.portal.FileChooser' /usr/share/xdg-desktop-portal/portals/gtk.portal \
+    && grep -q 'org.freedesktop.impl.portal.ScreenCast' /usr/share/xdg-desktop-portal/portals/gnome.portal \
+    && grep -q 'org.freedesktop.impl.portal.RemoteDesktop' /usr/share/xdg-desktop-portal/portals/gnome.portal \
     && mkdir -p /etc/xdg-desktop-portal \
-    && { cat /usr/share/xdg-desktop-portal/niri-portals.conf; echo 'org.freedesktop.impl.portal.FileChooser=gtk;'; } > /etc/xdg-desktop-portal/niri-portals.conf
+    && { cat /usr/share/xdg-desktop-portal/niri-portals.conf; echo 'org.freedesktop.impl.portal.FileChooser=gtk;'; echo 'org.freedesktop.impl.portal.ScreenCast=gnome;'; echo 'org.freedesktop.impl.portal.RemoteDesktop=gnome;'; } > /etc/xdg-desktop-portal/niri-portals.conf
 RUN grep -qx '    systemctl --user import-environment' /usr/bin/niri-session \
     && sed -i 's/^    systemctl --user import-environment$/    systemctl --user import-environment PATH XDG_SESSION_ID XDG_SEAT XDG_VTNR/' /usr/bin/niri-session
 RUN systemctl set-default graphical.target && systemctl enable greetd.service firewalld.service power-profiles-daemon.service bluetooth.service cups.service avahi-daemon.service chronyd.service

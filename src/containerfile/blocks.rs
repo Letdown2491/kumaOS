@@ -3407,8 +3407,18 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     // a dead picker: the first if niri stops shipping the file this is
     // derived from, the second if the gtk backend stops implementing
     // the one interface being routed to it.
+    //
+    // ScreenCast and RemoteDesktop are pinned to gnome by NAME, for the
+    // opposite reason: gnome implements both (niri speaks Mutter's
+    // interfaces through it), and the implicit route — `default=gnome;gtk`
+    // — works only as long as niri's file keeps gnome first. A niri
+    // update that reorders the fallback would silently route the camera
+    // and the screen to gtk, which implements neither, and nothing
+    // would name the failure. The two greps against gnome.portal are
+    // the twin: if xdg-desktop-portal-gnome stops advertising either
+    // interface, the pin points at nothing and the build says so here.
     e.raw(
-        "RUN grep -q '^\\[preferred\\]' /usr/share/xdg-desktop-portal/niri-portals.conf \\\n    && grep -q 'org.freedesktop.impl.portal.FileChooser' /usr/share/xdg-desktop-portal/portals/gtk.portal \\\n    && mkdir -p /etc/xdg-desktop-portal \\\n    && { cat /usr/share/xdg-desktop-portal/niri-portals.conf; echo 'org.freedesktop.impl.portal.FileChooser=gtk;'; } > /etc/xdg-desktop-portal/niri-portals.conf\n",
+        "RUN grep -q '^\\[preferred\\]' /usr/share/xdg-desktop-portal/niri-portals.conf \\\n    && grep -q 'org.freedesktop.impl.portal.FileChooser' /usr/share/xdg-desktop-portal/portals/gtk.portal \\\n    && grep -q 'org.freedesktop.impl.portal.ScreenCast' /usr/share/xdg-desktop-portal/portals/gnome.portal \\\n    && grep -q 'org.freedesktop.impl.portal.RemoteDesktop' /usr/share/xdg-desktop-portal/portals/gnome.portal \\\n    && mkdir -p /etc/xdg-desktop-portal \\\n    && { cat /usr/share/xdg-desktop-portal/niri-portals.conf; echo 'org.freedesktop.impl.portal.FileChooser=gtk;'; echo 'org.freedesktop.impl.portal.ScreenCast=gnome;'; echo 'org.freedesktop.impl.portal.RemoteDesktop=gnome;'; } > /etc/xdg-desktop-portal/niri-portals.conf\n",
     );
     // Upstream niri-session imports the ENTIRE greeter environment into
     // the systemd user manager — deprecated (warns in the journal every
