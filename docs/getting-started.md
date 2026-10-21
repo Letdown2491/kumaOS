@@ -225,10 +225,9 @@ $ kuma switch --yes
 That stages the image you just built. It lands when you reboot, and the
 system you were on stays in the rollback slot.
 
-**Name `podman` in `packages.rpm` if you build this way.** The published
-image has it, but only as a dependency of `distrobox`. A declaration
-that drops distrobox and does not name podman produces a machine that
-cannot build the next image.
+`podman` rides in the base — it is the engine `kuma update` and
+`kuma upgrade` run on this machine, named like every other dependency
+rather than left to arrive by luck.
 
 ## 7. Try changes before you commit to them
 
