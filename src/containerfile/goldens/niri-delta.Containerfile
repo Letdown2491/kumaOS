@@ -1,5 +1,5 @@
 
-# A delta build: the declaration compiled onto the release by kuma 44.10.0.
+# A delta build: the declaration compiled onto the release by kuma 44.11.0.
 # The release image (ghcr.io/letdown2491/kumaos:niri) carries its own binaries, units, and identity;
 # this layer carries only what the declaration moves. `kuma update` is
 # the full-build road.

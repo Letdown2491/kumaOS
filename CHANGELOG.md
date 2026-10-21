@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v44.11.0 (2026-10-21)
+
 - **The kumaui pin rides to v0.5.2.** The visible substance is in the
   shell: the clock's date faces follow the system locale the way the
   time follows the system zone, so weekday and month names render in
