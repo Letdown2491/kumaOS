@@ -999,6 +999,48 @@ smoke_published() {
     sudo losetup -d "$kloop"
     rmdir "$kboot" 2>/dev/null || true
 
+    # The delta arm's machine must read as localhost-origin: the upgrade
+    # lane's gate reads the booted image's origin, and --update-from
+    # above wrote the never-fetched placeholder there — a remote ref,
+    # which takes the fetch lane and asks a dead repo (round 5's
+    # finding: the guest's check died on ghcr.io/example before the
+    # override ever mattered). The edit happens here, host-side, while
+    # the disk is at rest: on a booted composefs guest /ostree sits on a
+    # read-only superblock no in-guest remount can flip (measured on
+    # round 5's disk — the child var bind pins the sb), but an unbooted
+    # disk is just a filesystem. The grep is the assert, since a sed
+    # matching nothing also exits zero.
+    case "$image" in
+        localhost/*)
+            oloop=$(sudo losetup -fP --show "$raw") \
+                || bad "cannot attach $raw to re-point the origin"
+            omnt="$dir/rootmnt"
+            mkdir -p "$omnt"
+            if [ $ENCRYPTED -eq 1 ]; then
+                printf '%s' "$disk_pass" \
+                    | sudo cryptsetup open --key-file - "${oloop}p3" kuma-smoke-origin \
+                    || bad "cannot open the container to re-point the origin"
+                origin_dev="/dev/mapper/kuma-smoke-origin"
+            else
+                origin_dev="${oloop}p3"
+            fi
+            sudo mount -o subvol=root "$origin_dev" "$omnt" \
+                || bad "cannot mount the root to re-point the origin"
+            sudo sed -i \
+                "s#ostree-unverified-registry:ghcr.io/example/kuma:niri#ostree-unverified-registry:$image#" \
+                "$omnt"/ostree/deploy/*/deploy/*.origin \
+                || bad "cannot re-point the origin at its own tag"
+            sudo grep -rq "ostree-unverified-registry:$image" \
+                "$omnt"/ostree/deploy/*/deploy/*.origin \
+                || bad "the origin did not become the localhost tag"
+            sudo umount "$omnt"
+            if [ $ENCRYPTED -eq 1 ]; then sudo cryptsetup close kuma-smoke-origin; fi
+            sudo losetup -d "$oloop"
+            rmdir "$omnt" 2>/dev/null || true
+            ok "the booted origin is the machine's own tag (the delta lane's gate)"
+            ;;
+    esac
+
     # UEFI firmware, and this is not optional. `kuma install` writes a GPT
     # with an ESP, which is a UEFI layout; qemu defaults to SeaBIOS, which
     # finds nothing bootable and says so on the VGA console that
@@ -3051,21 +3093,6 @@ run_delta_arm() {
     gsudo "sh -c 'printf \"\n[nostr]\nenable = true\n\" >> /root/kuma.toml'" ||
         bad "cannot arm nostr in the machine's declaration"
     ok "the machine's declaration diverges from the release"
-
-    # The lane gate reads the booted image's origin, and --update-from
-    # above wrote the never-fetched placeholder there — a remote ref,
-    # which takes the fetch lane and asks a dead repo (round 4's
-    # finding: the guest's check died on ghcr.io/example before the
-    # override ever mattered). The delta arm's machine must read as
-    # localhost-origin — the stage header's own requirement — so the
-    # origin goes back to the tag the machine was installed from. ostree
-    # keeps one origin file per deployment, keyed by content, and bootc
-    # re-reads it on the next status call; the grep is the assert, since
-    # a sed that matches nothing also exits zero.
-    gsudo "sh -c 'sed -i \"s#ostree-unverified-registry:ghcr.io/example/kuma:niri#ostree-unverified-registry:$image#\" /ostree/deploy/default/deploy/*.origin'" ||
-        bad "cannot re-point the guest's origin at its own tag"
-    gsudo bootc status | grep -q "localhost/" ||
-        bad "the guest's booted origin did not become the localhost tag"
 
     # The verb runs as root so its internal sudo calls (skopeo,
     # bootc, the stage) are passwordless; the kuma account's wheel
