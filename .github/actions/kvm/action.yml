@@ -129,7 +129,11 @@ runs:
             dev=$(basename "$(readlink -f "$candidate/device" 2>/dev/null)" 2>/dev/null)
             drv=$(basename "$(readlink -f "$candidate/device/driver" 2>/dev/null)" 2>/dev/null)
             if [ "$dev" = "vgem" ] || [ "$drv" = "vgem" ]; then
-                vgem_node="/dev/$(basename "$candidate")"
+                # The class entry's basename is the node's name under
+                # /dev/dri, not /dev: the first lap assembled /dev/renderD128,
+                # a path that does not exist, and the open check failed on
+                # the chmod's own work (measured, this lap).
+                vgem_node="/dev/dri/$(basename "$candidate")"
                 break
             fi
         done
