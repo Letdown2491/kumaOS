@@ -327,9 +327,7 @@ fn observe(config_path: &Path) -> Observed {
         let created = parts.next()?;
         // podman prints "<no value>" for a label the image does not carry.
         let label = |raw: Option<&str>| {
-            raw.map(str::trim)
-                .filter(|b| !b.is_empty() && *b != "<no value>")
-                .map(str::to_string)
+            raw.map(str::trim).filter(|b| !b.is_empty() && *b != "<no value>").map(str::to_string)
         };
         let delta = label(parts.next());
         let version_label = label(parts.next());
@@ -550,11 +548,7 @@ fn classify(obs: &Observed) -> Snapshot {
     // in-sync question becomes "is the machine running the release it
     // reports": the image's version label against the running kuma's
     // number. In sync, quiet; out of sync, the honest claim.
-    if obs
-        .image
-        .as_ref()
-        .is_some_and(|i| i.builder.as_deref() != Some(crate::VERSION))
-    {
+    if obs.image.as_ref().is_some_and(|i| i.builder.as_deref() != Some(crate::VERSION)) {
         match obs.image.as_ref().and_then(|i| i.delta.clone()) {
             Some(_compiler) => {
                 // In sync (the image reports the release the machine
@@ -585,8 +579,15 @@ fn classify(obs: &Observed) -> Snapshot {
                     Some(other) => format!("kuma {other}"),
                     None => "a kuma older than the label".into(),
                 };
-                claim("stale-build", format!("the image was built by {built_by}, not the one running"));
-                actions.push(Action::new("build", "kuma build", "rebuild with the kuma you are running"));
+                claim(
+                    "stale-build",
+                    format!("the image was built by {built_by}, not the one running"),
+                );
+                actions.push(Action::new(
+                    "build",
+                    "kuma build",
+                    "rebuild with the kuma you are running",
+                ));
             }
         }
     }

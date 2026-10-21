@@ -1551,11 +1551,7 @@ fn update_staged_response(
 }
 
 fn upgrade_preview_response(origin: &str, actions: &[Action], lane: &str) -> response::Response {
-    response::Response::new()
-        .dry_run()
-        .field("lane", lane)
-        .field("origin", origin)
-        .actions(actions)
+    response::Response::new().dry_run().field("lane", lane).field("origin", origin).actions(actions)
 }
 
 fn upgrade_check_response(
@@ -1571,21 +1567,24 @@ fn upgrade_check_response(
         .field("check", true)
         .field("lane", if fetch { "fetch" } else { "delta" })
         .field("origin", origin)
-        .field("running", serde_json::json!({
-            "version": running_version, "digest": running_digest,
-        }))
-        .field("release", serde_json::json!({
-            "version": release_version, "digest": release_digest,
-        }))
+        .field(
+            "running",
+            serde_json::json!({
+                "version": running_version, "digest": running_digest,
+            }),
+        )
+        .field(
+            "release",
+            serde_json::json!({
+                "version": release_version, "digest": release_digest,
+            }),
+        )
         .field("current", actions.is_empty())
         .actions(actions)
 }
 
 fn upgrade_current_response(origin: &str) -> response::Response {
-    response::Response::new()
-        .field("staged", false)
-        .field("current", true)
-        .field("origin", origin)
+    response::Response::new().field("staged", false).field("current", true).field("origin", origin)
 }
 
 fn upgrade_staged_response(
@@ -1871,14 +1870,26 @@ fn upgrade_lane_in(repo: &str, desktop: config::Desktop, booted: &deployment::Sl
     UpgradeLane::Delta { inferred: format!("{}:{tag}", repo) }
 }
 
-fn upgrade_check(deps: &deployment::Deployments, origin: &str, fetch: bool, json: bool) -> Result<()> {
+fn upgrade_check(
+    deps: &deployment::Deployments,
+    origin: &str,
+    fetch: bool,
+    json: bool,
+) -> Result<()> {
     note("Asking the registry what the release tag holds...");
     // A metadata-only read: no layers, and the baked signature policy
     // applies (skopeo enforces /etc/containers/policy.json), so an
     // unsigned or tampered tag refuses here rather than staging.
     // Bounded like the delta lane's read: a registry that accepts the
     // connection and stalls must not hold `--check` forever.
-    let raw = host_output(&["sudo", "timeout", "60", "skopeo", "inspect", &format!("docker://{origin}")])?;
+    let raw = host_output(&[
+        "sudo",
+        "timeout",
+        "60",
+        "skopeo",
+        "inspect",
+        &format!("docker://{origin}"),
+    ])?;
     let inspect: serde_json::Value =
         serde_json::from_str(raw.trim()).context("skopeo inspect returned nothing readable")?;
     let digest = inspect
@@ -1895,9 +1906,8 @@ fn upgrade_check(deps: &deployment::Deployments, origin: &str, fetch: bool, json
     // version (a fixed compose, a re-signed one). The digest is what
     // the machine shares with the fleet, so the digest is what moves —
     // the prose says the version did not.
-    let same_release = !running
-        && deps.booted.version.is_some()
-        && deps.booted.version == release_version;
+    let same_release =
+        !running && deps.booted.version.is_some() && deps.booted.version == release_version;
     let actions = if running {
         Vec::new()
     } else {
@@ -1942,7 +1952,13 @@ fn upgrade_check(deps: &deployment::Deployments, origin: &str, fetch: bool, json
              Re-run with --yes to {}. The change takes effect on next boot;\n\
              the previous deployment stays available for `kuma rollback`.",
             if fetch { "fetching from" } else { "delta-building onto" },
-            deps.booted.digest.as_deref().unwrap_or("no digest recorded").chars().take(14).collect::<String>(),
+            deps.booted
+                .digest
+                .as_deref()
+                .unwrap_or("no digest recorded")
+                .chars()
+                .take(14)
+                .collect::<String>(),
             release_version.as_deref().unwrap_or("an unlabeled image"),
             digest.chars().take(14).collect::<String>(),
             if fetch {
@@ -2015,7 +2031,14 @@ fn upgrade_delta_apply(
     // timeout and no request timeout: a registry that accepts the
     // connection and stalls would hold the verb forever, so the bound
     // is the same 60 s the other registry reads use.
-    let raw = host_output(&["sudo", "timeout", "60", "skopeo", "inspect", &format!("docker://{inferred}")])?;
+    let raw = host_output(&[
+        "sudo",
+        "timeout",
+        "60",
+        "skopeo",
+        "inspect",
+        &format!("docker://{inferred}"),
+    ])?;
     let inspect: serde_json::Value =
         serde_json::from_str(raw.trim()).context("skopeo inspect returned nothing readable")?;
     let digest = inspect
@@ -2027,7 +2050,9 @@ fn upgrade_delta_apply(
         .pointer("/Labels/org.opencontainers.image.version")
         .and_then(|v| v.as_str())
         .map(str::to_string)
-        .context("the release image carries no version label; the delta cannot report what it stages")?;
+        .context(
+            "the release image carries no version label; the delta cannot report what it stages",
+        )?;
     if booted_digest == Some(digest.as_str()) {
         let prose = format!("Already current: {inferred} holds what is booted.\n");
         upgrade_current_response(inferred).print(json, &prose);
@@ -2118,12 +2143,17 @@ fn upgrade_delta_apply(
     }
     lock::record_release(
         config_path,
-        lock::Release { reference: inferred.to_string(), digest: digest.clone(), version: Some(version.clone()) },
+        lock::Release {
+            reference: inferred.to_string(),
+            digest: digest.clone(),
+            version: Some(version.clone()),
+        },
     );
 
     let reboot = reboot_action();
     if json {
-        upgrade_staged_response(Some(version.clone()), Some(digest.clone()), reboot).print(json, "");
+        upgrade_staged_response(Some(version.clone()), Some(digest.clone()), reboot)
+            .print(json, "");
         return Ok(());
     }
     println!(
@@ -2166,7 +2196,13 @@ fn upgrade_fetch(origin: &str, json: bool) -> Result<()> {
     println!(
         "Staged: {} ({}...) from {origin}.",
         staged.version.as_deref().unwrap_or("an unlabeled image"),
-        staged.digest.as_deref().unwrap_or("no digest recorded").chars().take(14).collect::<String>(),
+        staged
+            .digest
+            .as_deref()
+            .unwrap_or("no digest recorded")
+            .chars()
+            .take(14)
+            .collect::<String>(),
     );
     print_actions(&[reboot]);
     Ok(())
@@ -4748,10 +4784,7 @@ mod tests {
     #[test]
     fn a_registry_origin_fetches() {
         let booted = slot("ghcr.io/letdown2491/kuma:niri", "registry");
-        assert!(matches!(
-            upgrade_lane(config::Desktop::Niri, &booted),
-            UpgradeLane::Fetch { .. }
-        ));
+        assert!(matches!(upgrade_lane(config::Desktop::Niri, &booted), UpgradeLane::Fetch { .. }));
     }
 
     #[test]
@@ -4759,23 +4792,18 @@ mod tests {
         // The policy decides whether the pull verifies; the lane only
         // decides whether the origin is a registry at all.
         let booted = slot("ghcr.io/letdown2491/kuma:niri", "ostree-unverified-registry");
-        assert!(matches!(
-            upgrade_lane(config::Desktop::Niri, &booted),
-            UpgradeLane::Fetch { .. }
-        ));
+        assert!(matches!(upgrade_lane(config::Desktop::Niri, &booted), UpgradeLane::Fetch { .. }));
     }
 
     #[test]
     fn a_local_build_infers_from_the_declared_desktop() {
         let booted = slot("localhost/kuma:latest", "containers-storage");
-        let UpgradeLane::Delta { inferred } = upgrade_lane(config::Desktop::Niri, &booted)
-        else {
+        let UpgradeLane::Delta { inferred } = upgrade_lane(config::Desktop::Niri, &booted) else {
             panic!("a local build must take the delta lane");
         };
         assert_eq!(inferred, format!("{}:niri", published_repo()));
         // Cosmic infers its own tier, not niri's.
-        let UpgradeLane::Delta { inferred } = upgrade_lane(config::Desktop::Cosmic, &booted)
-        else {
+        let UpgradeLane::Delta { inferred } = upgrade_lane(config::Desktop::Cosmic, &booted) else {
             panic!("cosmic must infer its own tier");
         };
         assert_eq!(inferred, format!("{}:cosmic", published_repo()));
@@ -4786,10 +4814,7 @@ mod tests {
         // No release tier exists for a headless machine; the origin
         // naming a registry image cannot make one exist.
         let booted = slot("ghcr.io/letdown2491/kuma:niri", "registry");
-        assert!(matches!(
-            upgrade_lane(config::Desktop::None, &booted),
-            UpgradeLane::Headless
-        ));
+        assert!(matches!(upgrade_lane(config::Desktop::None, &booted), UpgradeLane::Headless));
     }
 
     #[test]
@@ -4819,10 +4844,7 @@ mod tests {
             transport: None,
             version: None,
         };
-        assert!(matches!(
-            upgrade_lane(config::Desktop::Niri, &booted),
-            UpgradeLane::Delta { .. }
-        ));
+        assert!(matches!(upgrade_lane(config::Desktop::Niri, &booted), UpgradeLane::Delta { .. }));
     }
 
     /// The shape tests' ruler: the exact keys a document carries. The

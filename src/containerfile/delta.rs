@@ -177,13 +177,15 @@ pub(crate) fn compile(
     if declared.backup != baked.backup {
         refusals.push(
             "  - [backup]: the repository secret rides the image with it, and the delta \
-             build carries no machine secrets; `kuma update` full-rebuilds".to_string(),
+             build carries no machine secrets; `kuma update` full-rebuilds"
+                .to_string(),
         );
     }
     if declared.nostr.serve != baked.nostr.serve {
         refusals.push(
             "  - [nostr] serve: the tailnet face rides units the delta does not carry; \
-             `kuma update` full-rebuilds".to_string(),
+             `kuma update` full-rebuilds"
+                .to_string(),
         );
     }
     let declared_brew = declared.system.brew || !declared.packages.brew.is_empty();
@@ -191,7 +193,8 @@ pub(crate) fn compile(
     if declared_brew != baked_brew {
         refusals.push(
             "  - [system] brew: the machinery (setup unit, git-core, tar) is recipe \
-             content the delta does not carry; `kuma update` full-rebuilds".to_string(),
+             content the delta does not carry; `kuma update` full-rebuilds"
+                .to_string(),
         );
     }
     if !refusals.is_empty() {
@@ -220,10 +223,7 @@ pub(crate) fn compile(
     // fleet, and the digest is what `upgrade --check` compared. The
     // reference's tag is dropped (`name@digest` is the shape every tool
     // agrees on); the pull already happened against it.
-    e.raw(&format!(
-        "FROM {}\n",
-        crate::lock::pinned_ref(&release.reference, &release.digest)
-    ));
+    e.raw(&format!("FROM {}\n", crate::lock::pinned_ref(&release.reference, &release.digest)));
 
     // Labels. The version label is the RELEASE's (the machine reports
     // the release it runs on, never the compiler's number — branding
@@ -236,10 +236,7 @@ pub(crate) fn compile(
     e.raw("LABEL io.kuma.image=\"1\"\n");
     e.raw(&format!("LABEL io.kuma.builder=\"{}\"\n", crate::VERSION));
     e.raw(&format!("LABEL io.kuma.delta=\"{}\"\n", crate::KUMA_VERSION));
-    e.raw(&format!(
-        "LABEL org.opencontainers.image.version=\"{}\"\n",
-        release.version
-    ));
+    e.raw(&format!("LABEL org.opencontainers.image.version=\"{}\"\n", release.version));
 
     // The declaration rides again: every later read of the baked config
     // (doctor, the next upgrade's routing, install) must speak for THIS
@@ -322,7 +319,8 @@ pub(crate) fn compile(
         if declared.snapshots.enable {
             let snapshot = e.stage("kuma-snapshot", snapshot_script(declared));
             let service = e.stage("kuma-snapshot.service", SNAPSHOT_SERVICE);
-            let timer = e.stage("kuma-snapshot.timer", snapshot_timer(&declared.snapshots.interval));
+            let timer =
+                e.stage("kuma-snapshot.timer", snapshot_timer(&declared.snapshots.interval));
             e.raw(&dnf_install("btrfs-progs"));
             e.copy_exec(&snapshot, "/usr/libexec/kuma-snapshot");
             e.copy(&service, "/usr/lib/systemd/system/kuma-snapshot.service");
@@ -409,8 +407,10 @@ pub(crate) fn compile(
             let declared_line = nostrd_exec_line(&declared.nostr);
             let baked_line = nostrd_exec_line(&baked.nostr);
             if declared_line != baked_line {
-                let dropin =
-                    e.stage("10-kuma-nostr-relays.conf", format!("[Service]\nExecStart=\nExecStart={declared_line}\n"));
+                let dropin = e.stage(
+                    "10-kuma-nostr-relays.conf",
+                    format!("[Service]\nExecStart=\nExecStart={declared_line}\n"),
+                );
                 e.copy(
                     &dropin,
                     "/usr/lib/systemd/user/kuma-nostrd.service.d/10-kuma-nostr-relays.conf",
@@ -516,11 +516,7 @@ pub(crate) fn write_context(
 /// Set difference, sorted: what is in `declared` and not in `base`.
 fn diff_sets(declared: &[String], base: &[String]) -> Vec<String> {
     let base: HashSet<&String> = base.iter().collect();
-    let mut out: Vec<String> = declared
-        .iter()
-        .filter(|p| !base.contains(*p))
-        .cloned()
-        .collect();
+    let mut out: Vec<String> = declared.iter().filter(|p| !base.contains(*p)).cloned().collect();
     out.sort();
     out.dedup();
     out
@@ -695,12 +691,15 @@ mod tests {
             units(),
         )
         .unwrap();
-        assert!(plan
-            .text
-            .contains("COPY 50-kuma-nostr.preset /usr/lib/systemd/user-preset/50-kuma-nostr.preset"));
+        assert!(plan.text.contains(
+            "COPY 50-kuma-nostr.preset /usr/lib/systemd/user-preset/50-kuma-nostr.preset"
+        ));
         assert!(plan.text.contains("RUN systemctl --global preset kuma-nostrd.service"));
         let preset = plan.files.get("50-kuma-nostr.preset").unwrap();
-        assert_eq!(*preset, Content::Text("enable kuma-nostrd.service\nenable nip46-relay.service\n".to_string()));
+        assert_eq!(
+            *preset,
+            Content::Text("enable kuma-nostrd.service\nenable nip46-relay.service\n".to_string())
+        );
     }
 
     #[test]
@@ -729,9 +728,7 @@ mod tests {
         let preset = plan.files.get("50-kuma-nostr.preset").unwrap();
         assert_eq!(
             *preset,
-            Content::Text(
-                "disable kuma-nostrd.service\ndisable nip46-relay.service\n".to_string()
-            )
+            Content::Text("disable kuma-nostrd.service\ndisable nip46-relay.service\n".to_string())
         );
     }
 
@@ -753,10 +750,7 @@ mod tests {
             units(),
         )
         .unwrap();
-        let dropin = plan
-            .files
-            .get("10-kuma-nostr-relays.conf")
-            .expect("the drop-in rides");
+        let dropin = plan.files.get("10-kuma-nostr-relays.conf").expect("the drop-in rides");
         let Content::Text(text) = dropin else {
             panic!("the drop-in is text");
         };
@@ -947,7 +941,9 @@ mod tests {
         )
         .unwrap();
         assert!(plan.text.contains("COPY --chmod=755 kuma-snapshot /usr/libexec/kuma-snapshot"));
-        assert!(plan.text.contains("COPY kuma-snapshot.timer /usr/lib/systemd/system/kuma-snapshot.timer"));
+        assert!(plan
+            .text
+            .contains("COPY kuma-snapshot.timer /usr/lib/systemd/system/kuma-snapshot.timer"));
         assert!(plan.files.contains_key("kuma-snapshot.timer"));
     }
 

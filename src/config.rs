@@ -1266,9 +1266,8 @@ pub(crate) mod tests {
             let t = line.trim();
             let continues = t.ends_with('\\');
 
-            let cmd = t
-                .strip_prefix("gh release create")
-                .or_else(|| t.strip_prefix("gh release upload"));
+            let cmd =
+                t.strip_prefix("gh release create").or_else(|| t.strip_prefix("gh release upload"));
             if let Some(rest) = cmd {
                 for asset in rest.split('\'').skip(1).step_by(2).skip(1) {
                     check(asset);

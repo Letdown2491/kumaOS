@@ -87,20 +87,15 @@ const LIMITER_CAP: usize = 20_000;
 /// the oldest, down to nine tenths of the cap so the next few inserts
 /// do not re-sweep per event. Cost is a sort of the map, paid only
 /// when the cap has actually been reached.
-fn sweep_limiters(
-    limiters: &mut HashMap<nostr::key::PublicKey, RateLimiter>,
-    now: u64,
-) {
+fn sweep_limiters(limiters: &mut HashMap<nostr::key::PublicKey, RateLimiter>, now: u64) {
     let floor = now.saturating_sub(LIMITER_IDLE_SECS);
     limiters.retain(|_, lim| lim.last_seen().map_or(false, |at| at >= floor));
     if limiters.len() < LIMITER_CAP {
         return;
     }
     let target = LIMITER_CAP * 9 / 10;
-    let mut by_age: Vec<(nostr::key::PublicKey, u64)> = limiters
-        .iter()
-        .map(|(key, lim)| (*key, lim.last_seen().unwrap_or(0)))
-        .collect();
+    let mut by_age: Vec<(nostr::key::PublicKey, u64)> =
+        limiters.iter().map(|(key, lim)| (*key, lim.last_seen().unwrap_or(0))).collect();
     by_age.sort_unstable_by_key(|&(_, at)| at);
     let shed = limiters.len().saturating_sub(target);
     for (key, _) in by_age.into_iter().take(shed) {
@@ -195,10 +190,7 @@ fn one_connection(
     // frame; the connection closes itself on the next beat.
     let kicked = Arc::new(AtomicBool::new(false));
     let (tx, rx): (SyncSender<Message>, Receiver<Message>) = sync_channel(QUEUE_CAP);
-    outbound
-        .lock()
-        .expect("the outbound map")
-        .insert(id, (tx.clone(), kicked.clone()));
+    outbound.lock().expect("the outbound map").insert(id, (tx.clone(), kicked.clone()));
 
     let result = serve_connection(
         id,

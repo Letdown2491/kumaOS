@@ -405,7 +405,9 @@ fn connect_and_serve(
                 let events = events_from_relay_message(&text, SUBSCRIPTION_ID);
                 if last_frame.elapsed() >= FRAME_SAMPLE {
                     if suppressed > 0 {
-                        eprintln!("kuma-nostrd: {url}: {suppressed} frame(s) arrived between samples");
+                        eprintln!(
+                            "kuma-nostrd: {url}: {suppressed} frame(s) arrived between samples"
+                        );
                         suppressed = 0;
                     }
                     eprintln!("kuma-nostrd: frame: {}", text.chars().take(120).collect::<String>());

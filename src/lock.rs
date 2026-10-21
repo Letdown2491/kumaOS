@@ -475,10 +475,7 @@ pub fn record_release(config_path: &Path, release: Release) -> Option<Lock> {
         None => Lock {
             schema_version: CURRENT_SCHEMA,
             locked_at: String::new(),
-            base: Base {
-                reference: release.reference.clone(),
-                digest: release.digest.clone(),
-            },
+            base: Base { reference: release.reference.clone(), digest: release.digest.clone() },
             release: None,
             resolved: Resolved { rpm: BTreeMap::new() },
         },

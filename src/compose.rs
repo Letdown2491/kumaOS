@@ -427,7 +427,10 @@ mod tests {
     fn the_base_carries_the_verbs_engines() {
         let out = manifest(&config("schema_version = 1"));
         for pkg in ["podman", "skopeo"] {
-            assert!(out.contains(&format!("- {pkg}")), "{pkg} left the base: the verbs' engines are nobody else's dependency");
+            assert!(
+                out.contains(&format!("- {pkg}")),
+                "{pkg} left the base: the verbs' engines are nobody else's dependency"
+            );
         }
     }
 
