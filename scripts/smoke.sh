@@ -144,6 +144,17 @@ QEMU_VGA=${QEMU_VGA:-virtio-vga-gl}
 # first boot while iso, which had the variable inline, ran 21 minutes).
 export LIBGL_ALWAYS_SOFTWARE=1
 
+# The render node the display's EGL uses. The kvm action exports
+# QEMU_RENDER_NODE: the runner's first-enumerating node is a faux device
+# that GBMs but cannot EGL (#47's coin flip — only EGL can tell the two
+# apart, and by then the pick is made), so the action names vgem's node
+# and every qemu site below takes it. Unset locally, where the node, if
+# any, is real hardware that never needed a pin.
+QEMU_DISPLAY_ARG="$QEMU_DISPLAY"
+if [ -n "${QEMU_RENDER_NODE:-}" ] && ! printf '%s' "$QEMU_DISPLAY" | grep -q render-node; then
+    QEMU_DISPLAY_ARG="$QEMU_DISPLAY,render-node=$QEMU_RENDER_NODE"
+fi
+
 # Only a display that asks for GL needs a render node (the virgl device's
 # own EGL path does not). A GPU-less machine has none until vgem provides
 # one; on a host with a real GPU this is a no-op (the node exists; vgem
@@ -1093,7 +1104,7 @@ smoke_published() {
             -drive "if=pflash,format=raw,readonly=on,file=$code" \
             -drive "if=pflash,format=raw,file=$vars" \
             -drive "file=$raw,if=virtio,format=raw" \
-            -device "$QEMU_VGA" -display "$QEMU_DISPLAY" \
+            -device "$QEMU_VGA" -display "$QEMU_DISPLAY_ARG" \
             -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22" \
             "${serial[@]}" &
         qemu=$!
@@ -3270,7 +3281,7 @@ dead_disk_run() {
         -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
         -drive "if=pflash,format=raw,file=$dir/OVMF_VARS.fd" \
         -drive "file=$raw,if=virtio,format=raw" \
-        -device "$QEMU_VGA" -display "$QEMU_DISPLAY" \
+        -device "$QEMU_VGA" -display "$QEMU_DISPLAY_ARG" \
         -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22" \
         -serial "file:$log" &
     local qemu=$!
@@ -3460,7 +3471,7 @@ smoke_iso() {
         -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
         -drive "if=pflash,format=raw,file=$dir/vars.fd" \
         -cdrom "$iso" -boot d \
-        -device "$QEMU_VGA" -display "$QEMU_DISPLAY" \
+        -device "$QEMU_VGA" -display "$QEMU_DISPLAY_ARG" \
         -chardev "socket,id=kumacon,path=$sock,server=on,wait=off" -serial chardev:kumacon \
         >"$dir/qemu.log" 2>&1 &
     local qemu=$!
@@ -3608,7 +3619,7 @@ smoke_boot() {
         -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
         -drive "if=pflash,format=raw,file=$dir/OVMF_VARS.fd" \
         -drive "file=$disk,if=virtio,format=qcow2" \
-        -device "$QEMU_VGA" -display "$QEMU_DISPLAY" \
+        -device "$QEMU_VGA" -display "$QEMU_DISPLAY_ARG" \
         -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22" \
         -serial "file:$log" &
     local qemu=$!

@@ -102,27 +102,43 @@ runs:
         # 2026-10-05). The /dev/kvm rule below is the same lesson.
         sudo chmod 666 /dev/dri/renderD* 2>/dev/null || true
         # A node that opens is not a node EGL can use. The runners'
-        # paravirt GPU presents a node that GBMs at scan time and dies
-        # when virgl first asks it for a context — sixteen minutes into
-        # the lap, a 0-byte console, nothing to read (2026-10-21). Which
-        # node enumerates first varies per runner, so no scan can tell
-        # working from broken; the only deterministic state is vgem and
-        # nothing else. Retire every non-vgem render node now that vgem
-        # is confirmed up, and fail loud here if one refuses — that is
-        # a twenty-second red leg instead of the coin flip re-armed.
-        for devpath in /sys/class/drm/renderD*; do
-            [ -e "$devpath/device/driver" ] || continue
-            drv=$(basename "$(readlink -f "$devpath/device/driver")")
-            [ -n "$drv" ] && [ "$drv" != "vgem" ] || continue
-            dev=$(basename "$(readlink -f "$devpath/device")")
-            if ! echo "$dev" | sudo tee "$devpath/device/driver/unbind" >/dev/null; then
-                echo "native render node $devpath (driver $drv) refused to retire; the EGL pick stays a coin flip (#47)"
-                exit 1
-            fi
-            echo "   .. retired native render node $devpath (driver $drv)"
+        # native render node is a faux-bus dummy — the image's trick for
+        # giving software rendering a node at all — and it GBMs at scan
+        # time but dies when virgl first asks it for a context: sixteen
+        # minutes into the lap, a 0-byte console, nothing to read
+        # (2026-10-21). Which node enumerates first varies per runner, so
+        # no scan can tell working from broken; only EGL can, and by then
+        # the pick is made. Retiring the natives was tried first and
+        # refused: root itself gets "Permission denied" writing the faux
+        # driver's unbind (measured on a runner, 2026-10-21), and a lap
+        # spent per hypothesis is a lap spent. So the pin rides WITH qemu
+        # instead of against the kernel: the action names vgem's node —
+        # by its driver, the one fact that cannot lie — exports it, and
+        # every qemu site takes it as egl-headless's render-node.
+        vgem_node=""
+        for candidate in /sys/class/drm/renderD*; do
+            drv=$(basename "$(readlink -f "$candidate/device/driver" 2>/dev/null)")
+            [ "$drv" = "vgem" ] || continue
+            vgem_node="/dev/$(basename "$candidate")"
+            break
         done
+        [ -n "$vgem_node" ] || {
+            echo "vgem loaded but no vgem-driven render node appeared; qemu's EGL has nothing to pin"
+            exit 1
+        }
         # The check is the qemu user's, not root's: ls sees a node root
         # owns, open is what qemu needs.
+        test -r "$vgem_node" && test -w "$vgem_node" || {
+            echo "$vgem_node exists but the qemu user cannot open it"
+            exit 1
+        }
+        echo "   .. render node: $vgem_node (pinned for qemu's EGL)"
+        echo "QEMU_RENDER_NODE=$vgem_node" >> "$GITHUB_ENV"
+
+        # The generic scan stays as the floor: any openable node at all
+        # is the difference between "pinned to a working node" and "the
+        # host has no DRM to give", and the second deserves its own
+        # message.
         node=""
         for candidate in /dev/dri/renderD*; do
             if [ -c "$candidate" ] && [ -r "$candidate" ] && [ -w "$candidate" ]; then
