@@ -372,18 +372,30 @@ bad()  {
     exit 1
 }
 
-# The build, with one retry. The base compose refreshes every enabled
-# rpm-md repo, and Fedora's openh264 CDN edge intermittently 404s for
-# runner egress (measured twice on 2026-10-21, same edge IP both times,
-# while the same repo answered 200 from elsewhere and the same compose
-# passed on other runners in the same run). No kuma package comes from
-# that repo — it is the base image's default repo set — so the retry is
-# CDN hygiene, not a product dodge: a build that fails twice fails
-# loudly either way.
+# The build, with retries. The base compose refreshes every enabled
+# rpm-md repo, and Fedora's mirrors flap under runner egress: the
+# openh264 CDN edge 404s for repomd.xml (measured twice on 2026-10-21,
+# same edge IP both times, while the same repo answered 200 from
+# elsewhere and the same compose passed on other runners in the same
+# run), and the night of 2026-10-22 two successive composes each lost
+# a DIFFERENT fetch — openh264's repomd, then a tiwilink-firmware RPM
+# on a fcix mirror — so the old one-retry budget died on the second
+# 404 with the first in its pocket. Three attempts with a real sleep
+# between them is the budget publish.yml's own build step carries; no
+# kuma package comes from the flapping repos, they are the base
+# image's default repo set, so the retries are CDN hygiene, not a
+# product dodge: a build that fails three times fails loudly either
+# way.
 kuma_build() {
-    "$KUMA" --config "$1" build --tag "$2" >/dev/null \
-        || { sleep 30; "$KUMA" --config "$1" build --tag "$2" >/dev/null; } \
-        || bad "build failed: ${3:-the image does not build}"
+    local attempt
+    for attempt in 1 2 3; do
+        if "$KUMA" --config "$1" build --tag "$2" >/dev/null; then
+            return 0
+        elif [ "$attempt" -lt 3 ]; then
+            sleep 120
+        fi
+    done
+    bad "build failed: ${3:-the image does not build}"
 }
 
 # One value out of the declaration, by dotted key, so every assertion
