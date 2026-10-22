@@ -148,6 +148,18 @@ A separate job runs `cargo audit` against the committed `Cargo.lock`, on every
 push and again weekly, because a dependency becomes vulnerable when the
 advisory lands rather than when someone next touches the tree.
 
+**Changing the declaration's shape.** New fields inside a known section
+defend themselves — `deny_unknown_fields` makes an older kuma refuse them on
+sight, so delta upgrades fail loudly with "a schema this kuma cannot read". A
+new TOP-LEVEL section does not: an older compiler's tolerant read ignores it
+silently, and that compiler's next `kuma upgrade` copies the machine's
+declaration over the release's baked one, erasing the new section without a
+word. Bump `CURRENT_SCHEMA` in `config.rs` whenever the declaration gains a
+top-level section — the bump is what turns that silent loss into the delta's
+loud "the delta compiler predates the release" refusal. The delta compiler's
+tests pin both halves (`unknown_top_level_sections_are_ignored`,
+`a_newer_schema_version_refuses`).
+
 **Cutting a release.** Bump `version` in `Cargo.toml`, refresh the lock,
 rename the `Unreleased` section in `CHANGELOG.md` to the new version, commit
 all three, then tag:

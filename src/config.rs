@@ -4,6 +4,16 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+/// The declaration schema this kuma speaks. Bump it whenever the
+/// declaration gains a TOP-LEVEL SECTION: unknown top-level sections
+/// are invisible to an older kuma's delta compiler (its tolerant read
+/// ignores them), and that compiler's next upgrade then COPYs the
+/// machine's declaration over the baked one — erasing the release's
+/// new section from the machine without a word. The schema bump is the
+/// only thing that turns that silent loss into the delta's loud
+/// "the delta compiler predates the release" refusal. New fields
+/// inside KNOWN sections need no bump: `deny_unknown_fields` makes an
+/// older compiler refuse them on sight.
 pub const CURRENT_SCHEMA: u32 = 1;
 // The compose environment a compose runs in when a declaration names
 // none. It followed the quay float until the 2026-09-30 boot failures
