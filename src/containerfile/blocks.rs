@@ -4667,21 +4667,32 @@ fn nostr(e: &mut Emitter<'_>) {
     e.copy(&relay_unit, "/usr/lib/systemd/user/nip46-relay.service");
 
     // The tailnet exposure: a converge script and a oneshot, and only
-    // when the declaration says serve. The switch is the declaration's
-    // own, not an inference from the relay and tailscaled both being on
-    // — those two say the relay exists and that the machine talks to a
+    // when the declaration says serve — with the else-arm the ruling
+    // asked for (#49): tailscaled's serve state persists across
+    // rebuilds, so a machine that stopped arming serve ships the off
+    // unit instead, and the off state converges by the same re-run the
+    // armed state gets. The switch is the declaration's own, not an
+    // inference from the relay and tailscaled both being on — those
+    // two say the relay exists and that the machine talks to a
     // tailnet, and neither says a loopback-only relay belongs on it.
     // Serving also needs tailscaled; a declaration that says serve
-    // without it bakes nothing, and the doctor names the missing piece.
-    // (This one stays a build-time enable rather than a preset line:
-    // it is conditional on another unit's presence, which a preset
+    // without it bakes nothing, and the doctor names the missing
+    // piece. (These stay build-time enables rather than preset lines:
+    // they are conditional on another unit's presence, which a preset
     // file cannot see.)
-    if config.nostr.serve && config.services.enable.iter().any(|s| s == "tailscaled.service") {
+    let tailscaled = config.services.enable.iter().any(|s| s == "tailscaled.service");
+    if config.nostr.serve && tailscaled {
         let serve = e.stage("kuma-nostr-serve", NOSTR_SERVE_SCRIPT);
         let serve_unit = e.stage("kuma-nostr-serve.service", NOSTR_SERVE_SERVICE);
         e.copy_exec(&serve, "/usr/libexec/kuma-nostr-serve");
         e.copy(&serve_unit, "/usr/lib/systemd/system/kuma-nostr-serve.service");
         e.enable(&["kuma-nostr-serve.service"]);
+    } else if tailscaled {
+        let off = e.stage("kuma-nostr-serve-off", NOSTR_SERVE_OFF_SCRIPT);
+        let off_unit = e.stage("kuma-nostr-serve-off.service", NOSTR_SERVE_OFF_SERVICE);
+        e.copy_exec(&off, "/usr/libexec/kuma-nostr-serve-off");
+        e.copy(&off_unit, "/usr/lib/systemd/system/kuma-nostr-serve-off.service");
+        e.enable(&["kuma-nostr-serve-off.service"]);
     }
 
     // The preset file, explicit both ways for both units: a preset with
@@ -4837,6 +4848,57 @@ SystemCallArchitectures=native
 WantedBy=multi-user.target
 "#;
 
+/// The off-ramp script, the on script's mirror image: tailscaled's
+/// serve state is its own and persists across rebuilds, so a machine
+/// that stopped arming serve keeps the tailnet mapping live until
+/// something removes it. This is that thing, and the convergence is
+/// the same re-run the on state gets. `off` with no mount point takes
+/// the default mount — exactly the mapping `serve --bg 127.0.0.1:7777`
+/// sets — so a serve mapping the owner made at another mount is not
+/// kuma's to remove. A machine with nothing served (logged out of the
+/// tailnet, or the mapping already gone) gets a no-op: the exit-0 is
+/// the converged state this unit exists for.
+pub(crate) const NOSTR_SERVE_OFF_SCRIPT: &str = r#"#!/usr/bin/bash
+set -euo pipefail
+tailscale serve off || true
+"#;
+
+/// The off unit: the on unit's else-branch made physical. Ships —
+/// enabled — exactly when tailscaled is enabled and the declaration
+/// does not arm serve, so both units never coexist and neither can
+/// fight the other at boot. Same sandbox as the on unit: root,
+/// oneshot, one LocalAPI call, nothing written.
+pub(crate) const NOSTR_SERVE_OFF_SERVICE: &str = r#"[Unit]
+Description=Take the local nostr relay off the tailnet (the serve layer is not armed)
+Wants=tailscaled.service
+After=tailscaled.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/kuma-nostr-serve-off
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
+"#;
+
 /// The bind that opens the approval panel, joining the baked binds only
 /// when the block renders — a key that opens a panel that does not
 /// exist is exactly the dead-key shape kuma rewrites out of stock niri.
@@ -4948,6 +5010,7 @@ pub(super) static BLOCKS: &[Block] = &[
             ("kuma-nostrd.service", Live::Runs("a live session is a person at a desktop, and the bunker answers its socket either way; its vault is as ephemeral as the session")),
             ("nip46-relay.service", Live::Runs("the local relay is loopback furniture of the same session")),
             ("kuma-nostr-serve.service", Live::Masked("live media's tailscaled is ephemeral, and a serve mapping nothing can reach twice is noise")),
+            ("kuma-nostr-serve-off.service", Live::Masked("the same ephemeral tailscaled has no stale mapping to remove, and an off unit un-serving nothing is boot noise")),
         ],
     },
     Block {

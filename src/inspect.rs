@@ -2787,6 +2787,30 @@ fn check_nostr(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
                 None,
             ),
         }
+    } else if config.services.enable.iter().any(|s| s == "tailscaled.service") {
+        // The inverse read (#49's ruled off-ramp): the layer is not
+        // armed, but tailscaled's serve state is its own and persists
+        // across rebuilds — a mapping left over from an armed past is a
+        // live tailnet exposure the declaration no longer speaks for.
+        // The off unit is this image's convergence; the doctor only
+        // names the stale mapping it can see, and asks nothing it
+        // cannot ask quietly: a tailscale that will not answer here is
+        // the off unit's problem, and every boot is its retry.
+        match host_output(&["tailscale", "serve", "status"]) {
+            Ok(status) if status.contains(":7777") => report(
+                Grade::Warn,
+                "nostr",
+                "the declaration does not arm serve, but tailscale still publishes the relay on the tailnet"
+                    .into(),
+                Some(Action::new(
+                    "converge",
+                    "sudo systemctl start kuma-nostr-serve-off.service".to_string(),
+                    "the off unit removes the stale mapping; convergence is the re-run",
+                )),
+            ),
+            Ok(_) => {}
+            Err(_) => {}
+        }
     }
 
     // The daemon's own answers, through its socket. Every question is

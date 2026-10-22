@@ -641,6 +641,15 @@ mod tests {
             "schema_version = 1\n[system]\ndesktop = \"niri\"\n[nostr]\nenable = true\n\
              serve = true\nrelays = [\"wss://relay.nip46.com\", \"ws://127.0.0.1:7777\"]\n",
         ),
+        // The off-ramp's arm: tailscaled on, the relay armed, serve
+        // not — the only shape that ships kuma-nostr-serve-off, so the
+        // byte-stable contract covers the unit this case alone bakes.
+        (
+            "serve-off",
+            "schema_version = 1\n[system]\ndesktop = \"niri\"\n\
+             [services]\nenable = [\"sshd.service\", \"tailscaled.service\"]\n\
+             [nostr]\nenable = true\nserve = false\nrelays = [\"wss://relay.nip46.com\"]\n",
+        ),
         ("everything-on", EVERYTHING_ON),
         ("secrets", SECRETS),
     ];
@@ -2638,8 +2647,25 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         context(EVERYTHING_ON, dir.path());
         let containerfile = std::fs::read_to_string(dir.path().join("Containerfile")).unwrap();
 
+        // The serve pair is if/else by construction — the off unit
+        // ships exactly when the on one does not — so no single image
+        // enables both, and the honest reading of "genuinely enabled"
+        // is the corpus: every row must be enabled by some image the
+        // goldens pin. The serve-off case is the one that pins its
+        // unit, so it joins the read.
+        let off_dir = tempfile::tempdir().unwrap();
+        let serve_off = GOLDEN_CASES
+            .iter()
+            .find(|(name, _)| *name == "serve-off")
+            .map(|(_, toml)| *toml)
+            .expect("the serve-off golden case pins the off unit");
+        context(serve_off, off_dir.path());
+        let off_containerfile =
+            std::fs::read_to_string(off_dir.path().join("Containerfile")).unwrap();
+
         let enabled: Vec<String> = containerfile
             .lines()
+            .chain(off_containerfile.lines())
             .filter(|l| l.contains("systemctl") && (l.contains("enable") || l.contains("preset")))
             .flat_map(|l| l.split_whitespace())
             .filter(|u| u.ends_with(".service") || u.ends_with(".timer") || u.ends_with(".target"))
