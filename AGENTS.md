@@ -35,7 +35,11 @@ is named by a commit — but `git push`, branch or tag, moves only on an
 explicit go: a branch push starts a 35-minute battery, and a `v*` tag
 starts the release road — the release page, then both image publishes
 (niri, cosmic) with their validation batteries, sequential — and neither
-is the agent's call to spend.
+is the agent's call to spend. And when a battery is red and a fix is
+ready: the fix commits, but the push waits until the running workflows
+have all concluded — a mid-battery push cuts the remaining laps off
+mid-flight, spends the runners, and throws away the signal the lap was
+midway through producing. One battery at a time, read to the end.
 
 ## The nostr layer's dev loop (44.4.0)
 
