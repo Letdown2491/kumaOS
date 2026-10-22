@@ -107,12 +107,46 @@ jobs:
               exit 1
             fi
             echo "the ${example} leg: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-            if ! timeout "$leg_deadline" gh run watch "$run_id" --interval 60 --exit-status; then
-              echo "::error::the ${example} leg failed (run ${run_id}). The moving tags did not move: publish.yml promotes only after its validation laps, and a red lap leaves the tags on the last image that booted. Fix, then re-dispatch publish.yml for this tier by hand, or cut the tag again." >&2
-              exit 1
+            # The run's terminal verdict, read fresh: prints "true" or
+            # "false" once the run is completed, nothing while it is
+            # still going (including a re-run, which resets an ended
+            # run to in_progress).
+            leg_green() {
+              gh run view "$run_id" --json status,conclusion \
+                --jq 'if .status == "completed" then (.conclusion == "success") else empty end' 2>/dev/null
+            }
+            if timeout "$leg_deadline" gh run watch "$run_id" --interval 60 --exit-status; then
+              echo "- \`${example}\`: [run ${run_id}](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id})" \
+                >> "$GITHUB_STEP_SUMMARY"
+              return 0
             fi
-            echo "- \`${example}\`: [run ${run_id}](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id})" \
-              >> "$GITHUB_STEP_SUMMARY"
+            # The watch exits on the conclusion it watched — which can
+            # be a failed attempt that has since been re-run (v44.10.0
+            # paid this: the watch declared the leg dead on attempt 1's
+            # conclusion, the re-run promoted 31 minutes later, and the
+            # badge stayed red on a shipped release). The leg's verdict
+            # is the run's terminal conclusion, not the watch's exit,
+            # so read it back before declaring anything. A leg that
+            # failed for good answers completed/false on the first
+            # poll; a re-run in flight keeps the poll alive within the
+            # same deadline the watch had.
+            local waited=0 verdict
+            while [ "$waited" -lt "$leg_deadline" ]; do
+              verdict=$(leg_green || true)
+              if [ -n "$verdict" ]; then
+                if [ "$verdict" = "true" ]; then
+                  echo "the ${example} leg: green on a re-run of ${run_id}; the watch exited on the failed attempt" >&2
+                  echo "- \`${example}\`: [run ${run_id}](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}) (green on a re-run; the watch exited on the failed attempt)" \
+                    >> "$GITHUB_STEP_SUMMARY"
+                  return 0
+                fi
+                break
+              fi
+              sleep 60
+              waited=$((waited + 60))
+            done
+            echo "::error::the ${example} leg failed (run ${run_id}). The moving tags did not move: publish.yml promotes only after its validation laps, and a red lap leaves the tags on the last image that booted. Fix, then re-dispatch publish.yml for this tier by hand — from main, not from this tag: a leg runs this tag's own workflow code, so fixes that landed after the cut never apply to it, and this run's badge stays red regardless of the release's fate." >&2
+            exit 1
           }
 
           {
