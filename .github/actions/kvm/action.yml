@@ -108,13 +108,19 @@ runs:
         # minutes into the lap, a 0-byte console, nothing to read
         # (2026-10-21). Which node enumerates first varies per runner, so
         # no scan can tell working from broken; only EGL can, and by then
-        # the pick is made. Retiring the natives was tried first and
-        # refused: root itself gets "Permission denied" writing the faux
-        # driver's unbind (measured on a runner, 2026-10-21), and a lap
-        # spent per hypothesis is a lap spent. So the pin rides WITH qemu
-        # instead of against the kernel: the action names vgem's node —
-        # by its driver, the one fact that cannot lie — exports it, and
-        # every qemu site takes it as egl-headless's render-node.
+        # the pick is made.
+        #
+        # The pin was tried as a qemu flag first and is not one: egl-headless
+        # takes no render-node parameter, and both the runner's 8.2 and this
+        # repo's modern qemu refuse the display line outright (measured
+        # 2026-10-22, "Parameter 'render-node' is unexpected" — the flag's
+        # first live lap died in five seconds). The mechanism that works is
+        # the action's own oldest finding: qemu's node scan silently skips
+        # a node it cannot open and moves to the next. So the natives lose
+        # their openability instead of their driver — the retirement the
+        # unbind refused — and vgem, the one node EGL survives, is the only
+        # thing left for the scan to pick, on every runner shape: the ones
+        # with a native node and the ones without.
         vgem_node=""
         for candidate in /sys/class/drm/renderD*; do
             # Two names, because vgem carries either depending on the
@@ -130,7 +136,7 @@ runs:
             drv=$(basename "$(readlink -f "$candidate/device/driver" 2>/dev/null)" 2>/dev/null)
             if [ "$dev" = "vgem" ] || [ "$drv" = "vgem" ]; then
                 # The class entry's basename is the node's name under
-                # /dev/dri, not /dev: the first lap assembled /dev/renderD128,
+                # /dev/dri, not /dev: the second lap assembled /dev/renderD128,
                 # a path that does not exist, and the open check failed on
                 # the chmod's own work (measured, this lap).
                 vgem_node="/dev/dri/$(basename "$candidate")"
@@ -147,14 +153,16 @@ runs:
             echo "vgem loaded but no vgem-driven render node appeared; qemu's EGL has nothing to pin"
             exit 1
         }
+        for candidate in /dev/dri/renderD*; do
+            [ "$candidate" = "$vgem_node" ] || sudo chmod 000 "$candidate" || true
+        done
         # The check is the qemu user's, not root's: ls sees a node root
         # owns, open is what qemu needs.
         test -r "$vgem_node" && test -w "$vgem_node" || {
             echo "$vgem_node exists but the qemu user cannot open it"
             exit 1
         }
-        echo "   .. render node: $vgem_node (pinned for qemu's EGL)"
-        echo "QEMU_RENDER_NODE=$vgem_node" >> "$GITHUB_ENV"
+        echo "   .. render node: $vgem_node (the only one left open)"
 
         # The generic scan stays as the floor: any openable node at all
         # is the difference between "pinned to a working node" and "the

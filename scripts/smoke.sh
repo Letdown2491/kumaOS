@@ -144,16 +144,10 @@ QEMU_VGA=${QEMU_VGA:-virtio-vga-gl}
 # first boot while iso, which had the variable inline, ran 21 minutes).
 export LIBGL_ALWAYS_SOFTWARE=1
 
-# The render node the display's EGL uses. The kvm action exports
-# QEMU_RENDER_NODE: the runner's first-enumerating node is a faux device
-# that GBMs but cannot EGL (#47's coin flip — only EGL can tell the two
-# apart, and by then the pick is made), so the action names vgem's node
-# and every qemu site below takes it. Unset locally, where the node, if
-# any, is real hardware that never needed a pin.
+# The render node is the kvm action's business now: it leaves vgem as
+# the only openable node, and qemu's scan — which skips what it cannot
+# open — picks it without being told. Nothing here names a node.
 QEMU_DISPLAY_ARG="$QEMU_DISPLAY"
-if [ -n "${QEMU_RENDER_NODE:-}" ] && ! printf '%s' "$QEMU_DISPLAY" | grep -q render-node; then
-    QEMU_DISPLAY_ARG="$QEMU_DISPLAY,render-node=$QEMU_RENDER_NODE"
-fi
 
 # Only a display that asks for GL needs a render node (the virgl device's
 # own EGL path does not). A GPU-less machine has none until vgem provides
