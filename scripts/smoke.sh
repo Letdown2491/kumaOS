@@ -3075,10 +3075,29 @@ run_delta_arm() {
         podman commit --change 'LABEL io.kuma.smoke=delta-release' "$cid" "$rel:$release_tag" >/dev/null ||
             { podman rm -f "$cid" >/dev/null 2>&1; bad "cannot commit the release layer"; }
         podman rm -f "$cid" >/dev/null 2>&1
-        podman push -q --tls-verify=false "$rel:$release_tag" >/dev/null ||
+        podman push -q --tls-verify=false --compression zstd:chunked "$rel:$release_tag" >/dev/null ||
             bad "cannot push the release to the lap's registry"
         ok "the release is up on $rel:$release_tag, content-diverged both ways"
     fi
+
+    # The chunked push's structural proof, read from the lap registry's
+    # own stored bytes: the guest's partial pulls are made of these
+    # annotations, and a registry that strips them silently downgrades
+    # every pull to whole-blob. The real-road arm pushed the road's
+    # bytes as-is, so this reads the release as promoted; the fabricated
+    # arm recompressed itself chunked. The client-side payoff read —
+    # the bytes the guest's bootc actually fetched — is the next
+    # release's upgrade log, two chunked releases apart (#49's ruling,
+    # condition 3).
+    curl -sf -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+        "http://127.0.0.1:$DELTA_PORT/v2/kuma/manifests/$release_tag" |
+        python3 -c 'import json,sys
+m = json.load(sys.stdin)
+key = "io.github.containers.zstd-chunked"
+naked = [l for l in m["layers"] if not [k for k in (l.get("annotations") or {}) if k.startswith(key)]]
+assert not naked, "%d layers lost their zstd-chunked annotations" % len(naked)' \
+        || bad "the lap registry lost the release's chunked layer annotations"
+    ok "the lap registry carries the release's chunked annotations"
 
     # The guest's one unlocking, written down before the verb runs:
     # the lap's registry is plain HTTP, and both skopeo and podman

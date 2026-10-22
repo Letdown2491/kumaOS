@@ -261,7 +261,12 @@ jobs:
           # (2026-10-10) pushed with no local retag and died here:
           # "image not known", before a byte moved.
           podman tag "${{ steps.ref.outputs.local }}" "${{ steps.ref.outputs.staging }}"
-          podman push --digestfile digest.txt "${{ steps.ref.outputs.staging }}"
+          # Chunked layers are what a client's partial pulls are made
+          # of: bootc fetches only the chunks a machine is missing, and
+          # the delta lane's scaffold pull dedups the same way (#49's
+          # ruling). The digest the signature and the laps key off is
+          # the chunked manifest's, computed here — not assumed.
+          podman push --compression zstd:chunked --digestfile digest.txt "${{ steps.ref.outputs.staging }}"
           echo "digest=$(cat digest.txt)" >> "$GITHUB_OUTPUT"
 
       - name: sign
@@ -293,9 +298,20 @@ jobs:
         if: ${{ !inputs.allow_unsigned }}
         run: |
           set -euo pipefail
+          command -v skopeo >/dev/null || sudo apt-get install -y -qq skopeo
           cosign verify --key cosign.pub \
             "${{ steps.ref.outputs.staging }}" >/dev/null
           echo "verified: ${{ steps.ref.outputs.staging }}"
+          # The chunked push's payoff lives in the layer annotations a
+          # partial pull reads: the blobs surviving the registry is not
+          # enough if the TOC annotations do not. The road that pays
+          # for the push checks them the way a stranger's client would
+          # — from the registry's stored bytes, not local memory of
+          # the build (#49's ruling, condition 2).
+          skopeo inspect --raw "docker://${{ steps.ref.outputs.staging }}" |
+            jq -e '[.layers[] | select(([(.annotations // {}) | keys[] | select(startswith("io.github.containers.zstd-chunked"))] | length) == 0)] | length == 0' >/dev/null ||
+            { echo "::error::the registry copy of ${{ steps.ref.outputs.staging }} lost the zstd-chunked layer annotations; partial pulls cannot happen" >&2; exit 1; }
+          echo "the registry copy carries the chunked TOC annotations"
 
   # The registry question can only change when the registry changes, so
   # the staging push triggers the validation rather than a person
