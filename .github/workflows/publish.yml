@@ -155,11 +155,25 @@ jobs:
       # is a committed example precisely because it declares no [user] and
       # no hostname; the audit below is what enforces that rather than
       # trusting the file to stay that way.
+      # Three attempts, because every failure tonight was Fedora's own
+      # infra flapping under the compose — fcix mirrors serving stale
+      # updates repodata (twice), the openh264 codec host 404-ing its
+      # repomd.xml (once, gone on the next probe) — and one run of the
+      # road should not die of a mirror's cold. The retries are cheap:
+      # podman's pulls and the compose cache volume are per-runner, so
+      # a second attempt pays only the compose again.
       - name: build the image
         run: |
-          ./target/release/kuma build \
-            --config "examples/${{ steps.guard.outputs.example }}.toml" \
-            --tag "${{ steps.ref.outputs.local }}"
+          for attempt in 1 2 3; do
+            if ./target/release/kuma build \
+              --config "examples/${{ steps.guard.outputs.example }}.toml" \
+              --tag "${{ steps.ref.outputs.local }}"; then
+              break
+            fi
+            [ "$attempt" -lt 3 ] || exit 1
+            echo "::warning::build attempt $attempt failed; retrying"
+            sleep 120
+          done
 
       # Before the registry, never after. A published image cannot be
       # unpublished from anybody who already pulled it.
