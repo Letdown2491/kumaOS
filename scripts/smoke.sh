@@ -3776,18 +3776,43 @@ smoke_boot() {
     # lets it, so green on the lane asserts the rule as much as the
     # harness. A sysctl that drifts means either the file stopped
     # shipping or a base change stopped it applying, and both are news.
+    # Every key the floor ships is read, not a sample: the 10-key read
+    # this lane carried before caught a file that stopped applying
+    # outright, but a partial override (a later sysctl.d file, a kernel
+    # semantic change) drifted one key while nine green reads said the
+    # floor held. The conf's glob keys are read through their all and
+    # default entries, the paths systemd-sysctl's glob expands to.
     local hard want
     # Read as root. The 7.2.9 kernel (the 2026-10-08 :44 float) makes
     # mmap_rnd_bits and bpf_jit_harden root-only-readable — 0600 nodes,
     # the KASLR entropy and JIT posture held back from unprivileged
-    # eyes — so the user view EPERMs two of the ten reads, and with
+    # eyes — so the user view EPERMs two of the reads, and with
     # stderr discarded the drift report cannot tell a hidden value from
     # a floor that stopped applying. Root sees the posture either way.
     hard=$(gsudo 'sysctl -n kernel.yama.ptrace_scope kernel.kptr_restrict \
-        kernel.perf_event_paranoid kernel.kexec_load_disabled fs.suid_dumpable \
-        vm.unprivileged_userfaultfd vm.mmap_rnd_bits net.core.bpf_jit_harden \
-        kernel.sysrq net.ipv4.icmp_echo_ignore_all' | tr '\n' ' ' | xargs)
-    want="1 2 3 1 0 0 32 2 0 1"
+        kernel.dmesg_restrict kernel.perf_event_paranoid kernel.kexec_load_disabled \
+        kernel.sysrq kernel.oops_limit kernel.warn_limit kernel.printk \
+        kernel.core_pattern fs.suid_dumpable fs.binfmt_misc.status \
+        dev.tty.ldisc_autoload vm.unprivileged_userfaultfd vm.mmap_rnd_bits \
+        vm.mmap_rnd_compat_bits net.core.bpf_jit_harden fs.protected_regular \
+        fs.protected_fifos net.ipv4.tcp_syncookies net.ipv4.tcp_rfc1337 \
+        net.ipv4.tcp_timestamps net.ipv4.icmp_echo_ignore_broadcasts \
+        net.ipv4.icmp_ignore_bogus_error_responses net.ipv4.icmp_echo_ignore_all \
+        net.ipv6.icmp.echo_ignore_all net.ipv4.conf.all.rp_filter \
+        net.ipv4.conf.default.rp_filter net.ipv4.conf.all.send_redirects \
+        net.ipv4.conf.default.send_redirects net.ipv4.conf.all.accept_redirects \
+        net.ipv4.conf.default.accept_redirects net.ipv6.conf.all.accept_redirects \
+        net.ipv6.conf.default.accept_redirects net.ipv4.conf.all.shared_media \
+        net.ipv4.conf.default.shared_media net.ipv4.conf.all.arp_filter \
+        net.ipv4.conf.default.arp_filter net.ipv4.conf.all.arp_ignore \
+        net.ipv4.conf.default.arp_ignore net.ipv4.conf.all.drop_gratuitous_arp \
+        net.ipv4.conf.all.accept_source_route net.ipv4.conf.default.accept_source_route \
+        net.ipv6.conf.all.accept_source_route net.ipv6.conf.default.accept_source_route \
+        net.ipv6.conf.all.use_tempaddr net.ipv6.conf.default.use_tempaddr \
+        net.ipv4.conf.all.log_martians net.ipv4.conf.default.log_martians' \
+        | tr '\n' ' ' | xargs)
+    want="1 2 1 3 1 0 100 100 3 3 3 3 |/bin/false 0 0 0 0 32 16 2 2 2 \
+1 1 0 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 2 2 1 0 0 0 0 2 2 1 1"
     [ "$hard" = "$want" ] || bad "hardening sysctls drifted: got '$hard', want '$want'"
     ok "hardening sysctls at the floor"
 
@@ -3821,19 +3846,32 @@ smoke_boot() {
 
     # NTS: two configured sources and the pool actually gone. Presence
     # rather than sync state — a source that has not finished its
-    # handshake yet would flake a boot that is otherwise fine.
+    # handshake yet would flake a boot that is otherwise fine. Both
+    # vendors are named, and a pool line is its own failure: the floor's
+    # whole reason for curating the file is that a pool outweighs every
+    # server line, so the lap checks the absence, not just the presence.
     local nts
     nts=$(guest 'grep -c " nts" /etc/chrony.conf')
     [ "${nts:-0}" -ge 2 ] || bad "chrony has $nts NTS server lines; expected two"
     guest 'chronyc -N sources' | grep -q cloudflare \
         || bad "chrony's sources do not include the NTS vendor; the pool may be back"
+    guest 'chronyc -N sources' | grep -q netnod \
+        || bad "chrony's second NTS vendor is missing; one vendor's bad day is the machine's"
+    guest '! grep -Eq "^pool" /etc/chrony.conf' \
+        || bad "a pool line came back to chrony.conf; it outweighs the NTS servers"
     ok "time comes in over NTS"
 
-    # faillock: wired into the stack and carrying its numbers.
+    # faillock: wired into the stack and carrying its numbers. Both
+    # stacks, because authselect's feature wires system-auth and
+    # password-auth as a pair and the lap lost the right to check one.
     guest 'grep -q pam_faillock /etc/pam.d/system-auth' \
         || bad "pam_faillock is not in system-auth; the lockout is decorative"
+    guest 'grep -q pam_faillock /etc/pam.d/password-auth' \
+        || bad "pam_faillock is not in password-auth; the lockout is decorative"
     guest 'grep -q "^deny = 50" /etc/security/faillock.conf' \
         || bad "faillock.conf lost its deny count"
+    guest 'grep -q "^unlock_time = 86400" /etc/security/faillock.conf' \
+        || bad "faillock.conf lost its unlock time"
     ok "login brute force is capped"
 
     # The polkit agent is the shell's, and its helper rides the socket:
