@@ -216,14 +216,17 @@ pub fn host_output_any<S: AsRef<str>>(args: &[S]) -> Result<String> {
 /// because a plain file's mode would silently widen the secret that
 /// name holds.
 ///
-/// OPEN QUESTION, recorded 2026-08-31 and not yet measured: when kuma
-/// itself runs inside a container, `host_command` escapes to the host
-/// but this directory is created in the container's /tmp, so a
-/// host-side `sudo bash /tmp/…/enable` looks for the script in the
-/// host's /tmp. Either distrobox shares /tmp and this is fine, or the
-/// staging path breaks under distrobox and the escape seam needs to
-/// hand the host a directory the host can see. Needs one distrobox
-/// run to answer; correctness of the seam, not security.
+/// ANSWERED, 2026-10-22 (#49 Lane 3): when kuma itself runs inside a
+/// container, `host_command` escapes to the host but this directory is
+/// created in the container's /tmp, so a host-side `sudo bash
+/// /tmp/…/enable` needs that /tmp to be the host's. Distrobox mounts
+/// it — `--volume /tmp:/tmp`, bind-propagated, in its own podman and
+/// docker command builders — which is the integration this seam is
+/// written for, and staging works there unchanged. A container that
+/// does NOT share /tmp (a plain podman or docker run) is outside the
+/// seam's contract: the host-side script path does not exist there,
+/// and the verb fails loudly at the missing file. A correctness
+/// boundary, recorded rather than guarded.
 pub struct ForRoot {
     /// Held rather than borrowed so the directory lives exactly as
     /// long as the staging does and is removed when the verb ends.

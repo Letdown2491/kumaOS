@@ -87,6 +87,16 @@ instead of a surprise.
   compatibility event.
 - `KUMA_TRACE` names. Diagnostics: stable enough to diff between runs,
   free to gain detail.
+- `~/.config/niri/local.kdl`. User deltas over the session's niri
+  config layer positionally and invisibly, by design; niri has no
+  merged export, so no honest comparison against the shipped defaults
+  is possible, and a stale delta can shadow one. The file is the
+  user's, not kuma's.
+- User dconf values. The image ships its desktop defaults in the
+  system db only and never reads or writes a user's dconf; user values
+  win by dconf's own rule. A value frozen at an old theme shadows a
+  later image default for every client that reads it — the settings
+  portal, so flatpaks included.
 
 ## What 44.0 does not do
 
