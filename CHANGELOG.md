@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+- **A machine that stopped arming `tailscale serve` gets its exposure
+  back.** The serve mapping lived in tailscaled's own state, which
+  survives rebuilds: a declaration that no longer armed serve lost
+  kuma's unit and kept publishing the relay's :7777 mount to the
+  tailnet forever. An off unit ships now, enabled exactly when
+  tailscaled runs and the declaration does not arm serve, and removes
+  the mapping the on unit sets on every boot; serve mappings a user
+  made at other mounts are not kuma's to remove. Doctor carries the
+  tripwire: a tailscale still publishing :7777 under an unarmed
+  declaration grades Warn and names the off unit. The serve unit also
+  wears the sandbox the bunker and relay already carry, so the nostr
+  layer has no unhardened unit.
+
+- **A panic reboots, and unprivileged BPF stays off.** The floor pins
+  `kernel.panic = -1`: a panicked machine reboots instantly instead of
+  hanging on a screen that names nothing a person can act on; the oops
+  journal is on disk, and greenboot plus the previous deployment are
+  waiting for exactly that boot. And `kernel.unprivileged_bpf_disabled
+  = 2`, which keeps unprivileged BPF unavailable and locks the knob
+  against re-enabling at runtime.
+
+- **Published images are chunked.** The publish road pushes with
+  zstd:chunked, and its verification refuses a registry copy that lost
+  the chunk annotations. Nothing changes on a machine this release:
+  the payoff starts when machines run chunked images and pays out on
+  the upgrade after that, when an update fetches only the chunks a
+  machine is missing instead of every layer.
+
+- **The contract page names the desktop's declined promises.** User
+  dconf (the image ships defaults in the system db only and never
+  reads or writes a user's) and `~/.config/niri/local.kdl` (deltas
+  layer positionally and invisibly, no merged export to compare
+  against) join the not-an-interface list.
+
+- **The release process's stamp gate answers for more of the staged
+  set.** nip46-relay joins the binaries the gate verifies, and the
+  desktop entries carry their ride's identity in an X-Kumaui-Stamp key
+  the gate reads like a `--version`: presence checks became identity
+  checks, with the loud override unchanged.
+
 ## v44.11.0 (2026-10-21)
 
 - **The kumaui pin rides to v0.5.2.** The visible substance is in the
