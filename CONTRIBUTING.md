@@ -256,6 +256,12 @@ declaration with no `[user]`. The fifth does not, which is why the check
 exists rather than a rule in a document. Run it locally against any image:
 `./scripts/publish-audit.sh localhost/kuma:latest`. A manual dispatch of
 `publish.yml` remains the road for a one-off re-publish of a single tier.
+Dispatch it **from main, never from the tag**: each publish-tag leg runs
+the tag's own frozen workflow code, so fixes that landed on main after
+the cut never apply to a re-run from the tag. The tag's publish-tag
+badge is expected to stay red when a leg needed that intervention — it
+describes the run, not the artifact; the digest-pinned registry image
+and its signature are what to verify.
 
 **Inspecting an image.** It's a normal OCI image:
 `podman run --rm -it localhost/kuma:latest bash`.

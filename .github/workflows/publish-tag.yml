@@ -27,6 +27,20 @@
 # tier (cosmic included, when wanted) stays a manual dispatch of
 # publish.yml exactly as it was.
 #
+# A leg is frozen at the tag's code: this workflow dispatches each leg
+# with `--ref $TAG`, so the leg runs the tag's own publish.yml, and any
+# workflow-only repair that lands on main after the cut never applies
+# to it. The recovery for a red leg is a manual dispatch of publish.yml
+# from MAIN, never from this tag — a re-run here re-dispatches from the
+# same frozen code and fails the same way. The consequence is that this
+# run's badge stays red regardless of the release's fate: a release
+# that promoted through a hand-dispatched leg still shows a red badge
+# on its tag (v44.10.0's stayed red through a successful attempt-2
+# re-run). The badge describes the run, not the artifact; the source of
+# truth an auditor should verify is the registry state itself — the
+# pinned, digest-addressed image and its cosign signature — not this
+# run's color.
+#
 # The legs run sequentially because the run-matching is honest that
 # way: `gh run list` cannot show a run's inputs, so "the newest
 # matching run is the one I just dispatched" needs one leg in flight
