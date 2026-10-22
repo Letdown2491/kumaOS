@@ -4800,7 +4800,12 @@ exec tailscale serve --bg 127.0.0.1:7777
 /// The serve unit: a system oneshot, because `tailscale serve` speaks
 /// to the system daemon's LocalAPI and the mapping is the node's.
 /// Ships only when the declaration runs tailscaled — absent tailscale
-/// the relay is local-only and nothing is refused.
+/// the relay is local-only and nothing is refused. The sandbox is the
+/// siblings' set: the oneshot runs as root and its only job is talking
+/// to tailscaled's LocalAPI socket, so it gains nothing, loads
+/// nothing, and writes nothing — if the CLI needs a write the unit
+/// fails loudly in the boot lap's failed-units check, which is the
+/// gate that proves the set.
 pub(crate) const NOSTR_SERVE_SERVICE: &str = r#"[Unit]
 Description=Expose the local nostr relay to the tailnet
 Wants=tailscaled.service
@@ -4809,6 +4814,24 @@ After=tailscaled.service
 [Service]
 Type=oneshot
 ExecStart=/usr/libexec/kuma-nostr-serve
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target
