@@ -209,13 +209,13 @@ fn sibling_stamp(parent: &Path, name: &str) -> Result<String> {
     Ok(format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
 }
 
-/// What a staged sibling must answer for. The nostr pair answers to
-/// this kuma's own version number, because cargo install moves all
-/// three together and a partial install is exactly the stale-sibling
-/// shape this gate exists for — the compose that shipped an older
-/// kumaui under the new version's name while the changelog claimed
-/// the ride (#42). A kumaui binary answers to the pin's COMMIT: a
-/// release rides a commit, not a version every app shares, because
+/// What a staged sibling must answer for. The nostr road's three
+/// binaries answer to this kuma's own version number, because cargo
+/// install moves all four together and a partial install is exactly the
+/// stale-sibling shape this gate exists for — the compose that shipped
+/// an older kumaui under the new version's name while the changelog
+/// claimed the ride (#42). A kumaui binary answers to the pin's COMMIT:
+/// a release rides a commit, not a version every app shares, because
 /// each kumaui app carries its own version line — a release changes
 /// some apps and not others, so kuma-files may still say 0.4.1 on a
 /// v0.5.0 ride. The version is demanded of kuma-shell alone, whose
@@ -258,6 +258,11 @@ fn verify_sibling_stamps_loud(parent: &Path, config: &Config, loud: bool) -> Res
     let mut checks: Vec<(&str, Expectation)> = vec![
         ("kuma-nostrd", Expectation::OwnVersion(env!("CARGO_PKG_VERSION").to_string())),
         ("kuma-nostr", Expectation::OwnVersion(env!("CARGO_PKG_VERSION").to_string())),
+        // The relay rode the copy loop ungated until the sub-lane 4
+        // audit (#49): this crate's fourth binary, staged like its
+        // siblings, expected to answer like them. Its own `--version`
+        // is clap's, from the crate version the install moves.
+        ("nip46-relay", Expectation::OwnVersion(env!("CARGO_PKG_VERSION").to_string())),
     ];
     if config.system.desktop == Desktop::Niri {
         let Some((pin_sha, pin_version)) = kumaui_pin() else {
@@ -501,12 +506,9 @@ mod tests {
         for name in ["kuma-shell", "kuma-greeter", "kuma-files", "kuma-term", "kuma-monitor"] {
             exe_stub(name, format!("{name} {pin_version} (g{built})"));
         }
-        for name in ["kuma-nostrd", "kuma-nostr"] {
+        for name in ["kuma-nostrd", "kuma-nostr", "nip46-relay"] {
             exe_stub(name, format!("{name} {} (gstub)", env!("CARGO_PKG_VERSION")));
         }
-        // nip46-relay is not kuma's binary and carries no pin: the stub
-        // stays text, like the other non-binary siblings.
-        std::fs::write(bin_home.path().join("nip46-relay"), "not really nip46-relay\n").unwrap();
         // The entries and icons ride beside their binaries; the stamp
         // gate reads binaries only, so these stay text.
         for name in ["kuma-files", "kuma-term", "kuma-monitor"] {
@@ -545,6 +547,7 @@ mod tests {
         for (name, stamp) in [
             ("kuma-nostrd", format!("kuma-nostrd {} (gstub)", env!("CARGO_PKG_VERSION"))),
             ("kuma-nostr", format!("kuma-nostr {} (gstub)", env!("CARGO_PKG_VERSION"))),
+            ("nip46-relay", format!("nip46-relay {} (gstub)", env!("CARGO_PKG_VERSION"))),
             ("kuma-shell", shell_stamp.to_string()),
             ("kuma-greeter", format!("kuma-greeter {pin_version} (g{built})")),
             ("kuma-files", format!("kuma-files 0.4.1 (g{built})")),
