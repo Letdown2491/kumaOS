@@ -197,8 +197,14 @@ jobs:
           # it. Excluded by name rather than by comparison: a rebuilt tag
           # would otherwise pick itself.
           version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          # Version-shaped tags only: the prefix match also catches the
+          # road's own niri-staging candidate, and sort -V puts that
+          # non-version string after every real version — the first
+          # live lap "upgraded" the candidate onto itself and the
+          # delta gate's version assertion held the release for it
+          # (measured, the first tag road, 2026-10-22).
           previous=$(skopeo list-tags "docker://$repo" \
-            | jq -r '.Tags[] | select(startswith("niri-"))' \
+            | jq -r '.Tags[] | select(test("^niri-[0-9]+[.][0-9]+[.][0-9]+$"))' \
             | sed 's/^niri-//' \
             | grep -vx "$version" \
             | sort -V | tail -1)
@@ -256,8 +262,14 @@ jobs:
           # This checkout IS the version being published, so the
           # exclusion reads the same Cargo.toml the compose built from.
           version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          # Version-shaped tags only: the prefix match also catches the
+          # road's own niri-staging candidate, and sort -V puts that
+          # non-version string after every real version — the first
+          # live lap "upgraded" the candidate onto itself and the
+          # delta gate's version assertion held the release for it
+          # (measured, the first tag road, 2026-10-22).
           previous=$(skopeo list-tags "docker://$repo" \
-            | jq -r '.Tags[] | select(startswith("niri-"))' \
+            | jq -r '.Tags[] | select(test("^niri-[0-9]+[.][0-9]+[.][0-9]+$"))' \
             | sed 's/^niri-//' \
             | grep -vx "$version" \
             | sort -V | tail -1)
