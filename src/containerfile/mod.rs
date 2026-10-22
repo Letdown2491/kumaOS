@@ -572,7 +572,7 @@ mod tests {
         // same deal the goldens are on.
         assert_eq!(
             kumaui_pin(),
-            Some(("357dc8d8ee789a00b3314cbc8171378d6df97c22".to_string(), "0.5.2".to_string()))
+            Some(("c619114c6b42b0af382343ee986b6cbd40ceda72".to_string(), "0.6.0".to_string()))
         );
     }
 

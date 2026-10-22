@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **The kumaui pin rides to v0.6.0.** The audit's #1 polish gap closes:
+  paste works in every shell text field (Ctrl+V into the launcher query,
+  the Wi-Fi, lock, greeter and polkit passwords, and the settings edits;
+  Ctrl+U kills the line), so a 40-character vault password no longer
+  means typing it by hand on the lock screen. Notification toasts carry
+  their action buttons and queue instead of clobbering, with the history
+  panel stacking a burst under one app; `kuma-shell msg notifications`
+  opens the panel, the pair to the dnd toggle. The terminal speaks the
+  kitty keyboard protocol (shift+enter, ctrl+tab and friends reach
+  programs that bind them), zooms at the keyboard, and gains a
+  right-click Copy/Paste menu. Koguma searches file contents, shows
+  directory sizes, and sniffs unnamed files by their bytes; the location
+  bar completes fish-style; the bar shows when the screen is being
+  shared; Kamuy can signal what it watches. kuma-files 0.5.0,
+  kuma-term 0.4.0 and kuma-monitor 0.3.0 ride alongside.
+
 - **A machine that stopped arming `tailscale serve` gets its exposure
   back.** The serve mapping lived in tailscaled's own state, which
   survives rebuilds: a declaration that no longer armed serve lost
