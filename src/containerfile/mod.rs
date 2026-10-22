@@ -264,16 +264,18 @@ fn verify_sibling_stamps_loud(parent: &Path, config: &Config, loud: bool) -> Res
         // is clap's, from the crate version the install moves.
         ("nip46-relay", Expectation::OwnVersion(env!("CARGO_PKG_VERSION").to_string())),
     ];
+    let mut pin_sha: Option<String> = None;
     if config.system.desktop == Desktop::Niri {
-        let Some((pin_sha, pin_version)) = kumaui_pin() else {
-            bail!(
+        let (sha, pin_version) = kumaui_pin().ok_or_else(|| {
+            anyhow::anyhow!(
                 "the kumaui pin cannot be read from the staged action file; \
                  refusing to compose a desktop image against an unreadable pin"
-            );
-        };
+            )
+        })?;
+        pin_sha = Some(sha.clone());
         for name in ["kuma-shell", "kuma-greeter", "kuma-files", "kuma-term", "kuma-monitor"] {
             let version = (name == "kuma-shell").then(|| pin_version.clone());
-            checks.push((name, Expectation::Pin { sha: pin_sha.clone(), version }));
+            checks.push((name, Expectation::Pin { sha: sha.clone(), version }));
         }
     }
     for (name, expected) in checks {
@@ -299,6 +301,46 @@ fn verify_sibling_stamps_loud(parent: &Path, config: &Config, loud: bool) -> Res
              deliberate mismatch through.",
             stamp.trim()
         );
+    }
+    // The desktop entries are identity files, not binaries: there is no
+    // --version to run, so build.sh stamps each release entry with the
+    // ride's commit at install time and the gate reads the key — the
+    // same pin, the same bidirectional prefix-match, the same refusal
+    // (#49's ruling). An entry from an older ride is present, willing,
+    // and lying about the MimeType it claims: presence is not identity,
+    // and this is the gate that says so. The icons ride uncovered — the
+    // same cp act installs them beside the stamped entry, and pixels
+    // cannot claim a mimetype. `unknown` refuses like a binary's
+    // `(gunknown)`: a stamp from a tree with no git is not a stamp.
+    if let Some(pin_sha) = pin_sha {
+        for name in ["kuma-files", "kuma-term", "kuma-monitor"] {
+            let path = parent.join(format!("{name}.desktop"));
+            let text = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading {} for its ride stamp", path.display()))?;
+            let stamp = text
+                .lines()
+                .find_map(|l| l.strip_prefix("X-Kumaui-Stamp="))
+                .map(str::trim);
+            let ok = stamp.is_some_and(|s| {
+                s != "unknown" && (pin_sha.starts_with(s) || s.starts_with(&pin_sha))
+            });
+            if ok {
+                continue;
+            }
+            let reported = stamp.unwrap_or("no stamp");
+            if loud {
+                eprintln!(
+                    "warn: KUMA_ALLOW_KUMAUI_MISMATCH=1 lets this through: {name}.desktop \
+                     carries the stamp '{reported}', the pin demands {pin_sha}"
+                );
+                continue;
+            }
+            bail!(
+                "{name}.desktop carries the stamp '{reported}', but the pin demands {pin_sha}; \
+                 refusing to compose an image whose ride does not match. Set \
+                 KUMA_ALLOW_KUMAUI_MISMATCH=1 to let a deliberate mismatch through."
+            );
+        }
     }
     Ok(())
 }
@@ -509,13 +551,17 @@ mod tests {
         for name in ["kuma-nostrd", "kuma-nostr", "nip46-relay"] {
             exe_stub(name, format!("{name} {} (gstub)", env!("CARGO_PKG_VERSION")));
         }
-        // The entries and icons ride beside their binaries; the stamp
-        // gate reads binaries only, so these stay text.
+        // The entries and icons ride beside their binaries. The
+        // entries carry the stamp the gate reads — the pin's commit,
+        // full sha, exactly what build.sh writes; the icons stay
+        // text, unstamped like the real thing.
         for name in ["kuma-files", "kuma-term", "kuma-monitor"] {
-            for suffix in [".desktop", ".png"] {
-                std::fs::write(bin_home.path().join(format!("{name}{suffix}")), "not really\n")
-                    .unwrap();
-            }
+            std::fs::write(
+                bin_home.path().join(format!("{name}.desktop")),
+                format!("[Desktop Entry]\nX-Kumaui-Stamp={pin_sha}\n"),
+            )
+            .unwrap();
+            std::fs::write(bin_home.path().join(format!("{name}.png")), "not really\n").unwrap();
         }
         write_context(&cfg, toml, &stub, dir).unwrap();
     }
@@ -560,6 +606,16 @@ mod tests {
             let mut perm = std::fs::metadata(&path).unwrap().permissions();
             perm.set_mode(0o755);
             std::fs::set_permissions(&path, perm).unwrap();
+        }
+        // The entries, stamped with the pin's commit like build.sh
+        // writes them — the gate reads these after the binaries, and a
+        // test home without them fails on the read, not the verdict.
+        for name in ["kuma-files", "kuma-term", "kuma-monitor"] {
+            std::fs::write(
+                bin_home.path().join(format!("{name}.desktop")),
+                format!("[Desktop Entry]\nX-Kumaui-Stamp={pin_sha}\n"),
+            )
+            .unwrap();
         }
         bin_home
     }
@@ -622,6 +678,35 @@ mod tests {
         let cfg = config("schema_version = 1\n[system]\ndesktop = \"niri\"\n");
         let pin = kumaui_pin().unwrap();
         gate(&format!("kuma-shell {} (g{})", pin.1, &pin.0[..7]), &cfg, false).unwrap();
+    }
+
+    #[test]
+    fn a_stale_entry_stamp_refuses_the_compose() {
+        // The entries are identity files: build.sh stamps each release
+        // entry with the ride's commit, and the gate reads the key
+        // like a --version. An entry from an older ride — present,
+        // willing, from the wrong tree — is the 44.9.0 shape in plain
+        // text, and `no stamp` is an older build.sh that predates the
+        // key: both refuse, both loudly, both overridable.
+        let cfg = config("schema_version = 1\n[system]\ndesktop = \"niri\"\n");
+        let pin = kumaui_pin().unwrap();
+
+        let home = mismatch_home(&format!("kuma-shell {} (g{})", pin.1, &pin.0[..7]));
+        std::fs::write(
+            home.path().join("kuma-files.desktop"),
+            "[Desktop Entry]\nX-Kumaui-Stamp=deadbeef\n",
+        )
+        .unwrap();
+        let err = verify_sibling_stamps(home.path(), &cfg).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("deadbeef"), "{text}");
+        assert!(text.contains("KUMA_ALLOW_KUMAUI_MISMATCH"), "{text}");
+
+        let home = mismatch_home(&format!("kuma-shell {} (g{})", pin.1, &pin.0[..7]));
+        std::fs::write(home.path().join("kuma-term.desktop"), "[Desktop Entry]\n").unwrap();
+        let err = verify_sibling_stamps(home.path(), &cfg).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("no stamp"), "{text}");
     }
 
     /// The declaration matrix every structural change to the generator
