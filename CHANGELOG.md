@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v44.12.0 (2026-10-22)
+
 - **The kumaui pin rides to v0.6.0.** The audit's #1 polish gap closes:
   paste works in every shell text field (Ctrl+V into the launcher query,
   the Wi-Fi, lock, greeter and polkit passwords, and the settings edits;
