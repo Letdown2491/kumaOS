@@ -3751,6 +3751,14 @@ kernel.sysrq = 0
 kernel.oops_limit = 100
 kernel.warn_limit = 100
 
+# And what stopping does: -1 reboots instantly. The oops journal is
+# already on disk, the panic screen names nothing a person can act on,
+# and the machine's greenboot and previous deployment are waiting for
+# exactly this boot. Fedora's default (0) hangs until a human holds
+# the power button — the one outcome none of the machinery expects.
+# secureblue's audited value; the owner ruled it (2026-10-21).
+kernel.panic = -1
+
 # Consoles that echo kernel addresses leak them to whoever can read
 # the screen. 3 keeps warnings legible and the addresses gone.
 kernel.printk = 3 3 3 3
