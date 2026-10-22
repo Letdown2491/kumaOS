@@ -317,10 +317,7 @@ fn verify_sibling_stamps_loud(parent: &Path, config: &Config, loud: bool) -> Res
             let path = parent.join(format!("{name}.desktop"));
             let text = std::fs::read_to_string(&path)
                 .with_context(|| format!("reading {} for its ride stamp", path.display()))?;
-            let stamp = text
-                .lines()
-                .find_map(|l| l.strip_prefix("X-Kumaui-Stamp="))
-                .map(str::trim);
+            let stamp = text.lines().find_map(|l| l.strip_prefix("X-Kumaui-Stamp=")).map(str::trim);
             let ok = stamp.is_some_and(|s| {
                 s != "unknown" && (pin_sha.starts_with(s) || s.starts_with(&pin_sha))
             });
