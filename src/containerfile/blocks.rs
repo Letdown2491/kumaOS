@@ -3771,6 +3771,15 @@ vm.unprivileged_userfaultfd = 0
 vm.mmap_rnd_bits = 32
 vm.mmap_rnd_compat_bits = 16
 net.core.bpf_jit_harden = 2
+
+# Unprivileged BPF programs stay privileged: the eBPF program and map
+# surface is kernel-attack surface no desktop program needs. Fedora's
+# own default is 2 — disabled permanently, where secureblue's audited
+# conf pins 1 (disabled, re-enableable by root) — so the floor pins the
+# kernel's stronger answer, keeping the posture if a future kernel
+# config floats the default back (the :44 float moved softer keys).
+kernel.unprivileged_bpf_disabled = 2
+
 fs.protected_regular = 2
 fs.protected_fifos = 2
 

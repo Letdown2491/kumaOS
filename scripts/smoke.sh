@@ -3794,7 +3794,8 @@ smoke_boot() {
         kernel.sysrq kernel.oops_limit kernel.warn_limit kernel.printk \
         kernel.core_pattern fs.suid_dumpable fs.binfmt_misc.status \
         dev.tty.ldisc_autoload vm.unprivileged_userfaultfd vm.mmap_rnd_bits \
-        vm.mmap_rnd_compat_bits net.core.bpf_jit_harden fs.protected_regular \
+        vm.mmap_rnd_compat_bits net.core.bpf_jit_harden kernel.unprivileged_bpf_disabled \
+        fs.protected_regular \
         fs.protected_fifos net.ipv4.tcp_syncookies net.ipv4.tcp_rfc1337 \
         net.ipv4.tcp_timestamps net.ipv4.icmp_echo_ignore_broadcasts \
         net.ipv4.icmp_ignore_bogus_error_responses net.ipv4.icmp_echo_ignore_all \
@@ -3811,7 +3812,7 @@ smoke_boot() {
         net.ipv6.conf.all.use_tempaddr net.ipv6.conf.default.use_tempaddr \
         net.ipv4.conf.all.log_martians net.ipv4.conf.default.log_martians' \
         | tr '\n' ' ' | xargs)
-    want="1 2 1 3 1 0 100 100 3 3 3 3 |/bin/false 0 0 0 0 32 16 2 2 2 \
+    want="1 2 1 3 1 0 100 100 3 3 3 3 |/bin/false 0 0 0 0 32 16 2 2 2 2 \
 1 1 0 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 2 2 1 0 0 0 0 2 2 1 1"
     [ "$hard" = "$want" ] || bad "hardening sysctls drifted: got '$hard', want '$want'"
     ok "hardening sysctls at the floor"
