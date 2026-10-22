@@ -93,14 +93,14 @@ runs:
                     && echo "   .. vgem built and loaded"
             fi
         fi
-        # A freshly insmod'd node ships 0600 root:root — devtmpfs's
-        # default, and the runner's udev rules do not widen it — while
-        # the smoke's qemu runs as this user, not root. An unopenable
-        # node is indistinguishable from no node to qemu's scan: it
-        # silently skips the EACCES and reports "no drm render node
-        # available" (measured: reproduced locally, byte-identical, on
-        # 2026-10-05). The /dev/kvm rule below is the same lesson.
-        sudo chmod 666 /dev/dri/renderD* 2>/dev/null || true
+        # The chmod that opens the node lives AFTER the scan, on the
+        # specific node: a freshly insmod'd node ships 0600 root:root —
+        # devtmpfs's default, and the runner's udev rules do not widen
+        # it — while the smoke's qemu runs as this user, not root. An
+        # unopenable node is indistinguishable from no node to qemu's
+        # scan: it silently skips the EACCES and reports "no drm render
+        # node available" (measured: reproduced locally, byte-identical,
+        # on 2026-10-05). The /dev/kvm rule below is the same lesson.
         # A node that opens is not a node EGL can use. The runners'
         # native render node is a faux-bus dummy — the image's trick for
         # giving software rendering a node at all — and it GBMs at scan
@@ -156,9 +156,27 @@ runs:
         for candidate in /dev/dri/renderD*; do
             [ "$candidate" = "$vgem_node" ] || sudo chmod 000 "$candidate" || true
         done
+        # The node the sysfs scan read and the node under /dev/dri are
+        # not the same event: devtmpfs materializes the device node
+        # asynchronously with the class entry, and the out-of-tree
+        # path's seven seconds of make hide that while the in-tree
+        # modprobe's zero seconds do not — one runner's open check met
+        # a 0600 node the chmod had raced (measured 2026-10-22, one of
+        # three otherwise identical jobs, the settle lesson's twin).
+        # So wait for the node to exist, then open the one node.
+        waited=0
+        while [ ! -c "$vgem_node" ] && [ "$waited" -lt 50 ]; do
+            sleep 0.1
+            waited=$((waited + 1))
+        done
+        sudo chmod 666 "$vgem_node" 2>/dev/null || true
         # The check is the qemu user's, not root's: ls sees a node root
-        # owns, open is what qemu needs.
+        # owns, open is what qemu needs. What the failure leaves behind
+        # is the next diagnosis's input.
         test -r "$vgem_node" && test -w "$vgem_node" || {
+            ls -la /dev/dri/ >&2 || true
+            stat -c '%n %a %U:%G' /dev/dri/renderD* >&2 2>/dev/null || true
+            id >&2
             echo "$vgem_node exists but the qemu user cannot open it"
             exit 1
         }

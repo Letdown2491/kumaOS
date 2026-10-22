@@ -2851,7 +2851,7 @@ smoke_published() {
     # machine's release from its own image (the rehearsal), or takes the
     # road's release image as the target when --delta-target names one.
     if [ $DELTA_PUBLISHED -eq 1 ]; then
-        run_delta_arm "$name" "$image" "$target_ref"
+        run_delta_arm "$name" "$image" "$target_ref" "$pass"
     fi
 
     echo "   .. powering off"
@@ -3007,7 +3007,7 @@ stop_delta_registry() {
 # way, and a lap that pushed anywhere else would watch the verb refuse
 # an update the lap itself misplaced.
 run_delta_arm() {
-    local name=$1 machine_tag=$2 target_ref=${3:-}
+    local name=$1 machine_tag=$2 target_ref=${3:-} sudo_pass=${4:-}
     local dir="vm-smoke/$name"
 
     # The registry tag is the tier the machine tracks. A machine with no
@@ -3079,14 +3079,18 @@ run_delta_arm() {
     # against the published stage's account and died here).
     local regconf
     regconf=$(printf '[[registry]]\nlocation = "10.0.2.2:%d/kuma"\ninsecure = true\n' "$DELTA_PORT")
-    # Both halves of the authentication, in their places: sshpass for
-    # the SSH hop (a raw ssh with stdin piped cannot answer its own
-    # prompt — rounds 1-2 died in ssh-askpass), and the password FIRST
-    # on stdin for the remote sudo -S, with the file after it (round 3
-    # shipped only the file, and sudo counted the conf's three lines as
-    # three wrong passwords).
-    printf '%s\n%s\n' "$pass" "$regconf" |
-        sshpass -p "$pass" ssh "${ssh_opts[@]}" "sudo -S -p '' tee /etc/containers/registries.conf.d/90-smoke-delta.conf >/dev/null" \
+    # Both halves of the authentication, in their places: the caller's
+    # guest() owns the ssh hop (key for the boot stage, sshpass for the
+    # published one), and the sudo password rides stdin FIRST with the
+    # file second — sudo -S reads its password from the same stdin tee
+    # reads the conf from, and the two stages' accounts do not share
+    # one (boot's answers to `kuma`, the published stage's to
+    # smoke-account-password — hence the argument). The rehearsal ran
+    # boot's password against the published stage's account and died
+    # here; this lap, the arm read a $pass only smoke_published's scope
+    # ever set and died under set -u before asking either.
+    printf '%s\n%s\n' "$sudo_pass" "$regconf" |
+        guest "sudo -S -p '' tee /etc/containers/registries.conf.d/90-smoke-delta.conf >/dev/null" \
             2>>"vm-smoke/gsudo-$name.err" ||
         bad "cannot point the guest at the lap's registry"
     ok "the guest accepts the lap's registry over plain HTTP"
@@ -4042,7 +4046,7 @@ smoke_boot() {
             *) bad "--delta needs a desktop example; $name has no release tag" ;;
         esac
 
-        run_delta_arm "$name" "$tag"
+        run_delta_arm "$name" "$tag" "" "kuma"
     fi
 
     # Shutting down is not what this test is about, and the guest's test
