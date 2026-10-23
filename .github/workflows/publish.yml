@@ -266,7 +266,7 @@ jobs:
           # the delta lane's scaffold pull dedups the same way (#49's
           # ruling). The digest the signature and the laps key off is
           # the chunked manifest's, computed here — not assumed.
-          podman push --compression zstd:chunked --digestfile digest.txt "${{ steps.ref.outputs.staging }}"
+          podman push --compression-format zstd:chunked --digestfile digest.txt "${{ steps.ref.outputs.staging }}"
           echo "digest=$(cat digest.txt)" >> "$GITHUB_OUTPUT"
 
       - name: sign

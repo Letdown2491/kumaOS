@@ -3075,7 +3075,7 @@ run_delta_arm() {
         podman commit --change 'LABEL io.kuma.smoke=delta-release' "$cid" "$rel:$release_tag" >/dev/null ||
             { podman rm -f "$cid" >/dev/null 2>&1; bad "cannot commit the release layer"; }
         podman rm -f "$cid" >/dev/null 2>&1
-        podman push -q --tls-verify=false --compression zstd:chunked "$rel:$release_tag" >/dev/null ||
+        podman push -q --tls-verify=false --compression-format zstd:chunked "$rel:$release_tag" >/dev/null ||
             bad "cannot push the release to the lap's registry"
         ok "the release is up on $rel:$release_tag, content-diverged both ways"
     fi
