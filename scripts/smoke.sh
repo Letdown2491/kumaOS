@@ -3051,7 +3051,14 @@ run_delta_arm() {
         local iid
         iid=$(podman pull -q "$target_ref") ||
             bad "cannot pull the release the road built ($target_ref)"
-        podman push -q --tls-verify=false "$iid" "$rel:$release_tag" >/dev/null ||
+        # The re-push names its compression explicitly: podman 6's store
+        # round-trip defaults the layers back to gzip (5.x preserved the
+        # source's blobs), and the lap's own assertion below would then
+        # rightly refuse the downgraded copy — measured on the release
+        # road, 221 of the release's layers de-chunked in transit. The
+        # gate stays honest: the pull above is by the road's digest, and
+        # the re-chunk re-derives the same chunks from the same bytes.
+        podman push -q --tls-verify=false --compression-format zstd:chunked "$iid" "$rel:$release_tag" >/dev/null ||
             bad "cannot push the road's release to the lap's registry"
         ok "the release is the road's own image, up on $rel:$release_tag"
     else
