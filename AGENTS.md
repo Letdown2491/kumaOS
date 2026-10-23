@@ -269,6 +269,16 @@ offer beyond the confirmation line itself.
   container `cargo test` is blocked until `sudo rm -rf vm-smoke` runs
   (15 GB of disk.raw and OVMF state measured, Oct 5's laps). Clean the
   debris after any local lap, before the next container build or test.
+- doctor --json exits non-zero on a failed check and the document still
+  carries the grades: a smoke step that judged the exit before the grades
+  read a graded failure as "cannot read doctor --json" (Oct 23's
+  dead-disk red, the verdict buried under the wrong message). Read the
+  document first, then judge the grades.
+- the snapshot timer's Persistent catch-up can land in the same second a
+  hand starts the unit, and a oneshot's second start runs the moment the
+  first finished — the snapshot script now skips a snapshot named for a
+  second that already has one (the same loss left the unit failed and
+  doctor's snapshot check red, Oct 23's dead-disk red).
 
 ## Agent skills
 

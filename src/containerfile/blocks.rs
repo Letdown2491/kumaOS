@@ -870,7 +870,17 @@ store="$target/.snapshots"
 btrfs subvolume show "$target" >/dev/null 2>&1 || exit 0
 
 install -d -m 0755 "$store"
-btrfs subvolume snapshot -r "$target" "$store/$(date +%Y-%m-%dT%H%M%S)" >/dev/null
+snap="$store/$(date +%Y-%m-%dT%H%M%S)"
+
+# The same second can start this unit twice: the timer's boot catch-up
+# lands inside the second a hand starts it, and systemd runs a oneshot's
+# second start the moment the first has finished. The snapshot named for
+# this second then already exists, and creating it again fails the unit —
+# which grades doctor's snapshot check fail over a race that lost
+# nothing. One snapshot per second is what the name promises; the rerun
+# has nothing to add.
+if [ -e "$snap" ]; then exit 0; fi
+btrfs subvolume snapshot -r "$target" "$snap" >/dev/null
 
 # Newest first. Keep keep_recent whatever their age, then the newest
 # survivor of each of keep_daily days the recent tier did not already

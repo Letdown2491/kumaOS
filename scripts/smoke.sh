@@ -3478,9 +3478,13 @@ ENV
         # backup.enable is true, and smoke.sh set that itself. The
         # assertion proved only that this script wrote its own
         # declaration. A missing stamp would have stayed green.
-        local grades
-        grades=$(sudoq "kuma doctor --json" \
-            | python3 -c 'import sys,json
+        local grades doctor_json
+        # doctor --json exits non-zero when a check failed, and the
+        # document still carries the grades. Judging the exit before the
+        # grades buried the real verdict once: a snapshot unit that lost
+        # a same-second race reported itself as an unreadable document.
+        doctor_json=$(sudoq "kuma doctor --json" || true)
+        grades=$(printf '%s\n' "$doctor_json" | python3 -c 'import sys,json
 d=json.load(sys.stdin)
 print(" ".join(c["grade"] for c in d["checks"] if c["name"]=="backup") or "absent")' 2>/dev/null) \
             || bad "cannot read doctor --json"
