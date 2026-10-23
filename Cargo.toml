@@ -100,16 +100,17 @@ schemars = { version = "1.2.2", features = ["derive"] }
 # stack the transport does not use (notes/44.4.0-plan.md, item 1). os-rng is
 # what key generation uses; the default feature set is `std` alone.
 nostr = { version = "0.45.5", features = ["nip06", "nip44", "nip46", "nip49", "os-rng"] }
-# The Secret Service client the vault stores through. Async-only and tokio
-# by default; the daemon bridges that for keyring reads and keeps its own
-# transport blocking. oo7 cannot be a dev-only or feature-gated dep: the
-# keyring is the vault's wall, not an optional backend.
-oo7 = "0.6.0"
-# The runtime oo7's keyring calls need, for the daemon's bridge and for
-# the test harness; the transport stays blocking beside it.
+# The Secret Service, spoken directly: the vault's client is this tree's
+# own zbus 6 module (src/nostr/secrets.rs, #51) rather than the oo7
+# crate, whose zvariant 5.x dependency family RustSec has declared
+# unmaintained. The keyring is the vault's wall, not an optional
+# backend; the client is one module wide, and the wall stays ours.
+zbus = { version = "6.1", default-features = false, features = ["tokio", "proxy"] }
+# The runtime the Secret Service client's calls need, for the daemon's
+# bridge and for the test harness; the transport stays blocking beside it.
 tokio = { version = "1.53", features = ["rt", "macros"] }
-# Direct so the vault can mint its random wrap passphrase rather than
-# reaching through oo7 for one; the version is the tree's own.
+# Direct so the vault can mint its random wrap passphrase itself; the
+# version is the tree's own.
 getrandom = "0.3"
 # Direct for the daemon's peer-uid check on the socket (SO_PEERCRED), which
 # std does not expose; already in the tree transitively.

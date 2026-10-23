@@ -96,8 +96,8 @@ pub fn serve<S: SecretStore + Send + 'static>(
 /// would wedge forever holding the daemon's lock. A runtime of one's
 /// own drives what the request spawns, and the vault's futures stay
 /// un-`Send`, as the vault intends. It matches the store's own shape:
-/// oo7 opens a new D-Bus connection per operation anyway, so nothing
-/// outlives the request that needed it.
+/// the Secret Service client opens a new D-Bus connection per
+/// operation, so nothing outlives the request that needed it.
 fn one_connection<S: SecretStore>(stream: UnixStream, daemon: Arc<Mutex<Daemon<S>>>) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

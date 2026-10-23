@@ -20,9 +20,10 @@
 //!
 //! Storage itself sits behind [`SecretStore`] so every behavior the
 //! daemon will get is testable offline against an in-memory store; the
-//! real backend is the oo7 adapter at the bottom of this file, which is
-//! compile-checked here and exercised by the smoke stage on a machine
-//! that has a Secret Service.
+//! real backend is the Secret Service client (`super::secrets`) behind
+//! `KeyringStore` at the bottom of this file, which is compile-checked
+//! here and exercised by the smoke stage on a machine that has a Secret
+//! Service.
 
 use anyhow::{anyhow, bail, Context, Result};
 use nostr::key::PublicKey;
@@ -477,53 +478,27 @@ fn generate_wrap() -> Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// The real store: the Secret Service's login collection through oo7.
-/// A new connection per operation, deliberately — vault operations are
-/// rare (setup, unlock, destroy), and a held D-Bus connection is one
-/// more file descriptor for the hardened unit to justify.
+/// The real store: the Secret Service's login collection through the
+/// tree's own client (`super::secrets`) — one new connection per
+/// operation, which is the client's shape too. The conversion from the
+/// vault's attribute pairs to the D-Bus map happens here, at the wall.
 pub struct KeyringStore;
+
+fn attributes_map() -> std::collections::HashMap<String, String> {
+    VAULT_ATTRIBUTES.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+}
 
 impl SecretStore for KeyringStore {
     async fn load(&self) -> Result<Option<Vec<u8>>> {
-        let keyring = oo7::Keyring::new()
-            .await
-            .map_err(|e| anyhow!("cannot reach the Secret Service: {e}"))?;
-        let items = keyring
-            .search_items(&VAULT_ATTRIBUTES)
-            .await
-            .map_err(|e| anyhow!("cannot search the login collection: {e}"))?;
-        match items.first() {
-            Some(item) => {
-                let secret = item
-                    .secret()
-                    .await
-                    .map_err(|e| anyhow!("the vault item would not open: {e}"))?;
-                Ok(Some(secret.as_bytes().to_vec()))
-            }
-            None => Ok(None),
-        }
+        super::secrets::load(&attributes_map()).await
     }
 
     async fn save(&self, payload: &[u8]) -> Result<()> {
-        let keyring = oo7::Keyring::new()
-            .await
-            .map_err(|e| anyhow!("cannot reach the Secret Service: {e}"))?;
-        keyring
-            .create_item(VAULT_LABEL, &VAULT_ATTRIBUTES, oo7::Secret::blob(payload), true)
-            .await
-            .map_err(|e| anyhow!("the keyring refused the vault item: {e}"))?;
-        Ok(())
+        super::secrets::save(VAULT_LABEL, &attributes_map(), payload).await
     }
 
     async fn remove(&self) -> Result<()> {
-        let keyring = oo7::Keyring::new()
-            .await
-            .map_err(|e| anyhow!("cannot reach the Secret Service: {e}"))?;
-        keyring
-            .delete(&VAULT_ATTRIBUTES)
-            .await
-            .map_err(|e| anyhow!("the keyring refused the delete: {e}"))?;
-        Ok(())
+        super::secrets::remove(&attributes_map()).await
     }
 }
 
