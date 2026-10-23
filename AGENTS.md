@@ -141,6 +141,11 @@ offer beyond the confirmation line itself.
   feature that shipped (Mod+Print: grim | slurp | swappy, blocks.rs ~2418;
   closed within the hour).
 
+- `fs.binfmt_misc.status` reads back 0 or the word: while the misc fs
+  is unregistered the sysctl is numeric, once systemd-binfmt mounts it
+  the same floor value reports `disabled`. The hardening lap's read
+  normalizes the words before the compare — the posture is one thing,
+  its spellings are two.
 - A `-u` unit filter misses the "Started" line: `journalctl -u` filters
   by `_SYSTEMD_UNIT`, and a start line belongs to the manager that
   wrote it, not the unit it names. The user manager forwards to the

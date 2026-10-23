@@ -3808,6 +3808,10 @@ smoke_boot() {
     # eyes — so the user view EPERMs two of the reads, and with
     # stderr discarded the drift report cannot tell a hidden value from
     # a floor that stopped applying. Root sees the posture either way.
+    # binfmt_misc's status reads back 0 while the misc fs is
+    # unregistered and 'disabled' once systemd-binfmt mounts it — the
+    # newer guest kernel registers it, and the floor's 0 reports as the
+    # word. Same posture, two spellings; the read normalizes first.
     hard=$(gsudo 'sysctl -n kernel.yama.ptrace_scope kernel.kptr_restrict \
         kernel.dmesg_restrict kernel.perf_event_paranoid kernel.kexec_load_disabled \
         kernel.sysrq kernel.oops_limit kernel.warn_limit kernel.panic kernel.printk \
@@ -3830,6 +3834,7 @@ smoke_boot() {
         net.ipv6.conf.all.accept_source_route net.ipv6.conf.default.accept_source_route \
         net.ipv6.conf.all.use_tempaddr net.ipv6.conf.default.use_tempaddr \
         net.ipv4.conf.all.log_martians net.ipv4.conf.default.log_martians' \
+        | sed -e 's/^enabled$/1/' -e 's/^disabled$/0/' \
         | tr '\n' ' ' | xargs)
     want="1 2 1 3 1 0 100 100 -1 3 3 3 3 |/bin/false 0 0 0 0 32 16 2 2 2 2 \
 1 1 0 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 2 2 1 0 0 0 0 2 2 1 1"
