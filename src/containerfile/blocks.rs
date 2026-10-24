@@ -169,6 +169,12 @@ pub(crate) const NIRI_PACKAGES: &[&str] = &[
     "google-noto-sans-cjk-vf-fonts",
     // quiet identity: baked and configured, never run at shell startup
     "fastfetch",
+    // the loader's runtime for 128-bit atomics: prebuilt third-party
+    // binaries link it (Spotify's Soloist among them) and die at startup
+    // — "libatomic.so.1: cannot open" — before saying anything else.
+    // Tens of KiB, the same repo, no new trust root; the desktop is
+    // where prebuilt binaries run.
+    "libatomic",
 ];
 
 /// niri Recommends these, so they arrive whether or not `NIRI_PACKAGES`
@@ -192,6 +198,10 @@ pub(crate) const NIRI_EXCLUDES: &[&str] = &["alacritty", "waybar", "swaylock", "
 /// one a machine gets is the declaration's call, not the desktop set's.
 pub(crate) const COSMIC_PACKAGES: &[&str] = &[
     "cosmic-session",
+    // the loader's runtime for 128-bit atomics: prebuilt third-party
+    // binaries link it and die at the loader without it. Same why as
+    // the niri set's entry.
+    "libatomic",
     // the session requires files, term, and settings but not the text
     // editor — which the default dock pins, so ship it or the pin is dead
     "cosmic-edit",
