@@ -2508,7 +2508,10 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
          [nostr]\nenable = true\nserve = true\nrelays = [\"wss://relay.nip46.com\"]\n\
          [nostr.relay]\nenable = true\n\
          [overrides.\"org.mozilla.firefox\"]\nsockets = [\"wayland\"]\n\
-         [user]\nname = \"probe\"\nssh_keys = [\"ssh-ed25519 AAAAC3Nz probe@example\"]\n";
+         [user]\nname = \"probe\"\nssh_keys = [\"ssh-ed25519 AAAAC3Nz probe@example\"]\n\
+         [other_users.partner]\nshell = \"fish\"\n\
+         password_hash = \"$6$saltstring$svn8UoSVapNtMuq1ukKS4tPQd8iKwSMHWjl/O817G3uBnIFNjnQJuesI68u4OTLiBFdcbYEdFCoEOfaS35inz1\"\n\
+         ssh_keys = [\"ssh-ed25519 AAAAC3Nz partner@example\"]\nautologin = true\n";
 
     /// The two declaration values that get special handling because a
     /// careless one is a published secret, staged as files with modes
@@ -3107,9 +3110,12 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         assert!(!out.contains("kuma-user-keys"));
         assert!(out.contains("RUN systemctl enable kuma-user-sync.service"));
         // ... and it is a no-op with neither file present, rather than a
-        // unit that fails on every boot of a userless image.
+        // unit that fails on every boot of a userless image: the
+        // converge returns on an empty KUMA_USER, and the additional
+        // accounts' directory holds no files in this shape.
         assert!(USER_SYNC_SCRIPT.contains("if [ -f /usr/lib/kuma/user ]"));
-        assert!(USER_SYNC_SCRIPT.contains(r#"[ -n "${KUMA_USER:-}" ] || exit 0"#));
+        assert!(USER_SYNC_SCRIPT.contains(r#"[ -n "${KUMA_USER:-}" ] || return 0"#));
+        assert!(USER_SYNC_SCRIPT.contains("for account_file in /usr/lib/kuma/users.d/*"));
     }
 
     /// A shell the image does not install locks every account made on
@@ -3174,11 +3180,11 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
     fn a_written_hostname_is_applied_at_boot_not_shipped_as_image_content() {
         assert!(USER_SYNC_SCRIPT.contains("/var/lib/kuma/hostname"));
         assert!(USER_SYNC_SCRIPT.contains("> /etc/hostname"));
-        // Ahead of the account guard, so a machine that named itself but
+        // Ahead of the account work, so a machine that named itself but
         // declared no account still gets its name.
         let host = USER_SYNC_SCRIPT.find("/var/lib/kuma/hostname").unwrap();
-        let guard = USER_SYNC_SCRIPT.find(r#"[ -n "${KUMA_USER:-}" ] || exit 0"#).unwrap();
-        assert!(host < guard);
+        let converge = USER_SYNC_SCRIPT.find("converge_account() {").unwrap();
+        assert!(host < converge);
     }
 
     #[test]
@@ -3193,6 +3199,16 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
 
         let without = greetd_config(&config("schema_version = 1\n[user]\nname = \"mira\"\n"));
         assert!(!without.contains("[initial_session]"));
+
+        // An additional account can hold the one autologin seat: the
+        // greeter logs in whoever the declaration says, not only the
+        // primary. validate() refuses two, so the pick is unambiguous.
+        let additional = greetd_config(&config(
+            "schema_version = 1\n[user]\nname = \"mira\"\n\
+             [other_users.partner]\nautologin = true\n",
+        ));
+        assert!(additional.contains("user = \"partner\""));
+        assert!(!additional.contains("user = \"mira\""));
     }
 
     /// Mod+D opens the menu, and the stock line it replaces is grepped

@@ -49,6 +49,12 @@ the declaration no longer names. Runs at boot and on a daily timer.
 
 **Declaration.** Your `kuma.toml`. The file that says what the system is.
 
+**Additional account.** An account beside the primary, declared in
+`[other_users.<name>]` with the primary's schema minus the name field —
+the username is the table key. Converged at boot the same way the
+primary is; at most one account in the declaration may autologin. See
+[the contract](contract.md) for the shape's standing.
+
 **Delta build.** A build that compiles your declaration on top of a
 published release image instead of from the base, so a locally built
 machine can take a new release without giving up what makes it its own.

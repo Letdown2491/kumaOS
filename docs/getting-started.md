@@ -193,6 +193,23 @@ out and builds on the image you name instead.
 and encryption belong to the machine. Two machines built from this one
 file can differ on all three.
 
+**One primary, and anyone else who needs an account.** `[user]` is the
+machine's primary and stays in its section forever. Additional accounts
+— a partner, a kid, a kiosk — live beside it, keyed by name, with the
+same fields `[user]` has (minus the name; the key is the name):
+
+```toml
+[other_users.partner]
+shell = "fish"
+
+[other_users.kid]
+groups = []        # [] keeps an account out of wheel; the default is wheel
+autologin = true   # at most one account in the whole file may hold this
+```
+
+They are created and converged at first boot and after it, the same as
+the primary. A password hash for one comes from `kuma passwd partner`.
+
 Check it before building anything:
 
 ```console

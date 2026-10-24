@@ -239,6 +239,9 @@ COPY kuma-user-sync.service /usr/lib/systemd/system/kuma-user-sync.service
 RUN systemctl enable kuma-user-sync.service
 COPY --chmod=600 kuma-user /usr/lib/kuma/user
 COPY kuma-user-keys /etc/kuma/keys/probe
+COPY --chmod=600 kuma-user-partner /usr/lib/kuma/users.d/partner
+RUN test -x /usr/bin/fish
+COPY kuma-user-keys-partner /etc/kuma/keys/partner
 COPY kuma-sshd-keys.conf /etc/ssh/sshd_config.d/40-kuma-keys.conf
 
 COPY hostname /etc/hostname

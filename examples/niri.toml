@@ -67,6 +67,17 @@ shell = "fish"
 # ssh_keys = ["ssh-ed25519 AAAA..."]  # served to sshd from /etc/kuma/keys
 # autologin = true                    # straight to the desktop, no greeter
 
+# Additional accounts, keyed by name — the same fields [user] has, minus
+# the name: the table key is the name. Created and converged at first
+# boot and after it, the same as the primary. At most one account in the
+# whole declaration may autologin.
+# [other_users.partner]
+# shell = "fish"
+# password_hash = '$6$...'            # from `kuma passwd partner`
+# ssh_keys = ["ssh-ed25519 AAAA..."]
+# groups = []                         # [] keeps an account out of wheel
+# autologin = true
+
 [packages]
 # Baked into the image: changing this list needs a rebuild and a reboot.
 rpm = ["fish", "git-core", "git-core-doc", "distrobox", "tailscale"]
@@ -187,6 +198,8 @@ enable = true
 # round-trips into it.
 # [overrides."org.mozilla.firefox"]
 # scope = "system"                    # or "user"; system is where kuma installs apps
+#                                     # "user" means the [user] account — the
+#                                     # primary, not any [other_users] account
 # filesystems = ["home", "!xdg-config/kitty"]   # "!" takes a permission away
 # sockets = ["wayland", "!x11"]
 # devices = ["dri"]

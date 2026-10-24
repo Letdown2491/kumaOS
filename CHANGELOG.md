@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Additional accounts in the declaration.** `[other_users.<name>]`
+  declares an account beside the primary — the same fields `[user]`
+  has, minus the name (the table key is the name), the same defaults:
+  `shell`, `groups` (the default is still `wheel`; `[]` keeps an
+  account out of it), `password_hash` (creation-only, from
+  `kuma passwd <name>`), `ssh_keys` (served from `/etc/kuma/keys/<name>`
+  like the primary's), and `autologin` — of which at most one account
+  in the whole declaration may hold true, refused at check time
+  otherwise, and the greeter logs in whoever holds it, primary or not.
+  The accounts are created and converged at first boot and after it,
+  by the same sync unit, from `/usr/lib/kuma/users.d/<name>`; an
+  install of the image carries them onto every disk it makes, and
+  `kuma iso` says so when installer media bakes them. A name colliding
+  with `[user]`'s refuses: one name is one account.
+
 - **The nostr layer is on by default.** The baked declaration arms it:
   the desktop's own features need the layer, and a default machine
   otherwise runs a shell that draws a signer that cannot sign. Arming

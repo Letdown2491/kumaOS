@@ -465,8 +465,14 @@ enum Cmd {
     },
     /// Print the JSON Schema for kuma.toml, generated from the parser's own types
     Schema,
-    /// Hash a password for the [user] section (prompts; prints the line to paste)
-    Passwd,
+    /// Hash a password for an account (prompts; prints the line to paste).
+    /// Names the [user] account unless an [other_users.<name>] account is given.
+    Passwd {
+        /// An additional account's name: the paste target becomes
+        /// [other_users.<name>]. Absent, the hash is for [user].
+        #[arg(value_name = "ACCOUNT")]
+        account: Option<String>,
+    },
     /// Print shell completions (e.g. `kuma completions fish | source`)
     Completions {
         /// Shell to generate for
@@ -757,7 +763,7 @@ fn run(
         Cmd::FlatpakOverrides { scope } => flatpak_overrides(scope),
         Cmd::Hibernate { size, off, yes, json: _ } => hibernate_cmd(size, off, yes, json),
         Cmd::Schema => schema(),
-        Cmd::Passwd => passwd(),
+        Cmd::Passwd { account } => passwd(account.as_deref()),
         Cmd::Completions { shell } => {
             use clap::CommandFactory;
             clap_complete::generate(shell, &mut Cli::command(), "kuma", &mut std::io::stdout());
@@ -860,10 +866,18 @@ fn schema() -> Result<()> {
 /// The config wants a hash, not a password — kuma.toml is meant to live in
 /// git. This is the ergonomic path to one; the hash applies only when the
 /// account is first created.
-fn passwd() -> Result<()> {
+fn passwd(account: Option<&str>) -> Result<()> {
+    if let Some(name) = account {
+        // The same alphabet validate() enforces on the table key: a
+        // name that cannot be a section header should not be promised
+        // one by the paste message.
+        crate::config::validate_name(name, "other_users", &['-', '_'])?;
+    }
     use std::io::IsTerminal;
     let password = if std::io::stdin().is_terminal() {
-        let password = rpassword::prompt_password("New password for [user]: ")?;
+        let target =
+            account.map(|n| format!("[other_users.{n}]")).unwrap_or_else(|| "[user]".into());
+        let password = rpassword::prompt_password(format!("New password for {target}: "))?;
         let confirm = rpassword::prompt_password("Retype to confirm: ")?;
         if password != confirm {
             bail!("passwords don't match");
@@ -879,7 +893,8 @@ fn passwd() -> Result<()> {
         bail!("empty password");
     }
     println!("\npassword_hash = '{}'", hash_password(&password)?);
-    println!("\nPaste that into the [user] section of kuma.toml.");
+    let target = account.map(|n| format!("[other_users.{n}]")).unwrap_or_else(|| "[user]".into());
+    println!("\nPaste that into the {target} section of kuma.toml.");
     Ok(())
 }
 
@@ -3039,6 +3054,19 @@ fn iso(config_path: &Path, tag: &str, output: &Path) -> Result<()> {
         println!(
             "note: this installer bakes the declared user '{}' (account and password hash,\ncreated at first boot). For media you'll share, build from a declaration\nwithout [user]; Anaconda's create-a-user screen comes back automatically.\n",
             user.name
+        );
+    }
+    if !config.other_users.is_empty() {
+        // Same hazard, one section over: the additional accounts' files
+        // are image content, so installer media built from this
+        // declaration carries them — and a password hash can ride in
+        // one — onto every disk it installs.
+        let names: Vec<String> = config.other_users.keys().cloned().collect();
+        println!(
+            "note: this installer also bakes {} additional declared account{} ({}),\ncreated at first boot on every machine this media installs.\n",
+            names.len(),
+            if names.len() == 1 { "" } else { "s" },
+            names.join(", ")
         );
     }
     std::fs::create_dir_all(output)

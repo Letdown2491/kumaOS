@@ -319,12 +319,20 @@ fn drop_foreign_autologin(name: &str) -> String {
     format!(
         "# A greeter cannot autologin an account this machine will not\n\
          # have. Runs inside the build, so nothing has to read the image\n\
-         # from outside it.\n\
-         RUN for conf in {} {}; do \\\n    \
+         # from outside it: the primary's name comes from the image's own\n\
+         # user file. An additional declared account is never foreign —\n\
+         # its declaration rides in /usr/lib/kuma/users.d, image content,\n\
+         # so it exists on every install of this image, whoever the\n\
+         # installer's person is. Only the primary's autologin is the\n\
+         # primary's own, and only that one gets dropped here.\n\
+         RUN primary=\"$(sed -n \"/^KUMA_USER=/s/KUMA_USER='\\\\(.*\\\\)'/\\\\1/p\" /usr/lib/kuma/user 2>/dev/null)\"; \\\n    \
+         for conf in {} {}; do \\\n    \
          [ -f \"$conf\" ] || continue; \\\n    \
          grep -q '^\\[initial_session\\]' \"$conf\" || continue; \\\n    \
-         [ \"$(sed -n 's/^user *= *\"\\(.*\\)\"/\\1/p' \"$conf\" | tail -1)\" = '{name}' ] \\\n      \
-         || sed -i '/^\\[initial_session\\]/,$d' \"$conf\"; \\\n\
+         conf_user=\"$(sed -n 's/^user *= *\"\\(.*\\)\"/\\1/p' \"$conf\" | tail -1)\"; \\\n    \
+         [ \"$conf_user\" = \"$primary\" ] || continue; \\\n    \
+         [ \"$primary\" = '{name}' ] && continue; \\\n    \
+         sed -i '/^\\[initial_session\\]/,$d' \"$conf\"; \\\n\
          done\n",
         crate::containerfile::GREETD_CONF,
         crate::containerfile::COSMIC_GREETER_CONF,

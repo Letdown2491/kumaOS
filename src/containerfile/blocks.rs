@@ -709,12 +709,22 @@ pub(crate) fn initial_session(command: &str, user: &str) -> String {
     format!("\n[initial_session]\ncommand = \"{command}\"\nuser = \"{user}\"\n")
 }
 
-pub(crate) fn greetd_config(config: &Config) -> String {
-    let mut out = GREETD_CONFIG.to_string();
+/// The one account that logs straight into the desktop, if any:
+/// validate() refuses two across the whole declaration, so the pick is
+/// unambiguous — the primary first, an additional account otherwise.
+pub(crate) fn autologin_account(config: &Config) -> Option<&str> {
     if let Some(user) = &config.user {
         if user.autologin {
-            out.push_str(&initial_session(NIRI_SESSION, &user.name));
+            return Some(&user.name);
         }
+    }
+    config.other_users.iter().find(|(_, a)| a.autologin).map(|(n, _)| n.as_str())
+}
+
+pub(crate) fn greetd_config(config: &Config) -> String {
+    let mut out = GREETD_CONFIG.to_string();
+    if let Some(name) = autologin_account(config) {
+        out.push_str(&initial_session(NIRI_SESSION, name));
     }
     out
 }
@@ -1694,8 +1704,6 @@ if [ -f /var/lib/kuma/hostname ]; then
     fi
 fi
 
-[ -n "${KUMA_USER:-}" ] || exit 0
-
 # Written by the installs `kuma vm` performs: the key that lets the
 # machine running the build reach the disk it built. It lands in
 # /etc/kuma/keys/$KUMA_USER — the directory AuthorizedKeysFile already
@@ -1705,22 +1713,50 @@ fi
 # the merge: the same rule the hostname block above runs on. Rewritten
 # every boot rather than only at account creation, so it repairs itself
 # the way the hostname does.
-if [ -n "${KUMA_SSH_KEY:-}" ]; then
-    mkdir -p /etc/kuma/keys
-    echo "$KUMA_SSH_KEY" > "/etc/kuma/keys/$KUMA_USER"
-fi
+#
+# The convergence of one account, from the KUMA_* keys. The primary's
+# call happens once after the sources above; the additional declared
+# accounts each get their own call, with the keys unset between them.
+# The KUMA_SSH_KEY ride belongs here rather than beside the sources: it
+# is the install's key for the account the installer's file names, and
+# the additional accounts' files never carry one.
+converge_account() {
+    [ -n "${KUMA_USER:-}" ] || return 0
 
-if ! id -u "$KUMA_USER" &>/dev/null; then
-    args=(-m)
-    [ -n "${KUMA_SHELL:-}" ] && args+=(-s "$KUMA_SHELL")
-    useradd "${args[@]}" "$KUMA_USER"
-    if [ -n "${KUMA_PASSWORD_HASH:-}" ]; then
-        echo "$KUMA_USER:$KUMA_PASSWORD_HASH" | chpasswd -e
+    if [ -n "${KUMA_SSH_KEY:-}" ]; then
+        mkdir -p /etc/kuma/keys
+        echo "$KUMA_SSH_KEY" > "/etc/kuma/keys/$KUMA_USER"
     fi
-fi
-[ -n "${KUMA_SHELL:-}" ] && usermod -s "$KUMA_SHELL" "$KUMA_USER"
-for group in ${KUMA_GROUPS:-}; do
-    usermod -aG "$group" "$KUMA_USER"
+
+    if ! id -u "$KUMA_USER" &>/dev/null; then
+        args=(-m)
+        [ -n "${KUMA_SHELL:-}" ] && args+=(-s "$KUMA_SHELL")
+        useradd "${args[@]}" "$KUMA_USER"
+        if [ -n "${KUMA_PASSWORD_HASH:-}" ]; then
+            echo "$KUMA_USER:$KUMA_PASSWORD_HASH" | chpasswd -e
+        fi
+    fi
+    [ -n "${KUMA_SHELL:-}" ] && usermod -s "$KUMA_SHELL" "$KUMA_USER"
+    for group in ${KUMA_GROUPS:-}; do
+        usermod -aG "$group" "$KUMA_USER"
+    done
+}
+
+converge_account
+
+# The additional declared accounts: one file each under
+# /usr/lib/kuma/users.d, converged after the primary. The keys are unset
+# before each source so an account that names fewer keys than the one
+# before it never inherits the previous account's answers — a silent
+# inheritance would converge one person's groups onto another's name.
+# The directory is image content and ships no files when the
+# declaration names no additional accounts; the -f guard skips the
+# unmatched glob.
+for account_file in /usr/lib/kuma/users.d/*; do
+    [ -f "$account_file" ] || continue
+    unset KUMA_USER KUMA_SHELL KUMA_GROUPS KUMA_PASSWORD_HASH KUMA_SSH_KEY
+    . "$account_file"
+    converge_account
 done
 "#;
 
@@ -3495,18 +3531,15 @@ fn desktop_cosmic(e: &mut Emitter<'_>) {
     // display-manager.service) running `greetd --config
     // /etc/greetd/cosmic-greeter.toml` — kuma writes no greeter config
     // of its own here, unlike the niri arm.
-    if let Some(user) = &config.user {
-        if user.autologin {
-            // same greetd initial_session semantics as the niri arm
-            // (straight into the desktop at boot, greeter on logout),
-            // appended to the config cosmic-greeter.service reads.
-            // test -f first so a moved config fails the build instead
-            // of autologin silently not happening.
-            e.raw(&format!(
-                "RUN test -f /etc/greetd/cosmic-greeter.toml && printf '\\n[initial_session]\\ncommand = \"start-cosmic\"\\nuser = \"{}\"\\n' >> /etc/greetd/cosmic-greeter.toml\n",
-                user.name
-            ));
-        }
+    if let Some(name) = autologin_account(config) {
+        // same greetd initial_session semantics as the niri arm
+        // (straight into the desktop at boot, greeter on logout),
+        // appended to the config cosmic-greeter.service reads.
+        // test -f first so a moved config fails the build instead
+        // of autologin silently not happening.
+        e.raw(&format!(
+            "RUN test -f /etc/greetd/cosmic-greeter.toml && printf '\\n[initial_session]\\ncommand = \"start-cosmic\"\\nuser = \"{name}\"\\n' >> /etc/greetd/cosmic-greeter.toml\n"
+        ));
     }
     // kuma declares the user and its look is settings, not a wizard —
     // the first-boot setup must not fire. Plain rm so the build fails
@@ -4346,7 +4379,7 @@ fn user(e: &mut Emitter<'_>) {
     // converger has to be present in an image that declares no account,
     // because that is the image an installer writes /var/lib/kuma/user onto.
     let mut account = None;
-    let mut keys = None;
+    let mut keys_primary = None;
     let mut sshd_conf = None;
     if let Some(user) = &config.user {
         let mut decl = format!("KUMA_USER='{}'\n", user.name);
@@ -4363,9 +4396,41 @@ fn user(e: &mut Emitter<'_>) {
         if !user.ssh_keys.is_empty() {
             let mut joined = user.ssh_keys.join("\n");
             joined.push('\n');
-            keys = Some(e.stage("kuma-user-keys", joined));
-            sshd_conf = Some(e.stage("kuma-sshd-keys.conf", SSHD_KUMA_KEYS));
+            keys_primary = Some(e.stage("kuma-user-keys", joined));
         }
+    }
+
+    // The additional accounts, one declaration file each: the same keys
+    // as the primary's, the name carried by the file it lands in. They
+    // stay out of /usr/lib/kuma/user because that one file answers for
+    // the primary, whom the installer replaces — the additional
+    // accounts are nobody's to replace, and converge on every boot the
+    // same way the primary does.
+    let mut others = Vec::new();
+    let mut keys_others = Vec::new();
+    for (name, extra) in &config.other_users {
+        let mut decl = format!("KUMA_USER='{}'\n", name);
+        if let Some(shell) = &extra.shell {
+            decl.push_str(&format!("KUMA_SHELL='/usr/bin/{shell}'\n"));
+        }
+        if !extra.groups.is_empty() {
+            decl.push_str(&format!("KUMA_GROUPS='{}'\n", extra.groups.join(" ")));
+        }
+        if let Some(hash) = &extra.password_hash {
+            decl.push_str(&format!("KUMA_PASSWORD_HASH='{hash}'\n"));
+        }
+        others.push((name, e.stage(&format!("kuma-user-{name}"), decl)));
+        if !extra.ssh_keys.is_empty() {
+            let mut joined = extra.ssh_keys.join("\n");
+            joined.push('\n');
+            keys_others.push((name, e.stage(&format!("kuma-user-keys-{name}"), joined)));
+        }
+    }
+    // One sshd conf covers every account's key file: the
+    // AuthorizedKeysFile line serves /etc/kuma/keys/%u by name. Staged
+    // once, when any account carried keys at all.
+    if keys_primary.is_some() || !keys_others.is_empty() {
+        sshd_conf = Some(e.stage("kuma-sshd-keys.conf", SSHD_KUMA_KEYS));
     }
 
     e.raw("\n");
@@ -4381,10 +4446,24 @@ fn user(e: &mut Emitter<'_>) {
             // fails the build instead of locking the account out at login
             e.raw(&format!("RUN test -x /usr/bin/{shell}\n"));
         }
-        if let (Some(keys), Some(sshd_conf)) = (&keys, &sshd_conf) {
+        if let Some(keys) = &keys_primary {
             e.copy(keys, &format!("/etc/kuma/keys/{}", user.name));
-            e.copy(sshd_conf, "/etc/ssh/sshd_config.d/40-kuma-keys.conf");
         }
+    }
+    // The additional accounts: same mode reasoning as the primary's
+    // declaration file (a hash can ride in one), the same build-time
+    // shell guard, and each account's keys under its own name.
+    for (name, stage) in &others {
+        e.copy_private(stage, &format!("/usr/lib/kuma/users.d/{name}"));
+        if let Some(shell) = &config.other_users[*name].shell {
+            e.raw(&format!("RUN test -x /usr/bin/{shell}\n"));
+        }
+    }
+    for (name, keys) in &keys_others {
+        e.copy(keys, &format!("/etc/kuma/keys/{name}"));
+    }
+    if let Some(sshd_conf) = &sshd_conf {
+        e.copy(sshd_conf, "/etc/ssh/sshd_config.d/40-kuma-keys.conf");
     }
 }
 

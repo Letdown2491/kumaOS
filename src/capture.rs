@@ -37,8 +37,10 @@ use std::path::Path;
 /// state into a file that gets committed and baked world-readable into an
 /// image is that same mistake on a schedule. Same for [system]: hostname
 /// and timezone are machine state by an explicit design principle, and a
-/// capture verb is exactly the pressure that would erode it. Neither is a
-/// TODO. They are the boundary.
+/// capture verb is exactly the pressure that would erode it. The
+/// additional accounts in [other_users] are the first reason's again —
+/// the same hash field, one table key over. None of it is a TODO. They
+/// are the boundary.
 const CAPTURABLE: &[&str] = &["flatpak", "brew"];
 
 /// The documents `capture` prints. Assembled apart from the prints so

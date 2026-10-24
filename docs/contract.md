@@ -121,6 +121,16 @@ shape the swapfile hibernate machinery assumes, which is why it is the
 design rather than a missing feature. It names what 44.0 does, not what
 may never exist.
 
+**One primary, any number of additional accounts.** A kumaOS image
+declares exactly one primary account — `[user]`, permanent by the
+corpus promise — and any number of additional accounts beside it in
+`[other_users.<name>]`, each carrying the primary's schema minus the
+name field, the username being the table key. The primary is whom the
+installer's question answers for and whom a shared image goes without;
+the additional accounts converge on every boot the same way everything
+else declared does. This names what the declaration does, not what may
+never exist.
+
 **Reproducible builds, and an SBOM.** kumaOS makes no claim that two
 builds of one declaration produce identical bytes, and emits no SBOM.
 The resolved versions in `kuma.lock` are adjacent, not the same thing.

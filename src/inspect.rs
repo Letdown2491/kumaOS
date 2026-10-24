@@ -22,6 +22,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// better question than what its unit files happen to say.
 /// The account a declaration asked for, baked in at build time.
 const BAKED_USER: &str = "/usr/lib/kuma/user";
+/// The additional declared accounts, one file each. Image content like
+/// the primary's file, so its presence means the sync unit has work.
+const BAKED_USERS_D: &str = "/usr/lib/kuma/users.d";
 /// The account an installer asked for, written onto the target. A
 /// published image declares none, so on an installed machine this is the
 /// only one of the two that exists.
@@ -1547,8 +1550,18 @@ fn check_enablements(root: &Path, report: &mut impl FnMut(Grade, &str, String, O
 ///
 /// Takes both paths so the branch is testable: on a real machine only
 /// one of the four combinations is ever live.
-fn user_sync_has_an_account(baked: &Path, installed: &Path) -> bool {
-    baked.exists() || installed.exists()
+fn user_sync_has_an_account(baked: &Path, installed: &Path, additional: &Path) -> bool {
+    // An additional-accounts-only declaration (no [user]) bakes no
+    // primary file, but the accounts still converge every boot: the
+    // users.d directory names the work the same way the primary's file
+    // does.
+    baked.exists() || installed.exists() || read_dir_has_files(additional)
+}
+
+fn read_dir_has_files(dir: &Path) -> bool {
+    std::fs::read_dir(dir)
+        .map(|entries| entries.filter_map(|e| e.ok()).any(|e| e.path().is_file()))
+        .unwrap_or(false)
 }
 
 /// The oneshots record their last run in Result=; the timers are what
@@ -1582,7 +1595,11 @@ fn convergence_targets(
 
 fn check_convergence(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
     let targets = convergence_targets(
-        user_sync_has_an_account(Path::new(BAKED_USER), Path::new(INSTALLED_USER)),
+        user_sync_has_an_account(
+            Path::new(BAKED_USER),
+            Path::new(INSTALLED_USER),
+            Path::new(BAKED_USERS_D),
+        ),
         Path::new(BAKED_FLATPAKS).exists(),
         Path::new(BAKED_BREWS).exists(),
     );
@@ -4120,22 +4137,34 @@ mod tests {
     fn the_account_converger_is_graded_on_an_installed_machine_too() {
         let dir = tempfile::tempdir().unwrap();
         let (baked, installed) = (dir.path().join("usr-user"), dir.path().join("var-user"));
+        let additional = dir.path().join("users.d");
 
         // A published image before its first boot: nothing to converge.
-        assert!(!user_sync_has_an_account(&baked, &installed));
+        assert!(!user_sync_has_an_account(&baked, &installed, &additional));
 
         // The same image after `kuma install` wrote the answer.
         std::fs::write(&installed, "KUMA_USER='test'\n").unwrap();
-        assert!(user_sync_has_an_account(&baked, &installed));
+        assert!(user_sync_has_an_account(&baked, &installed, &additional));
 
         // A declaration that names an account, built and booted directly.
         std::fs::remove_file(&installed).unwrap();
         std::fs::write(&baked, "KUMA_USER='declared'\n").unwrap();
-        assert!(user_sync_has_an_account(&baked, &installed));
+        assert!(user_sync_has_an_account(&baked, &installed, &additional));
 
         // Both, which is an installed machine whose image declared one.
         std::fs::write(&installed, "KUMA_USER='test'\n").unwrap();
-        assert!(user_sync_has_an_account(&baked, &installed));
+        assert!(user_sync_has_an_account(&baked, &installed, &additional));
+
+        // An additional-accounts-only declaration: no primary file
+        // bakes, but the accounts ride in /usr/lib/kuma/users.d and the
+        // sync unit has work on every boot. The directory is real image
+        // content in that shape, so its files name the work.
+        std::fs::remove_file(&baked).unwrap();
+        std::fs::remove_file(&installed).unwrap();
+        assert!(!user_sync_has_an_account(&baked, &installed, &additional));
+        std::fs::create_dir(&additional).unwrap();
+        std::fs::write(additional.join("partner"), "KUMA_USER='partner'\n").unwrap();
+        assert!(user_sync_has_an_account(&baked, &installed, &additional));
     }
 
     /// The branch that fires when something is actually wrong, which on a

@@ -38,6 +38,13 @@ pub struct Config {
     pub system: System,
     #[serde(default)]
     pub user: Option<User>,
+    /// Additional accounts, keyed by name. The primary lives in [user]
+    /// forever — the corpus promise makes that permanent — so this key
+    /// does not overclaim the complete set. Each account carries the
+    /// same schema and defaults as [user], minus the name field: the
+    /// username is the table key.
+    #[serde(default)]
+    pub other_users: BTreeMap<String, AdditionalUser>,
     #[serde(default)]
     pub packages: Packages,
     #[serde(default)]
@@ -323,6 +330,37 @@ pub struct User {
     pub ssh_keys: Vec<String>,
     /// Log this user straight into the desktop at boot (greetd
     /// initial_session). The greeter still appears after logout.
+    #[serde(default)]
+    pub autologin: bool,
+}
+
+/// An account in [other_users.<name>]: the [user] schema minus the
+/// name field, with the same defaults — the username is the table key.
+/// Deliberately not flattened into [user] or shared with it through
+/// serde: flatten is incompatible with deny_unknown_fields, and a typo
+/// in [user] must refuse, not become a phantom field.
+#[derive(Debug, Default, Deserialize, PartialEq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AdditionalUser {
+    /// Login shell by name ("fish"); the binary must exist in the
+    /// image, checked at build time.
+    #[serde(default)]
+    pub shell: Option<String>,
+    /// Converged additively: declared groups are ensured, groups
+    /// granted imperatively on the machine are left alone.
+    #[serde(default = "default_groups")]
+    pub groups: Vec<String>,
+    /// crypt(5) hash (e.g. `openssl passwd -6`), applied only when the
+    /// account is first created; after that the password is machine
+    /// state.
+    #[serde(default)]
+    pub password_hash: Option<String>,
+    /// OpenSSH public keys, served from /etc/kuma/keys/<name> alongside
+    /// the account's own ~/.ssh/authorized_keys (never overwriting it).
+    #[serde(default)]
+    pub ssh_keys: Vec<String>,
+    /// Log this account straight into the desktop at boot. At most one
+    /// account across the whole declaration may hold it true.
     #[serde(default)]
     pub autologin: bool,
 }
@@ -629,25 +667,55 @@ impl Config {
         }
         if let Some(user) = &self.user {
             validate_name(&user.name, "user.name", &['-', '_'])?;
-            if let Some(shell) = &user.shell {
-                validate_name(shell, "user.shell", &['-'])?;
+            validate_user_fields(
+                &user.shell,
+                &user.groups,
+                &user.password_hash,
+                &user.ssh_keys,
+                "user",
+            )?;
+        }
+        for (name, account) in &self.other_users {
+            validate_name(name, "other_users", &['-', '_'])?;
+            validate_user_fields(
+                &account.shell,
+                &account.groups,
+                &account.password_hash,
+                &account.ssh_keys,
+                &format!("other_users.{name}"),
+            )?;
+        }
+        // One account is one name: a table key that collides with the
+        // primary's would converge twice, two files answering for one
+        // uid, and which one wins is a question nobody should have to
+        // read the sync script to answer.
+        if let Some(user) = &self.user {
+            if self.other_users.contains_key(&user.name) {
+                bail!(
+                    "other_users.{:?} collides with user.name {:?}: one name is one account",
+                    user.name,
+                    user.name
+                );
             }
-            for group in &user.groups {
-                validate_name(group, "user.groups", &['-', '_'])?;
+        }
+        // greetd's initial_session is one session: two autologins is a
+        // fight at the greeter, and "whichever rendered last" is not a
+        // decision a declaration gets to make silently.
+        let mut autologins: Vec<&str> = Vec::new();
+        if let Some(user) = &self.user {
+            if user.autologin {
+                autologins.push(&user.name);
             }
-            if let Some(hash) = &user.password_hash {
-                // crypt(5) alphabet plus '=' for rounds= parameters; all
-                // inert inside the single-quoted declaration file the
-                // sync script sources
-                validate_name(hash, "user.password_hash", &['$', '.', '/', '='])?;
-                validate_password_hash(hash)?;
-            }
-            for key in &user.ssh_keys {
-                let looks_like_key = ["ssh-", "ecdsa-", "sk-"].iter().any(|p| key.starts_with(p));
-                if !looks_like_key || key.contains('\n') {
-                    bail!("user.ssh_keys entry doesn't look like a single-line OpenSSH public key");
-                }
-            }
+        }
+        for name in self.other_users.iter().filter(|(_, a)| a.autologin).map(|(n, _)| n) {
+            autologins.push(name);
+        }
+        if autologins.len() > 1 {
+            bail!(
+                "autologin is declared for {} accounts ({}); at most one account may log in straight to the desktop",
+                autologins.len(),
+                autologins.join(", ")
+            );
         }
         for pkg in &self.packages.rpm {
             validate_name(pkg, "packages.rpm", &['.', '-', '_', '+', ':'])?;
@@ -870,6 +938,40 @@ impl Config {
 /// the same rule rather than link the layer into the system tool —
 /// the lib's posture is that kuma does not link it — and the twin
 /// tests on each side prove the same behavior.
+/// The account fields [user] and [other_users.<name>] share, validated
+/// once: the shell is a name, the groups are names, the hash is crypt(5)
+/// (and inert inside the single-quoted declaration file the sync script
+/// sources), the keys are single-line OpenSSH publics. `prefix` names
+/// the section in the error, so a refusal says where to edit.
+fn validate_user_fields(
+    shell: &Option<String>,
+    groups: &[String],
+    password_hash: &Option<String>,
+    ssh_keys: &[String],
+    prefix: &str,
+) -> Result<()> {
+    if let Some(shell) = shell {
+        validate_name(shell, &format!("{prefix}.shell"), &['-'])?;
+    }
+    for group in groups {
+        validate_name(group, &format!("{prefix}.groups"), &['-', '_'])?;
+    }
+    if let Some(hash) = password_hash {
+        // crypt(5) alphabet plus '=' for rounds= parameters; all
+        // inert inside the single-quoted declaration file the
+        // sync script sources
+        validate_name(hash, &format!("{prefix}.password_hash"), &['$', '.', '/', '='])?;
+        validate_password_hash(hash)?;
+    }
+    for key in ssh_keys {
+        let looks_like_key = ["ssh-", "ecdsa-", "sk-"].iter().any(|p| key.starts_with(p));
+        if !looks_like_key || key.contains('\n') {
+            bail!("{prefix}.ssh_keys entry doesn't look like a single-line OpenSSH public key");
+        }
+    }
+    Ok(())
+}
+
 fn validate_relay(relay: &str) -> Result<()> {
     let (scheme, rest) = match relay.split_once("://") {
         Some((scheme, rest)) => (scheme, rest),
@@ -1003,6 +1105,56 @@ pub(crate) mod tests {
     pub(crate) fn is_local_declaration(path: &Path) -> bool {
         path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with("kuma.toml"))
     }
+    #[test]
+    fn other_users_carry_the_user_schema_minus_the_name() {
+        // The spec's shape: same schema, same defaults, the username as
+        // the table key. The default-groups claim is the one that can
+        // silently drift — two parallel structs, one default fn moved.
+        let base = "schema_version = 1\n[system]\ndesktop = \"niri\"\n";
+        let toml =
+            format!("{base}[user]\nname = \"me\"\n[other_users.partner]\nshell = \"fish\"\n");
+        let config: Config = toml::from_str(&toml).unwrap();
+        config.validate().unwrap();
+        let partner = &config.other_users["partner"];
+        assert_eq!(partner.groups, default_groups(), "same defaults as [user]");
+        assert_eq!(partner.shell.as_deref(), Some("fish"));
+    }
+
+    #[test]
+    fn an_other_user_typo_refuses_instead_of_becoming_a_field() {
+        // deny_unknown_fields is the whole reason the account schema is
+        // not flattened: a misspelled key must be a refusal, not a
+        // phantom account nobody can see.
+        let toml = "schema_version = 1\n[other_users.partner]\nshel = \"fish\"\n";
+        assert!(toml::from_str::<Config>(toml).is_err());
+    }
+
+    #[test]
+    fn one_name_is_one_account_across_both_keys() {
+        let toml = "schema_version = 1\n[user]\nname = \"me\"\n[other_users.me]\n";
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.validate().unwrap_err().to_string().contains("one name is one account"));
+    }
+
+    #[test]
+    fn autologin_is_a_single_seat_across_all_accounts() {
+        // greetd's initial_session is one session. Two accounts asking
+        // for it is a fight the declaration must lose at check time,
+        // not a whatever-rendered-last at build.
+        let toml = "schema_version = 1\n[user]\nname = \"me\"\nautologin = true\n\
+                    [other_users.partner]\nautologin = true\n";
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.validate().unwrap_err().to_string().contains("at most one account"));
+        let toml = "schema_version = 1\n[other_users.a]\nautologin = true\n\
+                    [other_users.b]\nautologin = true\n";
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.validate().is_err());
+        // one seat among many accounts is the honest shape
+        let toml = "schema_version = 1\n[other_users.a]\n[other_users.b]\nautologin = true\n";
+        let config: Config = toml::from_str(toml).unwrap();
+        config.validate().unwrap();
+    }
+
     #[test]
     fn the_inactivity_window_is_floor_validated_at_build() {
         let base = "schema_version = 1\n[system]\ndesktop = \"niri\"\n";
@@ -1774,6 +1926,7 @@ pub(crate) mod tests {
             ("system unit enablement", Declared("services")),
             ("timezone, locale, hostname, desktop, trusted CAs", Declared("system")),
             ("the declared account", Declared("user")),
+            ("the additional declared accounts", Declared("other_users")),
             ("local btrfs snapshots", Declared("snapshots")),
             ("offsite copies of what snapshots keep", Declared("backup")),
             // The nostr layer's identity: the vault lives in the login
