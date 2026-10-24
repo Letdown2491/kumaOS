@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v44.14.0 (2026-10-24)
+
 - **A machine-added account converges through a delta.** The delta
   compiler's contract was that accounts ride the image: the declaration
   COPY is verbatim, but the `/usr/lib/kuma/users.d` dropins were
@@ -38,6 +40,8 @@
   smoke's delta lane asserts the flip itself now:
   `systemctl --global is-enabled` answers `disabled` on the booted
   delta deployment.
+
+- **The second audit ran with the release.** Two full lanes over everything 44.13.0 shipped (#55, the #49 pattern): security re-walked the default-armed layer (arming creates nothing — the locked daemon touches the bus, the state dir, its socket; no relay), the hand-rolled vault client (signature-dispatched parsing, no key material in any error path), the account machinery (name charset, sourced dropins, the autologin singleton), the preset converger, and kumaui's Vault tab and restore path — no findings needing code, four hand-forwards recorded. Performance read the boot graph's delta by construction: one small pre-login oneshot (offline file ops, no D-Bus), zero-to-a-few no-op `usermod` spawns per declared account, the daemon a session cost — and named the gate that does not exist yet (per-unit boot timing on green runs), recorded as its hand-forward.
 
 ## v44.13.0 (2026-10-23)
 
