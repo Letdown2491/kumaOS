@@ -129,9 +129,12 @@ enter from the registry, or from a local build?
   plain-fetch — the newer release would not carry its choices. It
   delta-builds from the release image with its declaration compiled in:
   packages and firmware become a set difference, `[nostr]` becomes a
-  preset file, converged lists re-bake, and a field the compiler cannot
-  carry (an account, a backup, a timezone) refuses loudly instead of
-  silently dropping a choice. What the delta does not carry is the
+  preset file, converged lists re-bake, additional accounts in
+  `[other_users]` are emitted for the boot sync to converge (added or
+  moved; a DROPPED one refuses, because the sync creates accounts and
+  never deletes them), and a field the compiler cannot carry (the
+  primary account's move, a backup, a timezone) refuses loudly instead
+  of silently dropping a choice. What the delta does not carry is the
   release's own new curated packages and its newer converger scripts —
   the recipe the running kuma compiles with is the delta's ceiling, and
   the next `kuma update` full rebuild catches those up. The resolution

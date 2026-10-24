@@ -31,7 +31,11 @@ declaration's switch decides a systemd preset, not what gets shipped.
 That is what keeps "off" honest: a disabled layer is a preset pointing
 at units that exist, not an image that was built without them, and
 turning the switch on is a declaration change rather than a different
-recipe.
+recipe. The preset is not just a build-side fact either: a boot-time
+converger re-applies it on the booted machine (and `kuma sync` applies
+it on demand), so a disable delivered by an update takes the enable
+link with it at the next boot instead of pointing down at a unit that
+stays armed.
 
 ## Setup and pairing
 
