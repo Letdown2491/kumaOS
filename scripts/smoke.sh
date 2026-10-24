@@ -3152,8 +3152,23 @@ assert not naked, "%d layers lost their zstd-chunked annotations" % len(naked)' 
         bad "cannot seed the machine's declaration from the baked one"
     gsudo "kuma add --rpm cowsay --config /root/kuma.toml" >/dev/null ||
         bad "cannot add the delta's package to the declaration"
-    gsudo "sed -i '/^\\[nostr\\]\$/,/^\\[/ s/^enable = true\$/enable = false/' /root/kuma.toml" ||
-        bad "cannot disable nostr in the machine's declaration"
+    # The nostr divergence, made explicit whatever the base named: a
+    # declaration carrying [nostr] enable = true (44.13.0's example
+    # arms the layer) loses it to the scoped sed; a declaration that
+    # never named the section (44.12.0's shipped it commented — the
+    # real road's N-1) gains the explicit disable, because the
+    # release's default-on would arm the layer and the machine's no
+    # must win. The publish road's first delta lap died here: the
+    # N-1's baked declaration named no [nostr] at all, the sed was a
+    # no-op, and the re-baked copy could not carry a disable that was
+    # never written.
+    if gsudo "grep -q '^\\[nostr\\]' /root/kuma.toml"; then
+        gsudo "sed -i '/^\\[nostr\\]\$/,/^\\[/ s/^enable = true\$/enable = false/' /root/kuma.toml" ||
+            bad "cannot disable nostr in the machine's declaration"
+    else
+        gsudo "sh -c 'printf \"\n[nostr]\nenable = false\n\" >> /root/kuma.toml'" ||
+            bad "cannot declare the nostr disable in the machine's declaration"
+    fi
     # An additional declared account: converged at first boot by
     # kuma-user-sync's loop over /usr/lib/kuma/users.d, on the booted
     # deployment, where the loop is runtime code nobody reads but the
