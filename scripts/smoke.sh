@@ -1363,6 +1363,22 @@ smoke_published() {
     fi
     ok "no kuma unit failed"
 
+    # The boot-time baseline, recorded on green laps too: unit_evidence
+    # above asks critical-chain only when something already failed, so a
+    # converger that quietly added half a second to every boot passed
+    # every lap unmeasured — #55's performance lane named exactly that
+    # hole, the day 44.14.0 added a boot-time converger. Recording is
+    # all this is: runner timing is weather, nothing here asserts, and
+    # every read is guarded so a slow or silent answer cannot red the
+    # lap. The artifact is the point — the next ordering or converger
+    # decision reads these lines first, and the first baseline is this
+    # battery's own laps. The user manager's chain is still wanted and
+    # needs a session's bus to ask; a root ssh hop has none to give.
+    echo "   .. boot timing, for the record:" >&2
+    gsudo "systemd-analyze time" >&2 2>&1 || true
+    gsudo "systemd-analyze blame | head -15" >&2 2>&1 || true
+    gsudo "systemd-analyze critical-chain multi-user.target" >&2 2>&1 || true
+
     if [ -z "$UPGRADE_TO" ]; then
         if [ "$home_was_subvol" != yes ]; then
             # Say why, not just that. This has come back intermittently on
