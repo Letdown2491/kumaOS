@@ -3154,8 +3154,12 @@ assert not naked, "%d layers lost their zstd-chunked annotations" % len(naked)' 
     # kuma-user-sync's loop over /usr/lib/kuma/users.d, on the booted
     # deployment, where the loop is runtime code nobody reads but the
     # machine. The shell names fish only because the image carries it;
-    # groups = [] keeps the account out of wheel.
-    gsudo "sh -c 'printf \"\n[other_users.smoketest]\ngroups = []\n\" >> /root/kuma.toml'" ||
+    # groups = [] keeps the account out of wheel. The name must differ
+    # from the boot stage's declared primary (smoketest, appended to
+    # the example above): one name is one account, and the
+    # declaration's validation refuses the collision — the check died
+    # at Config::load, before the registry was ever asked.
+    gsudo "sh -c 'printf \"\n[other_users.deltauser]\ngroups = []\n\" >> /root/kuma.toml'" ||
         bad "cannot declare an additional account in the machine's declaration"
     ok "the machine's declaration diverges from the release"
 
@@ -3228,9 +3232,9 @@ assert d["digest"] == sys.argv[2], d' "$dir/upgrade-yes.json" "$want" ||
     gsudo "rpm -q cowsay" | grep -q cowsay ||
         bad "the delta's package is not in the booted deployment"
     ok "the delta's package is installed"
-    gsudo "id -u smoketest" >/dev/null ||
+    gsudo "id -u deltauser" >/dev/null ||
         bad "the delta's additional account was never converged at first boot"
-    gsudo "id -nG smoketest" | grep -qw wheel &&
+    gsudo "id -nG deltauser" | grep -qw wheel &&
         bad "the delta's additional account landed in wheel; groups = [] said not to"
     ok "the delta's additional account converged at first boot"
     local rebaked
@@ -3239,7 +3243,7 @@ assert d["digest"] == sys.argv[2], d' "$dir/upgrade-yes.json" "$want" ||
         bad "the booted deployment's baked declaration is not the machine's"
     printf '%s\n' "$rebaked" | grep -A1 '^\[nostr\]' | grep -q "enable = false" ||
         bad "the booted deployment's declaration does not carry the nostr disable"
-    printf '%s\n' "$rebaked" | grep -q '^\[other_users.smoketest\]' ||
+    printf '%s\n' "$rebaked" | grep -q '^\[other_users.deltauser\]' ||
         bad "the re-baked declaration lost the additional account"
     ok "the declaration was re-baked onto the deployment"
     gsudo "systemctl --global is-enabled kuma-nostrd.service" | grep -qx disabled ||
