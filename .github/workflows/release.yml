@@ -287,10 +287,36 @@ jobs:
         if: steps.what.outputs.publish == 'true'
         run: |
           set -euo pipefail
-          gh release create '${{ steps.what.outputs.tag }}' \
-            --draft \
-            --title '${{ steps.what.outputs.title }}' \
-            --notes "$(cat section.md; cat <<'NOTES'
+          # The re-run door: a tag whose release already exists — the tag
+          # force-moved and the road re-run, measured on 44.13.0's night —
+          # must not meet `gh release create` carrying assets, because gh
+          # answers the occupied tag with a SECOND, untagged draft that
+          # quietly keeps the binaries where nobody can find them, while
+          # the ISO and the undraft land on the release the tag already
+          # had: the page ships ISO-only and reads as complete. An
+          # existing release takes the same files by clobber-upload; a
+          # fresh tag takes the draft create, as below.
+          assets=(
+            kuma-x86_64-unknown-linux-musl \
+            kuma-x86_64-unknown-linux-musl.sha256 \
+            kuma-x86_64-unknown-linux-musl.bundle \
+            kuma-nostrd-x86_64-unknown-linux-musl \
+            kuma-nostrd-x86_64-unknown-linux-musl.sha256 \
+            kuma-nostrd-x86_64-unknown-linux-musl.bundle \
+            kuma-nostr-x86_64-unknown-linux-musl \
+            kuma-nostr-x86_64-unknown-linux-musl.sha256 \
+            kuma-nostr-x86_64-unknown-linux-musl.bundle \
+            nip46-relay-x86_64-unknown-linux-musl \
+            nip46-relay-x86_64-unknown-linux-musl.sha256 \
+            nip46-relay-x86_64-unknown-linux-musl.bundle
+          )
+          if gh release view '${{ steps.what.outputs.tag }}' >/dev/null 2>&1; then
+            gh release upload '${{ steps.what.outputs.tag }}' "${assets[@]}" --clobber
+          else
+            gh release create '${{ steps.what.outputs.tag }}' \
+              --draft \
+              --title '${{ steps.what.outputs.title }}' \
+              --notes "$(cat section.md; cat <<'NOTES'
           Static `x86_64` binary, no runtime dependencies.
 
           ```console
@@ -341,18 +367,8 @@ jobs:
           NOTES
           fi
           )" \
-            kuma-x86_64-unknown-linux-musl \
-            kuma-x86_64-unknown-linux-musl.sha256 \
-            kuma-x86_64-unknown-linux-musl.bundle \
-            kuma-nostrd-x86_64-unknown-linux-musl \
-            kuma-nostrd-x86_64-unknown-linux-musl.sha256 \
-            kuma-nostrd-x86_64-unknown-linux-musl.bundle \
-            kuma-nostr-x86_64-unknown-linux-musl \
-            kuma-nostr-x86_64-unknown-linux-musl.sha256 \
-            kuma-nostr-x86_64-unknown-linux-musl.bundle \
-            nip46-relay-x86_64-unknown-linux-musl \
-            nip46-relay-x86_64-unknown-linux-musl.sha256 \
-            nip46-relay-x86_64-unknown-linux-musl.bundle
+            "${assets[@]}"
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -447,7 +463,10 @@ jobs:
 
       # Uploaded separately rather than templated into the file list
       # above, because the file does not exist when the release is
-      # created and a draft is the thing being filled in.
+      # created and a draft is the thing being filled in. --clobber for
+      # the re-run door the publish step opens: a re-run's ISO replaces
+      # the one the previous execution attached, rather than dying on
+      # the name (44.13.0's night, again).
       - name: attach the live ISO
         if: env.ATTACH_ISO == 'true' && steps.what.outputs.publish == 'true'
         run: |
@@ -455,7 +474,8 @@ jobs:
           gh release upload '${{ steps.what.outputs.tag }}' \
             '${{ steps.iso.outputs.name }}' \
             '${{ steps.iso.outputs.name }}.sha256' \
-            '${{ steps.iso.outputs.name }}.bundle'
+            '${{ steps.iso.outputs.name }}.bundle' \
+            --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
