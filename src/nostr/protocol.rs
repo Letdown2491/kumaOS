@@ -906,6 +906,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_vaultless_startup_arms_nothing() {
+        // The dormant-state guarantee the default-on ruling stands on:
+        // arming the layer in the declaration creates nothing. The
+        // startup unlock is the only thing that would arm the bunker
+        // and its relay pool, and with no vault it stops at the honest
+        // error — so a machine that never provisioned holds no wss
+        // road at all, however many relays the unit names.
+        let (mut daemon, _rx) = Daemon::new(
+            Vault::new(MemoryStore::default()),
+            vec!["wss://relay.example".to_string()],
+            None,
+        );
+        assert!(daemon.startup_unlock().await.is_err());
+        assert!(daemon.bunker.is_none(), "no vault, no bunker");
+        assert!(daemon.pool.is_none(), "no vault, no road");
+    }
+
+    #[tokio::test]
     async fn a_paired_app_reaches_the_gate_after_a_restart() {
         use nostr::nips::nip44::Nip44;
         use nostr::nips::nip46::{NostrConnectMessage, NostrConnectMethod};

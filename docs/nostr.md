@@ -6,7 +6,16 @@ connects to the bunker and asks it to sign. Local programs can ask too,
 through a private socket. The point is that your key never has to live on
 your phone or inside every app that wants to use it.
 
-You turn the layer on with the `[nostr]` section of your declaration:
+The layer is **on by default** in kumaOS's own image: the baked
+declaration arms it, because the desktop's own features need it — the
+shell's signer draws dead without it. On by default does not mean
+created for you. The daemon never auto-provisions: with no vault it
+starts locked and touches no relay, and the key comes into existence
+only when you provision — the signer's first-run, or `kuma-nostr setup`
+below. That moment is the consent, and it is where you actually are.
+
+The switch is the `[nostr]` section of your declaration, and the baked
+one carries it armed:
 
 ```toml
 [nostr]
@@ -137,13 +146,20 @@ Relays only ever carry signing requests and answers (kinds 24133 and
 operator can see which app asked which bunker, how often, and how big.
 They never see your feed, your profile, or what was signed.
 
-The layer runs its own relay on your machine, loopback-only and in
-memory, so the bunker works on first boot with nothing configured. Relays
-you declare are fallbacks: `wss://` for the outside world, `ws://` for
-loopback only, and a declaration asking for plaintext to the public
-internet is refused at build time. The project runs a public relay at
-`wss://relay.nip46.com`; using it is opt-in, and its operator lives under
-the same metadata rule as any other.
+Relays you declare are the bunker's roads: `wss://` for the outside
+world, `ws://` for loopback only, and a declaration asking for plaintext
+to the public internet is refused at build time. Absent a list, the
+project's public relay at `wss://relay.nip46.com` is the **fallback
+road** every image ships with — that is what makes a fresh install
+pairable from anywhere with nothing configured — and its operator lives
+under the same metadata rule as any other relay. `relays = []` is the
+**local-only spelling**: a bunker whose roads are the machine's own,
+nothing off-site able to reach it.
+
+The local loopback relay is opt-in (`[nostr.relay]`), for desktop apps
+that should pair with nothing leaving the house, and `serve` is its
+tailnet face: the exposure switch, `wss://` over tailscale, its own
+declaration choice and never an inference.
 
 ## What the sandbox bounds
 

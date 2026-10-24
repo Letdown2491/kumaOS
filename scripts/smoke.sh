@@ -3137,14 +3137,19 @@ assert not naked, "%d layers lost their zstd-chunked annotations" % len(naked)' 
     # diverges by exactly what the post-reboot assertions name. `kuma
     # add` because the divergence should be made the way a user makes
     # it, and because hand-editing the rpm line here would only
-    # re-test sed. The nostr arm is a plain append: the examples
-    # leave the section commented out, so it does not exist yet.
+    # re-test sed. The nostr divergence is the disable: the baked
+    # declaration arms the layer now (#50), so arming would test
+    # nothing — and the disable exercises the reversibility the
+    # declaration comment promises, the preset standing down while the
+    # vault stays where it was. sed because a disable has no CLI verb;
+    # the road a user takes is editing the declaration, and the edit
+    # is scoped to the [nostr] section so no other enable moves.
     gsudo "sh -c 'cat /usr/lib/kuma/kuma.toml > /root/kuma.toml'" ||
         bad "cannot seed the machine's declaration from the baked one"
     gsudo "kuma add --rpm cowsay --config /root/kuma.toml" >/dev/null ||
         bad "cannot add the delta's package to the declaration"
-    gsudo "sh -c 'printf \"\n[nostr]\nenable = true\n\" >> /root/kuma.toml'" ||
-        bad "cannot arm nostr in the machine's declaration"
+    gsudo "sed -i '/^\\[nostr\\]\$/,/^\\[/ s/^enable = true\$/enable = false/' /root/kuma.toml" ||
+        bad "cannot disable nostr in the machine's declaration"
     ok "the machine's declaration diverges from the release"
 
     # The verb runs as root so its internal sudo calls (skopeo,
@@ -3220,11 +3225,11 @@ assert d["digest"] == sys.argv[2], d' "$dir/upgrade-yes.json" "$want" ||
     rebaked=$(gsudo "cat /usr/lib/kuma/kuma.toml")
     printf '%s\n' "$rebaked" | grep -q cowsay ||
         bad "the booted deployment's baked declaration is not the machine's"
-    printf '%s\n' "$rebaked" | grep -A1 '^\[nostr\]' | grep -q "enable = true" ||
-        bad "the booted deployment's declaration does not arm nostr"
+    printf '%s\n' "$rebaked" | grep -A1 '^\[nostr\]' | grep -q "enable = false" ||
+        bad "the booted deployment's declaration does not carry the nostr disable"
     ok "the declaration was re-baked onto the deployment"
-    gsudo "systemctl --global is-enabled kuma-nostrd.service" | grep -qx enabled ||
-        bad "the armed nostr layer is not enabled on the delta deployment"
+    gsudo "systemctl --global is-enabled kuma-nostrd.service" | grep -qx disabled ||
+        bad "the disabled nostr layer is still enabled on the delta deployment"
     if [ -z "$target_ref" ]; then
         # The fabricated release's both-ways divergence, asserted in the
         # re-baked declaration too: the machine's kept package survived
@@ -3235,7 +3240,7 @@ assert d["digest"] == sys.argv[2], d' "$dir/upgrade-yes.json" "$want" ||
             bad "the re-baked declaration names the release's extra; the declaration wins"
     fi
 
-    ok "the armed nostr layer is enabled"
+    ok "the disabled nostr layer stays disabled, reversible by declaration"
 
     stop_delta_registry
 }

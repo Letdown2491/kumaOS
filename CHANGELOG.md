@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **The nostr layer is on by default.** The baked declaration arms it:
+  the desktop's own features need the layer, and a default machine
+  otherwise runs a shell that draws a signer that cannot sign. Arming
+  creates nothing — the daemon never auto-provisions, so with no vault
+  it starts locked and touches no relay, and the key exists only when
+  you provision, at the signer's first-run or `kuma-nostr setup`. That
+  moment is the consent. The project's public relay
+  (`wss://relay.nip46.com`) is the fallback road — the relay carries
+  ciphertext and timing metadata only — and the exposure switches (the
+  loopback relay, tailscale serve) stay off. The consequence, said
+  plainly: **every existing machine's next update arms the dormant,
+  sandboxed daemon.** Disabling stays a one-line declaration edit, the
+  vault living in the keyring either way.
+
 ## v44.12.0 (2026-10-22)
 
 - **The kumaui pin rides to v0.6.0.** The audit's #1 polish gap closes:

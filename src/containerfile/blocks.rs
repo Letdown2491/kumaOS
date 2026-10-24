@@ -4680,7 +4680,8 @@ fn nostr(e: &mut Emitter<'_>) {
     e.copy(&unit, "/usr/lib/systemd/user/kuma-nostrd.service");
     // The local relay rides too, opt-in by preset rather than by
     // absence: a delta that arms it needs the unit in the base, and
-    // the base is the release example's — which does not arm it.
+    // the base is the release example's — which arms the daemon but
+    // not the local relay (the public relay is the fallback road).
     let relay = e.supplied("nip46-relay");
     let relay_unit = e.stage("nip46-relay.service", relay_service());
     e.copy_exec(&relay, "/usr/bin/nip46-relay");

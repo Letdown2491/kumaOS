@@ -126,16 +126,25 @@ enable = true
 # exclude = ["~/Videos"]   # on top of the curated set, never instead of it
 #
 # The nostr layer: a bunker daemon holding a signing key, driven by its
-# CLI and pairable from a phone. `enable` gates the whole render, and a
-# toggle never destroys anything — the key lives in your login keyring,
-# user state no image update touches, so a disable is reversible. The
-# relays are the bunker's roads; absent, the public relay is the road,
-# which is what makes a fresh install pairable from anywhere with
-# nothing configured. Payloads are NIP-44 end-to-end; the relay sees
-# ciphertext and metadata.
-# [nostr]
-# enable = true
-# relays = ["wss://relay.nip46.com"]   # absent means this
+# CLI and pairable from a phone. The layer ships in every image and this
+# declaration arms it — on by default as of 44.13.0, ruled in #50: the
+# desktop's own features need the layer, and a default machine otherwise
+# runs a shell that draws a signer that cannot sign. Arming creates
+# nothing: the daemon never auto-provisions, so with no vault it starts
+# locked and touches no relay, and the key comes into existence only
+# when you provision — the signer's first-run, or `kuma-nostr setup`.
+# That moment is the consent, and it is where you actually are.
+#
+# A toggle never destroys anything — the key lives in your login keyring,
+# user state no image update touches, so disabling this section is
+# reversible: set enable = false and the preset stands down, the vault
+# staying where it was. The relays are the bunker's roads; absent, the
+# project's public relay is the fallback road, which is what makes a
+# fresh install pairable from anywhere with nothing configured. Payloads
+# are NIP-44 end-to-end; the relay sees ciphertext and metadata.
+[nostr]
+enable = true
+# relays = ["wss://relay.nip46.com"]   # absent means this (the parser default)
 # [nostr.relay]          # the local loopback relay, opt-in;
 # enable = true          # desktop apps pair with nothing leaving the house
 # [nostr]                # local-only spelling: an empty list plus the
