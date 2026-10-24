@@ -55,13 +55,12 @@
   shape, watcher bursts coalesced, typed passwords scrubbed on every
   exit path.
 
-- **The image carries libatomic.** Prebuilt third-party binaries —
-  Spotify's Soloist among them — died at the loader
-  (`libatomic.so.1: cannot open`) before printing anything a person
-  could act on: compilers emit calls into libatomic for 128-bit
-  atomics, which prebuilt binaries link and the image did not ship.
-  Both desktop lists carry it now. Tens of KiB, the same repo, no new
-  trust root.
+- **The image carries libatomic.** Prebuilt third-party binaries died
+  at the loader (`libatomic.so.1: cannot open`) before printing
+  anything a person could act on: compilers emit calls into libatomic
+  for 128-bit atomics, which prebuilt binaries link and the image did
+  not ship. Both desktop lists carry it now. Tens of KiB, the same
+  repo, no new trust root.
 
 - **A snapshot no longer loses the same-second race.** The snapshot
   timer's Persistent catch-up can land in the same second a hand starts
