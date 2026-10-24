@@ -20,6 +20,11 @@ RUN --mount=type=cache,target=/var/cache/libdnf5 \
     dnf -y install --setopt=keepcache=1 glibc-langpack-de
 RUN echo 'LANG=de_DE.UTF-8' > /etc/locale.conf
 
+COPY --chmod=600 kuma-user-deltauser /usr/lib/kuma/users.d/deltauser
+RUN test -x /usr/bin/fish
+COPY kuma-user-keys-deltauser /etc/kuma/keys/deltauser
+COPY kuma-sshd-keys.conf /etc/ssh/sshd_config.d/40-kuma-keys.conf
+
 RUN --mount=type=cache,target=/var/cache/libdnf5 \
     dnf -y install --setopt=keepcache=1 btrfs-progs
 COPY --chmod=755 kuma-snapshot /usr/libexec/kuma-snapshot

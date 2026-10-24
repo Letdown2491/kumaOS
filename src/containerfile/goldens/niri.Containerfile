@@ -182,6 +182,9 @@ COPY --chmod=755 nip46-relay /usr/bin/nip46-relay
 COPY nip46-relay.service /usr/lib/systemd/user/nip46-relay.service
 COPY 50-kuma-nostr.preset /usr/lib/systemd/user-preset/50-kuma-nostr.preset
 RUN systemctl --global preset kuma-nostrd.service nip46-relay.service
+COPY --chmod=755 kuma-nostr-preset /usr/libexec/kuma-nostr-preset
+COPY kuma-nostr-preset.service /usr/lib/systemd/system/kuma-nostr-preset.service
+RUN systemctl enable kuma-nostr-preset.service
 RUN /usr/bin/kuma-nostrd --version
 RUN --mount=type=cache,target=/var/cache/libdnf5 \
     dnf -y install --setopt=keepcache=1 desktop-file-utils
