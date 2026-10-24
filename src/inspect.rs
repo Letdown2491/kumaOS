@@ -1577,10 +1577,17 @@ fn convergence_targets(
     has_account: bool,
     has_flatpaks: bool,
     has_brews: bool,
+    has_nostr_preset: bool,
 ) -> Vec<(&'static str, &'static str, bool)> {
     let mut targets: Vec<(&str, &str, bool)> = Vec::new();
     if has_account {
         targets.push(("kuma-user-sync.service", "user", false));
+    }
+    // The preset converger rides every image since the layer went
+    // always-shipped (44.10.0's shape); a base older than the preset
+    // file has nothing to converge and nothing to grade.
+    if has_nostr_preset {
+        targets.push(("kuma-nostr-preset.service", "nostr", false));
     }
     if has_flatpaks {
         targets.push(("kuma-flatpak-sync.service", "flatpak sync", true));
@@ -1602,6 +1609,7 @@ fn check_convergence(report: &mut impl FnMut(Grade, &str, String, Option<Action>
         ),
         Path::new(BAKED_FLATPAKS).exists(),
         Path::new(BAKED_BREWS).exists(),
+        Path::new(crate::state::BAKED_NOSTR_PRESET).exists(),
     );
     let names: Vec<&str> = targets.iter().map(|(unit, _, _)| *unit).collect();
     let facts = unit_facts(&names);
@@ -3733,8 +3741,12 @@ mod tests {
 
     #[test]
     fn only_units_a_timer_runs_again_are_judged_on_their_age() {
-        let all = convergence_targets(true, true, true);
-        assert_eq!(all.len(), 5, "an account, and a service plus a timer for each converger");
+        let all = convergence_targets(true, true, true, true);
+        assert_eq!(
+            all.len(),
+            6,
+            "an account, a service plus a timer for each converger, and the nostr preset"
+        );
         for (unit, _, on_a_timer) in &all {
             let Some(stem) = unit.strip_suffix(".service") else {
                 assert!(!on_a_timer, "{unit} is a timer; nothing asks a timer its age");
@@ -3752,8 +3764,17 @@ mod tests {
             all.iter().any(|(u, _, timed)| *u == "kuma-user-sync.service" && !timed),
             "user-sync runs at boot only; its last run is the last boot"
         );
-        // Nothing is graded on a machine that declares neither.
-        assert!(convergence_targets(false, false, false).is_empty());
+        // Nothing is graded on a machine that declares neither, except
+        // the nostr converger — it rides every preset-file image,
+        // declared accounts or not.
+        let bare = convergence_targets(false, false, false, false);
+        assert!(bare.is_empty());
+        let nostr_only = convergence_targets(false, false, false, true);
+        assert_eq!(
+            nostr_only,
+            vec![("kuma-nostr-preset.service", "nostr", false)],
+            "the nostr converger grades on every image that carries the preset file"
+        );
     }
 
     /// `doctor --report` is written to be pasted, which is why the

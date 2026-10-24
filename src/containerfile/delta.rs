@@ -12,9 +12,12 @@
 //! routed through the recipe's own generators (the same dnf layer
 //! shape, the same preset grammar, the same snapshot templates a full
 //! build would use). A field the compiler cannot carry as a delta
-//! refuses loudly rather than silently dropping a choice: `[user]`,
-//! `[backup]`, CAs, timezone, and hostname ride a full rebuild
-//! (`kuma update`), which moves the base pin with them.
+//! refuses loudly rather than silently dropping a choice: `[user]`, a
+//! DROPPED additional account, an autologin move, `[backup]`, CAs,
+//! timezone, and hostname ride a full rebuild (`kuma update`), which
+//! moves the base pin with them. Added and moved accounts in
+//! `[other_users]` ride — the dropin is runtime convergence since
+//! 44.14.
 //!
 //! Tolerance runs one way. Unknown keys at the top level and unknown
 //! top-level sections are ignored — this read happens exactly once per
@@ -26,7 +29,8 @@
 //! `schema_version` outruns the compiler's refuses for the same reason.
 
 use super::blocks::{
-    dnf_install, dnf_layer, nostrd_exec_line, snapshot_script, snapshot_timer, SNAPSHOT_SERVICE,
+    autologin_account, dnf_install, dnf_layer, nostrd_exec_line, snapshot_script, snapshot_timer,
+    SSHD_KUMA_KEYS, SNAPSHOT_SERVICE,
 };
 use super::emit::{self, Content, Emitter};
 use crate::config::{self, Config, Desktop};
@@ -49,12 +53,22 @@ pub(crate) struct Release {
 /// delta time. A 44.9.0-shaped base shipped the layer only when its
 /// example enabled it; from 44.10.0 every image carries it inert and
 /// the preset decides. The probe is what lets the compiler tell
-/// "disabled" from "absent" without version arithmetic.
+/// "disabled" from "absent" without version arithmetic. The account
+/// probes are the same honesty one release later: the converger's
+/// users.d loop and the sshd key conf are 44.13.0-era content, and a
+/// base older than the account machinery would ignore a dropin
+/// silently.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct BaseUnits {
     pub nostrd: bool,
     pub relay: bool,
     pub serve: bool,
+    /// The base's kuma-user-sync reads /usr/lib/kuma/users.d — a base
+    /// without this never converges a dropin the delta copies in.
+    pub user_sync_accounts: bool,
+    /// The base's sshd serves /etc/kuma/keys/%u; when it does not, a
+    /// delta carrying declared keys brings the conf with them.
+    pub sshd_kuma_keys: bool,
 }
 
 /// The release image's baked declaration, tolerantly read: each known
@@ -83,6 +97,12 @@ struct Baked {
     // declared one: an account the release already names rides, a
     // moved one refuses.
     user: Option<config::User>,
+    // The additional accounts the release bakes, same tolerance: a
+    // section whose meaning moved refuses, an absent one reads as
+    // "none". This is what lets the compiler tell an account the
+    // machine ADDED (the release does not name it — the delta's to
+    // carry) from one the release bakes itself.
+    other_users: BTreeMap<String, config::AdditionalUser>,
     backup: config::Backup,
     overrides: BTreeMap<String, config::AppOverride>,
 }
@@ -121,6 +141,7 @@ impl Baked {
             nostr: section(root, "nostr", Default::default)?,
             snapshots: section(root, "snapshots", Default::default)?,
             user: section(root, "user", || None)?,
+            other_users: section(root, "other_users", Default::default)?,
             backup: section(root, "backup", Default::default)?,
             overrides: section(root, "overrides", Default::default)?,
         })
@@ -187,6 +208,53 @@ pub(crate) fn compile(
                 .to_string(),
         );
     }
+    // The additional accounts are the delta's to carry (44.14): an
+    // account the machine adds is emitted below — dropin, keys, the
+    // build-time shell guard — and one that moves re-emits, because
+    // the dropin is the live config the sync loop reads every boot.
+    // A DROPPED one refuses: the sync loop creates accounts, it never
+    // deletes them, so a removal is machine surgery the delta cannot
+    // carry without lying about convergence.
+    if !declared.other_users.is_empty() && !units.user_sync_accounts {
+        refusals.push(
+            "  - [other_users]: the release image's account converger predates additional \
+             accounts — a dropin it carried would sit ignored; `kuma update` full-rebuilds \
+             once, and every release after carries them"
+                .to_string(),
+        );
+    }
+    for name in baked.other_users.keys() {
+        if !declared.other_users.contains_key(name) {
+            refusals.push(format!(
+                "  - [other_users.{name}]: the release names this account and the \
+                 declaration does not; the sync creates accounts, it never deletes them, \
+                 so the delta does not carry a removal; `kuma update` full-rebuilds"
+            ));
+        }
+    }
+    // Autologin moves the greeter's own config — the [initial_session]
+    // stanza is baked image content the delta does not carry — so any
+    // account move that changes who logs straight in refuses, exactly
+    // the [user] rule one account over.
+    let baked_autologin: Option<String> = baked
+        .user
+        .as_ref()
+        .filter(|u| u.autologin)
+        .map(|u| u.name.clone())
+        .or_else(|| {
+            baked
+                .other_users
+                .iter()
+                .find(|(_, a)| a.autologin)
+                .map(|(n, _)| n.clone())
+        });
+    if autologin_account(declared).map(String::from) != baked_autologin {
+        refusals.push(
+            "  - autologin: the greeter's own config rides the image, and the delta \
+             does not carry a change to who logs straight in; `kuma update` full-rebuilds"
+                .to_string(),
+        );
+    }
     if declared.backup != baked.backup {
         refusals.push(
             "  - [backup]: the repository secret rides the image with it, and the delta \
@@ -213,8 +281,8 @@ pub(crate) fn compile(
     if !refusals.is_empty() {
         bail!(
             "the delta compiler carries packages, firmware, services, [nostr] arming and \
-             relays, shell, locale, snapshots, and the flatpak/brew/override lists. Your \
-             declaration moves more than that:\n{}\n\n\
+             relays, shell, locale, snapshots, added and moved additional accounts, and \
+             the flatpak/brew/override lists. Your declaration moves more than that:\n{}\n\n\
              `kuma update` full-rebuilds from the declaration — it moves the base pin, so \
              everything the release carries rides along too.",
             refusals.join("\n")
@@ -310,6 +378,58 @@ pub(crate) fn compile(
             // does not: take the file back and the base default
             // (C.UTF-8) stands again.
             None => e.raw("RUN rm -f /etc/locale.conf\n"),
+        }
+    }
+
+    // ---- accounts the declaration adds or moves ----
+    // The additional accounts are runtime convergence since 44.14: the
+    // dropin is the live config kuma-user-sync reads on every boot, so
+    // a re-emitted one moves shell and groups on the next boot, and a
+    // first emission converges the account itself. The emission is the
+    // user block's own shape (the same declaration lines, the same
+    // 600 mode, the same build-time shell guard after the rpm layers
+    // above), keyed to what MOVED: an account the release bakes
+    // unchanged costs the delta nothing. A password hash applies only
+    // at creation, which is a new account's whole story; keys ride
+    // /etc, where a set that shrank is taken back by hand — absence in
+    // the new image overrides nothing (the same fact the nostr
+    // preset's converger exists for).
+    let mut emitted_sshd_keys = false;
+    for (name, extra) in &declared.other_users {
+        if baked.other_users.get(name) == Some(extra) {
+            continue;
+        }
+        let mut decl = format!("KUMA_USER='{}'\n", name);
+        if let Some(shell) = &extra.shell {
+            decl.push_str(&format!("KUMA_SHELL='/usr/bin/{shell}'\n"));
+        }
+        if !extra.groups.is_empty() {
+            decl.push_str(&format!("KUMA_GROUPS='{}'\n", extra.groups.join(" ")));
+        }
+        if let Some(hash) = &extra.password_hash {
+            decl.push_str(&format!("KUMA_PASSWORD_HASH='{hash}'\n"));
+        }
+        e.raw("\n");
+        let dropin = e.stage(&format!("kuma-user-{name}"), decl);
+        e.copy_private(&dropin, &format!("/usr/lib/kuma/users.d/{name}"));
+        if let Some(shell) = &extra.shell {
+            e.raw(&format!("RUN test -x /usr/bin/{shell}\n"));
+        }
+        if let Some(baked_extra) = baked.other_users.get(name) {
+            if extra.ssh_keys != baked_extra.ssh_keys {
+                e.raw(&format!("RUN rm -f /etc/kuma/keys/{name}\n"));
+            }
+        }
+        if !extra.ssh_keys.is_empty() {
+            let mut joined = extra.ssh_keys.join("\n");
+            joined.push('\n');
+            let keys = e.stage(&format!("kuma-user-keys-{name}"), joined);
+            e.copy(&keys, &format!("/etc/kuma/keys/{name}"));
+            if !units.sshd_kuma_keys && !emitted_sshd_keys {
+                let conf = e.stage("kuma-sshd-keys.conf", SSHD_KUMA_KEYS);
+                e.copy(&conf, "/etc/ssh/sshd_config.d/40-kuma-keys.conf");
+                emitted_sshd_keys = true;
+            }
         }
     }
 
@@ -568,7 +688,13 @@ mod tests {
                         enable = true\n";
 
     fn units() -> BaseUnits {
-        BaseUnits { nostrd: true, relay: true, serve: false }
+        BaseUnits {
+            nostrd: true,
+            relay: true,
+            serve: false,
+            user_sync_accounts: true,
+            sshd_kuma_keys: false,
+        }
     }
 
     fn compile_ok(declared_toml: &str, base: &str) -> emit::Plan {
@@ -874,6 +1000,153 @@ mod tests {
     }
 
     #[test]
+    fn a_machine_added_account_rides_the_delta() {
+        // #53's scenario, carried: the release names no such account,
+        // the machine's declaration does, and the delta emits what a
+        // full build would have baked — the dropin, the build-time
+        // shell guard, the keys, and (this base lacking the conf) the
+        // sshd line that serves them.
+        let plan = compile_ok(
+            "schema_version = 1\n\
+             [system]\n\
+             desktop = \"niri\"\n\
+             shell = \"fish\"\n\
+             [packages]\n\
+             rpm = [\"fish\"]\n\
+             [snapshots]\n\
+             enable = true\n\
+             [other_users.deltauser]\n\
+             shell = \"fish\"\n\
+             groups = []\n\
+             ssh_keys = [\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest test@kuma\"]\n",
+            BASE,
+        );
+        assert!(plan.text.contains("/usr/lib/kuma/users.d/deltauser"));
+        assert!(plan.text.contains("RUN test -x /usr/bin/fish"));
+        assert!(plan.text.contains("/etc/kuma/keys/deltauser"));
+        assert!(plan.text.contains("/etc/ssh/sshd_config.d/40-kuma-keys.conf"));
+        let dropin = plan
+            .files
+            .get("kuma-user-deltauser")
+            .expect("the account's dropin is staged");
+        match dropin {
+            Content::Text(text) => {
+                assert!(text.contains("KUMA_USER='deltauser'"));
+                // groups = [] says no groups line at all, not an empty one.
+                assert!(!text.contains("KUMA_GROUPS"));
+            }
+            _ => panic!("the account's dropin is text"),
+        }
+    }
+
+    #[test]
+    fn an_unchanged_account_costs_the_delta_nothing() {
+        // The release bakes the account and the declaration names it
+        // identically: the dropin is the release's own, and emitting a
+        // second copy would be noise the diff exists to prevent.
+        let base = format!(
+            "{BASE}\n[other_users.rider]\nshell = \"fish\"\ngroups = []\n"
+        );
+        let plan = compile_ok(
+            "schema_version = 1\n\
+             [system]\n\
+             desktop = \"niri\"\n\
+             shell = \"fish\"\n\
+             [packages]\n\
+             rpm = [\"fish\"]\n\
+             [snapshots]\n\
+             enable = true\n\
+             [other_users.rider]\n\
+             shell = \"fish\"\n\
+             groups = []\n",
+            &base,
+        );
+        assert!(!plan.text.contains("/usr/lib/kuma/users.d/rider"));
+    }
+
+    #[test]
+    fn an_account_the_release_names_that_the_declaration_drops_refuses() {
+        // Removal semantics, ruled: the sync loop creates accounts and
+        // never deletes them, so a delta carrying a removal would
+        // promise convergence the machine would never see.
+        let base = format!("{BASE}\n[other_users.ghost]\ngroups = []\n");
+        let err = compile(
+            &declared(
+                "schema_version = 1\n\
+                 [system]\n\
+                 desktop = \"niri\"\n\
+                 shell = \"fish\"\n\
+                 [packages]\n\
+                 rpm = [\"fish\"]\n\
+                 [snapshots]\n\
+                 enable = true\n",
+            ),
+            &base,
+            &release(),
+            units(),
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("[other_users.ghost]"));
+    }
+
+    #[test]
+    fn an_autologin_move_refuses() {
+        // The greeter's own config rides the image: a delta-added
+        // account claiming autologin would silently not log in.
+        let err = compile(
+            &declared(
+                "schema_version = 1\n\
+                 [system]\n\
+                 desktop = \"niri\"\n\
+                 shell = \"fish\"\n\
+                 [packages]\n\
+                 rpm = [\"fish\"]\n\
+                 [snapshots]\n\
+                 enable = true\n\
+                 [other_users.deltauser]\n\
+                 autologin = true\n",
+            ),
+            BASE,
+            &release(),
+            units(),
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("autologin"));
+    }
+
+    #[test]
+    fn a_base_without_the_account_machinery_refuses_additions() {
+        // A pre-44.13.0 base's converger never reads users.d: a dropin
+        // it carried would sit ignored, the exact silent-disagreement
+        // shape the compiler refuses rather than bake.
+        let err = compile(
+            &declared(
+                "schema_version = 1\n\
+                 [system]\n\
+                 desktop = \"niri\"\n\
+                 shell = \"fish\"\n\
+                 [packages]\n\
+                 rpm = [\"fish\"]\n\
+                 [snapshots]\n\
+                 enable = true\n\
+                 [other_users.deltauser]\n\
+                 groups = []\n",
+            ),
+            BASE,
+            &release(),
+            BaseUnits {
+                nostrd: true,
+                relay: true,
+                serve: false,
+                user_sync_accounts: false,
+                sshd_kuma_keys: false,
+            },
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("predates additional accounts"));
+    }
+
+    #[test]
     fn unknown_top_level_sections_are_ignored() {
         // A 45.0.0-shaped base with a section this kuma has never heard
         // of: the upgrade goes through, because the read happens once,
@@ -1054,7 +1327,13 @@ mod tests {
             &release(),
             // A 44.9.0-shaped base: the example never enabled nostr,
             // so the units are simply not there.
-            BaseUnits { nostrd: false, relay: false, serve: false },
+            BaseUnits {
+                nostrd: false,
+                relay: false,
+                serve: false,
+                user_sync_accounts: false,
+                sshd_kuma_keys: false,
+            },
         )
         .unwrap_err();
         assert!(format!("{err:#}").contains("ships no nostr layer"));
@@ -1088,7 +1367,11 @@ mod tests {
                  interval = \"daily\"\n\
                  [nostr]\n\
                  enable = true\n\
-                 relays = [\"wss://relay.example\"]\n",
+                 relays = [\"wss://relay.example\"]\n\
+                 [other_users.deltauser]\n\
+                 shell = \"fish\"\n\
+                 groups = []\n\
+                 ssh_keys = [\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest test@kuma\"]\n",
             ),
             BASE,
             &release(),

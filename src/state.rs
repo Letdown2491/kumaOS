@@ -44,6 +44,10 @@ pub const BAKED_CONFIG: &str = "/usr/lib/kuma/kuma.toml";
 pub const BAKED_FLATPAKS: &str = "/usr/lib/kuma/flatpaks";
 pub const BAKED_BREWS: &str = "/usr/lib/kuma/brews";
 pub const BAKED_OVERRIDES: &str = "/usr/lib/kuma/overrides";
+/// The nostr layer's enablement as baked: the boot converger's input,
+/// `kuma sync`'s marker that the converger has work, doctor's marker
+/// that it does not.
+pub const BAKED_NOSTR_PRESET: &str = "/usr/lib/systemd/user-preset/50-kuma-nostr.preset";
 
 #[derive(Clone)]
 pub struct Action {

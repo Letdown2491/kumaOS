@@ -4733,6 +4733,45 @@ WantedBy=graphical-session.target
     )
 }
 
+/// The nostr layer's enablement converger. The preset file governs
+/// preset APPLICATIONS, and the build's `--global preset` ran once,
+/// inside this image: the booted machine's /etc is the deployed
+/// machine's, and the enable link an old image merged into it survives
+/// every upgrade, because an absent file in the new image overrides
+/// nothing. So the layer carries its own boot-time converger — the
+/// same re-run shape the user-sync and flatpak loops give their state:
+/// apply the baked preset, whatever this boot's preset file says, so a
+/// delta that stands the layer down takes the skel links with it on
+/// the boot it lands, and an arm puts them back.
+pub(crate) const NOSTR_PRESET_SCRIPT: &str = r#"#!/bin/bash
+# The preset file is the declaration's [nostr] as baked; this applies
+# it to the machine's /etc on every boot. The unit names are read from
+# the file itself — the preset stays the single source of truth (a
+# delta rewrites the file, never this script), and no other preset
+# file's opinion is applied with it.
+set -euo pipefail
+preset=/usr/lib/systemd/user-preset/50-kuma-nostr.preset
+[ -r "$preset" ] || exit 0
+readarray -t units < <(awk '$1 == "enable" || $1 == "disable" { print $2 }' "$preset")
+[ "${#units[@]}" -gt 0 ] || exit 0
+exec systemctl --global preset "${units[@]}"
+"#;
+
+/// Ordered before any user manager can start and read the skel links:
+/// the enablement the converger writes is what the first login's
+/// session manager inherits.
+pub(crate) const NOSTR_PRESET_SERVICE: &str = r#"[Unit]
+Description=Converge the nostr layer's enablement from the baked preset
+Before=systemd-user-sessions.service greetd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/kuma-nostr-preset
+
+[Install]
+WantedBy=multi-user.target
+"#;
+
 /// The nostr block: the daemon and CLI binaries, the hardened unit, and
 /// the guard that refuses to bake a bunker that cannot run. The relay
 /// set is the declaration's own; the local relay joins the list when
@@ -4814,6 +4853,18 @@ fn nostr(e: &mut Emitter<'_>) {
     // again. preset applies the file — skel links created or taken
     // away — so the same two lines carry the on and the off.
     e.preset_global(&["kuma-nostrd.service", "nip46-relay.service"]);
+    // The build's preset application covers first boots and fresh
+    // installs; the deployed /etc of an UPGRADING machine keeps the
+    // links its last image merged into it. The converger re-applies
+    // the preset on every boot after that, which is what makes a
+    // delta's enable/disable a converged fact instead of a build-side
+    // one (#54): without it, a disable delivered by delta is a preset
+    // file standing down over a link that never heard of it.
+    let preset_sync = e.stage("kuma-nostr-preset", NOSTR_PRESET_SCRIPT);
+    let preset_sync_unit = e.stage("kuma-nostr-preset.service", NOSTR_PRESET_SERVICE);
+    e.copy_exec(&preset_sync, "/usr/libexec/kuma-nostr-preset");
+    e.copy(&preset_sync_unit, "/usr/lib/systemd/system/kuma-nostr-preset.service");
+    e.enable(&["kuma-nostr-preset.service"]);
     // The version guard is the binary-runs proof the kuma COPY carries:
     // a musl-host binary on a glibc base shows up here, at build, where
     // it costs a build, not at boot, where it costs the session.
@@ -5111,6 +5162,7 @@ pub(super) static BLOCKS: &[Block] = &[
             ("nip46-relay.service", Live::Runs("the local relay is loopback furniture of the same session")),
             ("kuma-nostr-serve.service", Live::Masked("live media's tailscaled is ephemeral, and a serve mapping nothing can reach twice is noise")),
             ("kuma-nostr-serve-off.service", Live::Masked("the same ephemeral tailscaled has no stale mapping to remove, and an off unit un-serving nothing is boot noise")),
+            ("kuma-nostr-preset.service", MASKED_CONVERGES),
         ],
     },
     Block {

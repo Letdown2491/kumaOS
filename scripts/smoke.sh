@@ -3077,10 +3077,6 @@ run_delta_arm() {
             dnf -y remove git-core-doc
             dnf -y install sl
             sed -i -e "s/, \"git-core-doc\"//" -e "s/^rpm = \[\"/rpm = [\"sl\", \"/" /usr/lib/kuma/kuma.toml
-            mkdir -p /usr/lib/kuma/users.d
-            printf "KUMA_USER=%s\n" "'\''deltauser'\''" > /usr/lib/kuma/users.d/deltauser
-            chmod 600 /usr/lib/kuma/users.d/deltauser
-            printf "\n[other_users.deltauser]\ngroups = []\n" >> /usr/lib/kuma/kuma.toml
         ' ||
             { podman rm -f "$cid" >/dev/null 2>&1; bad "cannot diverge the release's content"; }
         podman commit --change 'LABEL io.kuma.smoke=delta-release' "$cid" "$rel:$release_tag" >/dev/null ||
@@ -3169,31 +3165,18 @@ assert not naked, "%d layers lost their zstd-chunked annotations" % len(naked)' 
         gsudo "sh -c 'printf \"\n[nostr]\nenable = false\n\" >> /root/kuma.toml'" ||
             bad "cannot declare the nostr disable in the machine's declaration"
     fi
-    # An additional declared account: converged at first boot by
-    # kuma-user-sync's loop over /usr/lib/kuma/users.d, on the booted
-    # deployment, where the loop is runtime code nobody reads but the
-    # machine. The shell names fish only because the image carries it;
-    # groups = [] keeps the account out of wheel. The name must differ
-    # from the boot stage's declared primary (smoketest, appended to
-    # the example above): one name is one account, and the
-    # declaration's validation refuses the collision — the check died
+    # An additional declared account, the machine's own move (#53, now
+    # carried): the release names no such account — the compiler emits
+    # the dropin the sync loop reads, the build-time shell guard, the
+    # key file, and the sshd conf serving it, exactly what a full
+    # build would have baked. The shell names fish only because the
+    # image carries it; groups = [] keeps the account out of wheel.
+    # The name must differ from the boot stage's declared primary
+    # (smoketest, appended to the example above): one name is one
+    # account, and the declaration's validation refuses the collision
     # at Config::load, before the registry was ever asked.
-    # An additional declared account, fabricated arm only: the delta
-    # carries accounts only as the release bakes them — the declaration
-    # COPY is verbatim, but the users.d dropins are build-time work, so
-    # the machine's declaration naming an account the release does not
-    # is a divergence the delta rides as text and nothing converges (a
-    # full-rebuild matter; the silent gap is #53's to close). The
-    # fabricated release bakes what a build would — the dropin beside
-    # the declaration section, both above — so the machine's edit makes
-    # the two agree, the delta rides the account, and the lap's runtime
-    # question stands: does kuma-user-sync's loop over
-    # /usr/lib/kuma/users.d converge it at the delta deployment's first
-    # boot. groups = [] keeps the account out of wheel.
-    if [ -z "$target_ref" ]; then
-        gsudo "sh -c 'printf \"\n[other_users.deltauser]\ngroups = []\n\" >> /root/kuma.toml'" ||
-            bad "cannot declare an additional account in the machine's declaration"
-    fi
+    gsudo "sh -c 'printf \"\n[other_users.deltauser]\nshell = \\\"fish\\\"\ngroups = []\nssh_keys = [\\\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIsmokedelta delta@kuma\\\"]\n\" >> /root/kuma.toml'" ||
+        bad "cannot declare an additional account in the machine's declaration"
     ok "the machine's declaration diverges from the release"
 
     # The verb runs as root so its internal sudo calls (skopeo,
@@ -3265,37 +3248,38 @@ assert d["digest"] == sys.argv[2], d' "$dir/upgrade-yes.json" "$want" ||
     gsudo "rpm -q cowsay" | grep -q cowsay ||
         bad "the delta's package is not in the booted deployment"
     ok "the delta's package is installed"
-    if [ -z "$target_ref" ]; then
-        gsudo "id -u deltauser" >/dev/null ||
-            bad "the delta's additional account was never converged at first boot"
-        gsudo "id -nG deltauser" | grep -qw wheel &&
-            bad "the delta's additional account landed in wheel; groups = [] said not to"
-        ok "the delta's additional account converged at first boot"
-    fi
+    # #53's contract, converged for real on every arm: the account the
+    # machine declared exists, out of wheel as declared, with its key
+    # served where sshd looks.
+    gsudo "id -u deltauser" >/dev/null ||
+        bad "the delta's additional account was never converged at first boot"
+    gsudo "id -nG deltauser" | grep -qw wheel &&
+        bad "the delta's additional account landed in wheel; groups = [] said not to"
+    gsudo "cat /etc/kuma/keys/deltauser" | grep -q "delta@kuma" ||
+        bad "the delta's additional account carries no key file"
+    ok "the delta's additional account converged at first boot"
     local rebaked
     rebaked=$(gsudo "cat /usr/lib/kuma/kuma.toml")
     printf '%s\n' "$rebaked" | grep -q cowsay ||
         bad "the booted deployment's baked declaration is not the machine's"
     printf '%s\n' "$rebaked" | grep -A1 '^\[nostr\]' | grep -q "enable = false" ||
         bad "the booted deployment's declaration does not carry the nostr disable"
-    if [ -z "$target_ref" ]; then
-        printf '%s\n' "$rebaked" | grep -q '^\[other_users.deltauser\]' ||
-            bad "the re-baked declaration lost the additional account"
-    fi
+    printf '%s\n' "$rebaked" | grep -q '^\[other_users.deltauser\]' ||
+        bad "the re-baked declaration lost the additional account"
     ok "the declaration was re-baked onto the deployment"
     # The delta's deliverable is the preset file: the compile wrote the
-    # disable lines and preset-applied them into the image's /etc
-    # (measured: the build-side disable removes the enable link). The
-    # enablement itself rides the deployed /etc, though — the link the
-    # old image baked survives the upgrade's merge, and nothing runtime
-    # applies the preset on the booted machine — so the unit answers
-    # enabled across this upgrade, and the assertion here is the file,
-    # not the link (#54's converger is the flip, 44.14's). The
-    # re-baked declaration's enable = false is the standing intent; the
-    # fresh-install road is where the preset's disable provably lands.
+    # disable lines and preset-applied them into the image's /etc. The
+    # enablement is #54's converger's to state, and since 44.14 it
+    # states it: the boot-time unit re-applies the baked preset on the
+    # booted machine, where nothing applied one since the build — so
+    # the disable takes the enable link the old image merged into /etc
+    # with it, and the global is-enabled read is the flip itself.
     gsudo "cat /usr/lib/systemd/user-preset/50-kuma-nostr.preset" |
         grep -qx "disable kuma-nostrd.service" ||
         bad "the delta's preset does not stand the nostr layer down"
+    gsudo "systemctl --global is-enabled kuma-nostrd.service || true" |
+        grep -qx "disabled" ||
+        bad "the nostr enablement did not converge through the delta (the preset converger did not flip it)"
     if [ -z "$target_ref" ]; then
         # The fabricated release's both-ways divergence, asserted in the
         # re-baked declaration too: the machine's kept package survived

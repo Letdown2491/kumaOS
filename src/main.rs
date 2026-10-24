@@ -2120,10 +2120,29 @@ fn upgrade_delta_apply(
     ])
     .unwrap_or_default();
     let present = |name: &str| listing.lines().any(|l| l.trim().ends_with(name));
+    // The account machinery's own probe, same honesty: the converger's
+    // users.d loop and the sshd key conf are 44.13.0-era content —
+    // an older base ignores a dropin silently, and the compiler
+    // refuses rather than emit one nothing will read.
+    let accounts_probe = host_output_any(&[
+        "podman",
+        "run",
+        "--rm",
+        "--entrypoint",
+        "sh",
+        &pinned,
+        "-c",
+        "grep -q '/usr/lib/kuma/users.d' /usr/libexec/kuma-user-sync 2>/dev/null && echo accounts; \
+         test -f /etc/ssh/sshd_config.d/40-kuma-keys.conf && echo keys",
+    ])
+    .unwrap_or_default();
+    let probed = |word: &str| accounts_probe.lines().any(|l| l.trim() == word);
     let units = containerfile::delta::BaseUnits {
         nostrd: present("kuma-nostrd.service"),
         relay: present("nip46-relay.service"),
         serve: present("kuma-nostr-serve.service"),
+        user_sync_accounts: probed("accounts"),
+        sshd_kuma_keys: probed("keys"),
     };
 
     note("Compiling the declaration's deltas...");
@@ -2502,6 +2521,14 @@ fn sync_response(
 
 fn sync(declared: Option<&Config>, json: bool) -> Result<()> {
     let mut units: Vec<&str> = Vec::new();
+    if Path::new(state::BAKED_NOSTR_PRESET).exists() {
+        // The layer ships in every image, so this is true on every kuma
+        // machine: an on-demand sync applies the baked preset now, the
+        // same convergence the boot unit runs — the road for a delta's
+        // enable/disable to reach a running machine without waiting for
+        // the next boot.
+        units.push("kuma-nostr-preset.service");
+    }
     if Path::new(state::BAKED_FLATPAKS).exists() {
         units.push("kuma-flatpak-sync.service");
     }

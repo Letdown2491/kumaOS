@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- **A machine-added account converges through a delta.** The delta
+  compiler's contract was that accounts ride the image: the declaration
+  COPY is verbatim, but the `/usr/lib/kuma/users.d` dropins were
+  build-time work, so a machine that added
+  `[other_users.<name>]` and ran `kuma upgrade` got the re-baked
+  declaration, no account, no refusal, no message. The compiler emits
+  the dropin now — plus the build-time shell guard, the key file under
+  `/etc/kuma/keys/<name>`, and the sshd conf serving it when the base
+  lacks one — exactly what a full build would have baked, and the boot
+  sync loop converges the account the same way it converges its own. A
+  moved account re-emits (the dropin is the live config the sync reads
+  every boot, so shell and groups moves land on the next one); a
+  dropped one — an account the release names that the declaration does
+  not — refuses loudly, because the sync creates accounts and never
+  deletes them, and a removal the machine would never see is not
+  convergence. An autologin move refuses too: the greeter's
+  `[initial_session]` stanza rides the image, and a delta carrying it
+  would silently not log anyone in. The smoke's delta lane now runs
+  the true scenario: the release no longer bakes the account the
+  machine declares.
+
+- **The nostr layer's enablement converges at boot.** The baked preset
+  governs preset applications, and the build's `--global preset` ran
+  once, inside the image — a booted machine's `/etc` kept the enable
+  link its last image merged into it, so a disable delivered by delta
+  was a preset file standing down over a link that never heard of it.
+  A boot-time converger (`kuma-nostr-preset.service`, oneshot, before
+  any user manager starts) re-applies the baked preset on every boot,
+  reading the unit names from the preset file itself — the preset
+  stays the single source of truth, a delta's rewrite of it is the
+  whole move, and the same lines carry the arm back on. `kuma sync`
+  starts it on demand, so convergence need not wait for the next boot;
+  `kuma doctor` reads its last run beside the other convergers. The
+  smoke's delta lane asserts the flip itself now:
+  `systemctl --global is-enabled` answers `disabled` on the booted
+  delta deployment.
+
 ## v44.13.0 (2026-10-23)
 
 - **Additional accounts in the declaration.** `[other_users.<name>]`
