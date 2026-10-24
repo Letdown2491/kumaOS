@@ -31,6 +31,45 @@
   sandboxed daemon.** Disabling stays a one-line declaration edit, the
   vault living in the keyring either way.
 
+- **The vault speaks the Secret Service itself.** The nostr layer's
+  vault client dropped oo7 and its dependency trail — 248 crates gone
+  from the build — for the tree's own zbus 6 connection: the same D-Bus
+  vocabulary the daemon already speaks, three calls deep (search,
+  create, delete), reading the keyring's answers by signature rather
+  than by spec. No behavior change on the surface: the same keyring,
+  the same vault, the same verbs.
+
+- **The kumaui pin rides to v0.7.0** (kuma-files 0.6.0, kuma-term 0.5.0
+  and kuma-monitor 0.4.0 with it). The shell's nostr panel gains a
+  Vault tab: generate or import an identity, export a backup, lock and
+  unlock, destroy with the cost quoted — the signer's first-run consent
+  moment is a set of buttons now, not a terminal session. Koguma reads
+  the snapshot store: a toolbar clock opens the folder's timeline, and
+  "Restore to live folder" copies a snapshot's version back through the
+  conflict dialog. The bar gains a VPN widget (absent until
+  NetworkManager defines one) and a keyboard-layout indicator, with
+  connect/disconnect and layout switching in the panels. The greeter
+  says "wrong username or password" instead of pam's raw text. And the
+  performance pass: audio probes, network reads and icon decode off the
+  UI thread, per-frame clones and drawer rebuilds cached to once per
+  shape, watcher bursts coalesced, typed passwords scrubbed on every
+  exit path.
+
+- **The image carries libatomic.** Prebuilt third-party binaries —
+  Spotify's Soloist among them — died at the loader
+  (`libatomic.so.1: cannot open`) before printing anything a person
+  could act on: compilers emit calls into libatomic for 128-bit
+  atomics, which prebuilt binaries link and the image did not ship.
+  Both desktop lists carry it now. Tens of KiB, the same repo, no new
+  trust root.
+
+- **A snapshot no longer loses the same-second race.** The snapshot
+  timer's Persistent catch-up can land in the same second a hand starts
+  the unit; the second create then failed on the snapshot the first
+  start made, leaving the unit failed, doctor grading Fail, and a boot
+  smoke reading red. The script skips a snapshot named for a second
+  that already has one.
+
 ## v44.12.0 (2026-10-22)
 
 - **The kumaui pin rides to v0.6.0.** The audit's #1 polish gap closes:
