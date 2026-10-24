@@ -3268,8 +3268,19 @@ assert d["digest"] == sys.argv[2], d' "$dir/upgrade-yes.json" "$want" ||
             bad "the re-baked declaration lost the additional account"
     fi
     ok "the declaration was re-baked onto the deployment"
-    gsudo "systemctl --global is-enabled kuma-nostrd.service" | grep -qx disabled ||
-        bad "the disabled nostr layer is still enabled on the delta deployment"
+    # The delta's deliverable is the preset file: the compile wrote the
+    # disable lines and preset-applied them into the image's /etc
+    # (measured: the build-side disable removes the enable link). The
+    # enablement itself rides the deployed /etc, though — the link the
+    # old image baked survives the upgrade's merge, and nothing runtime
+    # applies the preset on the booted machine — so the unit answers
+    # enabled across this upgrade, and the assertion here is the file,
+    # not the link (#54's converger is the flip, 44.14's). The
+    # re-baked declaration's enable = false is the standing intent; the
+    # fresh-install road is where the preset's disable provably lands.
+    gsudo "cat /usr/lib/systemd/user-preset/50-kuma-nostr.preset" |
+        grep -qx "disable kuma-nostrd.service" ||
+        bad "the delta's preset does not stand the nostr layer down"
     if [ -z "$target_ref" ]; then
         # The fabricated release's both-ways divergence, asserted in the
         # re-baked declaration too: the machine's kept package survived
@@ -3280,7 +3291,7 @@ assert d["digest"] == sys.argv[2], d' "$dir/upgrade-yes.json" "$want" ||
             bad "the re-baked declaration names the release's extra; the declaration wins"
     fi
 
-    ok "the disabled nostr layer stays disabled, reversible by declaration"
+    ok "the nostr layer's preset stands down, reversible by declaration"
 
     stop_delta_registry
 }
