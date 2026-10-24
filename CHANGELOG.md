@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v44.13.0 (2026-10-23)
+
 - **Additional accounts in the declaration.** `[other_users.<name>]`
   declares an account beside the primary — the same fields `[user]`
   has, minus the name (the table key is the name), the same defaults:
