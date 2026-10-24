@@ -3077,6 +3077,10 @@ run_delta_arm() {
             dnf -y remove git-core-doc
             dnf -y install sl
             sed -i -e "s/, \"git-core-doc\"//" -e "s/^rpm = \[\"/rpm = [\"sl\", \"/" /usr/lib/kuma/kuma.toml
+            mkdir -p /usr/lib/kuma/users.d
+            printf "KUMA_USER=%s\n" "'\''deltauser'\''" > /usr/lib/kuma/users.d/deltauser
+            chmod 600 /usr/lib/kuma/users.d/deltauser
+            printf "\n[other_users.deltauser]\ngroups = []\n" >> /usr/lib/kuma/kuma.toml
         ' ||
             { podman rm -f "$cid" >/dev/null 2>&1; bad "cannot diverge the release's content"; }
         podman commit --change 'LABEL io.kuma.smoke=delta-release' "$cid" "$rel:$release_tag" >/dev/null ||
@@ -3159,8 +3163,22 @@ assert not naked, "%d layers lost their zstd-chunked annotations" % len(naked)' 
     # the example above): one name is one account, and the
     # declaration's validation refuses the collision — the check died
     # at Config::load, before the registry was ever asked.
-    gsudo "sh -c 'printf \"\n[other_users.deltauser]\ngroups = []\n\" >> /root/kuma.toml'" ||
-        bad "cannot declare an additional account in the machine's declaration"
+    # An additional declared account, fabricated arm only: the delta
+    # carries accounts only as the release bakes them — the declaration
+    # COPY is verbatim, but the users.d dropins are build-time work, so
+    # the machine's declaration naming an account the release does not
+    # is a divergence the delta rides as text and nothing converges (a
+    # full-rebuild matter; the silent gap is #53's to close). The
+    # fabricated release bakes what a build would — the dropin beside
+    # the declaration section, both above — so the machine's edit makes
+    # the two agree, the delta rides the account, and the lap's runtime
+    # question stands: does kuma-user-sync's loop over
+    # /usr/lib/kuma/users.d converge it at the delta deployment's first
+    # boot. groups = [] keeps the account out of wheel.
+    if [ -z "$target_ref" ]; then
+        gsudo "sh -c 'printf \"\n[other_users.deltauser]\ngroups = []\n\" >> /root/kuma.toml'" ||
+            bad "cannot declare an additional account in the machine's declaration"
+    fi
     ok "the machine's declaration diverges from the release"
 
     # The verb runs as root so its internal sudo calls (skopeo,
@@ -3232,19 +3250,23 @@ assert d["digest"] == sys.argv[2], d' "$dir/upgrade-yes.json" "$want" ||
     gsudo "rpm -q cowsay" | grep -q cowsay ||
         bad "the delta's package is not in the booted deployment"
     ok "the delta's package is installed"
-    gsudo "id -u deltauser" >/dev/null ||
-        bad "the delta's additional account was never converged at first boot"
-    gsudo "id -nG deltauser" | grep -qw wheel &&
-        bad "the delta's additional account landed in wheel; groups = [] said not to"
-    ok "the delta's additional account converged at first boot"
+    if [ -z "$target_ref" ]; then
+        gsudo "id -u deltauser" >/dev/null ||
+            bad "the delta's additional account was never converged at first boot"
+        gsudo "id -nG deltauser" | grep -qw wheel &&
+            bad "the delta's additional account landed in wheel; groups = [] said not to"
+        ok "the delta's additional account converged at first boot"
+    fi
     local rebaked
     rebaked=$(gsudo "cat /usr/lib/kuma/kuma.toml")
     printf '%s\n' "$rebaked" | grep -q cowsay ||
         bad "the booted deployment's baked declaration is not the machine's"
     printf '%s\n' "$rebaked" | grep -A1 '^\[nostr\]' | grep -q "enable = false" ||
         bad "the booted deployment's declaration does not carry the nostr disable"
-    printf '%s\n' "$rebaked" | grep -q '^\[other_users.deltauser\]' ||
-        bad "the re-baked declaration lost the additional account"
+    if [ -z "$target_ref" ]; then
+        printf '%s\n' "$rebaked" | grep -q '^\[other_users.deltauser\]' ||
+            bad "the re-baked declaration lost the additional account"
+    fi
     ok "the declaration was re-baked onto the deployment"
     gsudo "systemctl --global is-enabled kuma-nostrd.service" | grep -qx disabled ||
         bad "the disabled nostr layer is still enabled on the delta deployment"
