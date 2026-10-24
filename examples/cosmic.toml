@@ -46,6 +46,17 @@ flatpak = [
 
 # brew = ["ripgrep", "fd", "jq"]
 
+# The nostr bunker rides with every image now: the layer is on by
+# default, dormant until a person provisions a vault, so a file that
+# says nothing about it still carries it. This is where you'd say
+# otherwise — `enable = false` stands the preset down, reversibly, the
+# vault staying where it was. Absent relays mean the project's public
+# relay, which makes a fresh install pairable from anywhere with
+# nothing configured. The local relay, serve-over-tailscale and
+# dead-man's-switch spellings: niri.toml's [nostr] section.
+# [nostr]
+# enable = false
+
 # Your additions only. COSMIC already enables what it needs (greeter,
 # firewalld, bluetooth, cups, avahi, chronyd), so those don't belong here.
 [services]

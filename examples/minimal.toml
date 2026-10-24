@@ -2,9 +2,12 @@
 # no user, nothing beyond the base and one package. A starting point for
 # a headless box, and the cheap case in the smoke tests, since it builds
 # in a minute and boots without a compositor.
-#
 # Even this carries kuma's floor: greenboot and automatic rollback of a
-# failed boot are in every image, never opt-in.
+# failed boot are in every image, never opt-in. So is the nostr layer —
+# on by default, dormant until a person provisions a vault, and a
+# vaultless startup arms nothing and opens no road. This file says
+# nothing about it because the defaults are the answer here; niri.toml's
+# [nostr] section is where the spellings live.
 schema_version = 1
 
 [system]
