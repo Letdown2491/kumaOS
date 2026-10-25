@@ -30,7 +30,7 @@
 
 use super::blocks::{
     autologin_account, dnf_install, dnf_layer, nostrd_exec_line, snapshot_script, snapshot_timer,
-    SSHD_KUMA_KEYS, SNAPSHOT_SERVICE,
+    SNAPSHOT_SERVICE, SSHD_KUMA_KEYS,
 };
 use super::emit::{self, Content, Emitter};
 use crate::config::{self, Config, Desktop};
@@ -236,17 +236,9 @@ pub(crate) fn compile(
     // stanza is baked image content the delta does not carry — so any
     // account move that changes who logs straight in refuses, exactly
     // the [user] rule one account over.
-    let baked_autologin: Option<String> = baked
-        .user
-        .as_ref()
-        .filter(|u| u.autologin)
-        .map(|u| u.name.clone())
-        .or_else(|| {
-            baked
-                .other_users
-                .iter()
-                .find(|(_, a)| a.autologin)
-                .map(|(n, _)| n.clone())
+    let baked_autologin: Option<String> =
+        baked.user.as_ref().filter(|u| u.autologin).map(|u| u.name.clone()).or_else(|| {
+            baked.other_users.iter().find(|(_, a)| a.autologin).map(|(n, _)| n.clone())
         });
     if autologin_account(declared).map(String::from) != baked_autologin {
         refusals.push(
@@ -1025,10 +1017,7 @@ mod tests {
         assert!(plan.text.contains("RUN test -x /usr/bin/fish"));
         assert!(plan.text.contains("/etc/kuma/keys/deltauser"));
         assert!(plan.text.contains("/etc/ssh/sshd_config.d/40-kuma-keys.conf"));
-        let dropin = plan
-            .files
-            .get("kuma-user-deltauser")
-            .expect("the account's dropin is staged");
+        let dropin = plan.files.get("kuma-user-deltauser").expect("the account's dropin is staged");
         match dropin {
             Content::Text(text) => {
                 assert!(text.contains("KUMA_USER='deltauser'"));
@@ -1044,9 +1033,7 @@ mod tests {
         // The release bakes the account and the declaration names it
         // identically: the dropin is the release's own, and emitting a
         // second copy would be noise the diff exists to prevent.
-        let base = format!(
-            "{BASE}\n[other_users.rider]\nshell = \"fish\"\ngroups = []\n"
-        );
+        let base = format!("{BASE}\n[other_users.rider]\nshell = \"fish\"\ngroups = []\n");
         let plan = compile_ok(
             "schema_version = 1\n\
              [system]\n\
