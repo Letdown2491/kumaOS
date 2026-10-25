@@ -3191,6 +3191,27 @@ assert not naked, "%d layers lost their zstd-chunked annotations" % len(naked)' 
     # (smoketest, appended to the example above): one name is one
     # account, and the declaration's validation refuses the collision
     # at Config::load, before the registry was ever asked.
+    #
+    # Whether the account's ride is askable at all: the delta is
+    # compiled by the machine's OWN binary — the N-1 — and the account
+    # emission debuted in 44.14.0. An older N-1 cannot carry what it
+    # predates, and it cannot refuse it either (the refusal list is
+    # the same vintage), so the account's silence on such a transition
+    # is a fact about the N-1, not the release. The divergence still
+    # rides the declaration — a user's real move — but its assertions
+    # stand down until an N-1 whose compiler can emit the dropin,
+    # which is the next road's to prove (the v44.14.0 road's lap died
+    # here: 44.13.0 -> 44.14.0 is the one transition where this gate
+    # is shut; measured 2026-10-25).
+    local n1_accounts_ride=0
+    local n1_version=""
+    local version_before=""
+    version_before=$(gsudo "kuma --version")
+    if [[ "$version_before" =~ ^kuma\ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+        n1_version=${BASH_REMATCH[1]}
+        [ "$(printf '%s\n%s\n' "$n1_version" 44.14.0 | sort -V | head -1)" = 44.14.0 ] &&
+            n1_accounts_ride=1
+    fi
     gsudo "sh -c 'printf \"\n[other_users.deltauser]\nshell = \\\"fish\\\"\ngroups = []\nssh_keys = [\\\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIsmokedelta delta@kuma\\\"]\n\" >> /root/kuma.toml'" ||
         bad "cannot declare an additional account in the machine's declaration"
     ok "the machine's declaration diverges from the release"
@@ -3201,8 +3222,6 @@ assert not naked, "%d layers lost their zstd-chunked annotations" % len(naked)' 
     # --json because the assertions parse, not grep prose.
     local before after want
     before=$(booted_digest) || bad "could not read the booted digest before the upgrade"
-    local version_before=""
-    [ -n "$target_ref" ] && version_before=$(gsudo "kuma --version")
     gsudo "sh -c 'env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --check --json --config /root/kuma.toml 2>/tmp/kuma-upgrade.err'" \
         >"$dir/upgrade-check.json" \
         || { gsudo "cat /tmp/kuma-upgrade.err" || true; bad "the delta lane's check failed on the booted machine"; }
@@ -3264,24 +3283,33 @@ assert d["digest"] == sys.argv[2], d' "$dir/upgrade-yes.json" "$want" ||
     gsudo "rpm -q cowsay" | grep -q cowsay ||
         bad "the delta's package is not in the booted deployment"
     ok "the delta's package is installed"
-    # #53's contract, converged for real on every arm: the account the
-    # machine declared exists, out of wheel as declared, with its key
-    # served where sshd looks.
-    gsudo "id -u deltauser" >/dev/null ||
-        bad "the delta's additional account was never converged at first boot"
-    gsudo "id -nG deltauser" | grep -qw wheel &&
-        bad "the delta's additional account landed in wheel; groups = [] said not to"
-    gsudo "cat /etc/kuma/keys/deltauser" | grep -q "delta@kuma" ||
-        bad "the delta's additional account carries no key file"
-    ok "the delta's additional account converged at first boot"
+    # #53's contract, converged for real on every arm whose N-1 can
+    # carry it: the account the machine declared exists, out of wheel
+    # as declared, with its key served where sshd looks. On an older
+    # N-1 the gate stands the assertions down — the machine's
+    # declaration still names the account, and nothing the release
+    # owns can converge it yet.
+    if [ $n1_accounts_ride -eq 1 ]; then
+        gsudo "id -u deltauser" >/dev/null ||
+            bad "the delta's additional account was never converged at first boot"
+        gsudo "id -nG deltauser" | grep -qw wheel &&
+            bad "the delta's additional account landed in wheel; groups = [] said not to"
+        gsudo "cat /etc/kuma/keys/deltauser" | grep -q "delta@kuma" ||
+            bad "the delta's additional account carries no key file"
+        ok "the delta's additional account converged at first boot"
+    else
+        echo "   .. the N-1's delta compiler (kuma ${n1_version:-unknown}) predates added accounts; the account's convergence is the next road's to prove"
+    fi
     local rebaked
     rebaked=$(gsudo "cat /usr/lib/kuma/kuma.toml")
     printf '%s\n' "$rebaked" | grep -q cowsay ||
         bad "the booted deployment's baked declaration is not the machine's"
     printf '%s\n' "$rebaked" | grep -A1 '^\[nostr\]' | grep -q "enable = false" ||
         bad "the booted deployment's declaration does not carry the nostr disable"
-    printf '%s\n' "$rebaked" | grep -q '^\[other_users.deltauser\]' ||
-        bad "the re-baked declaration lost the additional account"
+    if [ $n1_accounts_ride -eq 1 ]; then
+        printf '%s\n' "$rebaked" | grep -q '^\[other_users.deltauser\]' ||
+            bad "the re-baked declaration lost the additional account"
+    fi
     ok "the declaration was re-baked onto the deployment"
     # The delta's deliverable is the preset file: the compile wrote the
     # disable lines and preset-applied them into the image's /etc. The
