@@ -8,7 +8,7 @@
   `[system].keymap` ("de", "us", "de-latin1" — the console's vocabulary,
   because one value has to work for the console and the session both)
   composes a niri input stanza into `/etc/kuma/keymap.kdl`, included
-  ahead of the `local.kdl` seam so the machine's layout beats the
+  ahead of the `local.kdl` include so the machine's layout beats the
   defaults and a person's own override still beats the machine; writes
   `/etc/vconsole.conf` ahead of the build's one initramfs regeneration,
   so the LUKS passphrase prompt speaks it too; and the greeter's
@@ -78,7 +78,7 @@
   the build's existing initramfs regeneration, zero added dracut
   minutes on keyed builds — and the boot graph's delta: the heal a
   no-op read on gapless machines, boot-titles' remount retry bounded
-  at ~2 s and only when titles need writing, the seam one stat per
+  at ~2 s and only when titles need writing, the include one stat per
   niri load, check_keymap four file reads against the ~6.6 s doctor
   baseline. Security walked the keymap value's road (one validator,
   three sinks — a KDL string, a single-quoted echo, an argv), the

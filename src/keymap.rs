@@ -4,7 +4,7 @@
 //! is the desktop session:
 //!
 //! - the session: `/etc/kuma/keymap.kdl`, an input stanza the session
-//!   config includes ahead of its local.kdl seam, so the machine's
+//!   config includes ahead of its local.kdl include, so the machine's
 //!   layout wins over the defaults and a person's own override still
 //!   wins over the machine;
 //! - the greeter: the same file, appended by the greeter session
@@ -45,14 +45,14 @@ pub(crate) const KEYMAP_KDL: &str = "/etc/kuma/keymap.kdl";
 /// initramfs at compose time.
 pub(crate) const VCONSOLE_CONF: &str = "/etc/vconsole.conf";
 
-/// The session config the seam lives in. Its presence is what tells an
-/// image that wires the stanza from one that predates the seam.
+/// The session config the include line lives in. Its presence is what
+/// tells an image that wires the stanza from one that predates it.
 pub(crate) const SESSION_CONFIG: &str = "/etc/niri/config.kdl";
 
 /// The include line the session config carries. One definition: the
 /// blocks.rs constant that ships it and this reader are pinned together
-/// by a containerfile test, so a moved seam is a moved needle.
-pub(crate) const KDL_INCLUDE_SEAM: &str = "include optional=true \"/etc/kuma/keymap.kdl\"";
+/// by a containerfile test, so a moved include is a moved needle.
+pub(crate) const KDL_INCLUDE: &str = "include optional=true \"/etc/kuma/keymap.kdl\"";
 
 /// The stanza's vocabulary: what a keymap name may be spelled from.
 /// `localectl list-keymaps` names are lowercase with hyphens ("us",
@@ -117,9 +117,9 @@ pub(crate) struct Layers {
     /// the LUKS passphrase prompt — was baked with.
     pub baked: Option<String>,
     /// Whether the booted image's session config wires the stanza file
-    /// at all. False on images that predate the seam: the stanza then
+    /// at all. False on images that predate the include: the stanza then
     /// reaches only the TTYs.
-    pub seam: bool,
+    pub wired: bool,
 }
 
 impl Layers {
@@ -131,8 +131,8 @@ impl Layers {
                 .as_deref()
                 .and_then(parse_vconsole),
             baked: baked_keymap().ok().flatten(),
-            seam: std::fs::read_to_string(SESSION_CONFIG)
-                .map(|config| config.contains(KDL_INCLUDE_SEAM))
+            wired: std::fs::read_to_string(SESSION_CONFIG)
+                .map(|config| config.contains(KDL_INCLUDE))
                 .unwrap_or(false),
         }
     }
@@ -219,10 +219,10 @@ impl Layers {
         }
         // An image too old to wire the stanza in: `apply` ran on it, the
         // TTYs moved, and the session and greeter cannot follow until an
-        // image that carries the seam arrives.
-        if self.chosen.is_some() && !self.seam {
+        // image that carries the include arrives.
+        if self.chosen.is_some() && !self.wired {
             out.push(Drift {
-                detail: "the booted image's session config predates the keymap seam: the \
+                detail: "the booted image's session config predates the keymap include: the \
                          layout reaches the TTYs but not the session or the greeter"
                     .into(),
                 verb: "update",
@@ -302,8 +302,8 @@ fn baked_keymap() -> Result<Option<String>> {
 /// explicit — the stanza carries no secret and the greeter's own user
 /// has to read it, so a hardened root umask must not be able to lock
 /// the greeter out of the layout silently — then rename, with the temp
-/// cleaned up if the rename refuses. The create covers pre-seam images,
-/// whose compose never made `/etc/kuma`.
+/// cleaned up if the rename refuses. The create covers pre-include
+/// images, whose compose never made `/etc/kuma`.
 pub(crate) fn write_stanza_file(path: &Path, layout: &str) -> Result<()> {
     let dir = path
         .parent()
@@ -358,15 +358,15 @@ pub(crate) fn apply(layout: &str, json: bool) -> Result<()> {
     })?;
     note(&format!("localectl set-keymap: the TTYs speak {layout:?} now"));
 
-    // The boot layer, read back now that the write landed: the seam
+    // The boot layer, read back now that the write landed: the include
     // tells the caller whether this image's session could follow at
     // all, and the initramfs fact gets its own line either way — the
     // one layer this verb cannot move is the one nobody should
     // discover at the passphrase prompt.
     let layers = Layers::read();
-    if !layers.seam {
+    if !layers.wired {
         note(
-            "this image's session config predates the keymap seam: the session and the \
+            "this image's session config predates the keymap include: the session and the \
              greeter pick the layout up on the next image that carries the include",
         );
     }
@@ -383,7 +383,7 @@ pub(crate) fn apply(layout: &str, json: bool) -> Result<()> {
                 "chosen": layers.chosen,
                 "vconsole": layers.vconsole,
                 "baked": layers.baked,
-                "session_seam": layers.seam,
+                "session_includes_keymap": layers.wired,
             }))?
         );
     }
@@ -403,7 +403,7 @@ pub(crate) fn status(json: bool) -> Result<()> {
                 "chosen": layers.chosen,
                 "vconsole": layers.vconsole,
                 "baked": layers.baked,
-                "session_seam": layers.seam,
+                "session_includes_keymap": layers.wired,
                 "drift": drifts,
             }))?
         );
@@ -416,9 +416,9 @@ pub(crate) fn status(json: bool) -> Result<()> {
     say(&format!("session and greeter ({KEYMAP_KDL})"), &layers.chosen);
     say(&format!("TTYs ({VCONSOLE_CONF})"), &layers.vconsole);
     say("image's baked [system].keymap", &layers.baked);
-    if !layers.seam {
+    if !layers.wired {
         println!(
-            "this image's session config predates the keymap seam: the stanza reaches \
+            "this image's session config predates the keymap include: the stanza reaches \
              only the TTYs"
         );
     }
@@ -486,14 +486,14 @@ mod tests {
 
     #[test]
     fn layers_that_agree_are_not_drift() {
-        let all_none = Layers { chosen: None, vconsole: None, baked: None, seam: true };
+        let all_none = Layers { chosen: None, vconsole: None, baked: None, wired: true };
         assert!(all_none.drifts().is_empty(), "nothing named anywhere agrees by construction");
 
         let all_de = Layers {
             chosen: Some("de".into()),
             vconsole: Some("de".into()),
             baked: Some("de".into()),
-            seam: true,
+            wired: true,
         };
         assert!(all_de.drifts().is_empty());
 
@@ -505,7 +505,7 @@ mod tests {
             chosen: None,
             vconsole: Some("us".into()),
             baked: Some("us".into()),
-            seam: true,
+            wired: true,
         };
         let drifts = console_only.drifts();
         assert_eq!(drifts.len(), 2, "{drifts:?}");
@@ -521,7 +521,7 @@ mod tests {
             chosen: Some("de".into()),
             vconsole: Some("de".into()),
             baked: None,
-            seam: true,
+            wired: true,
         };
         let drifts = applied.drifts();
         assert_eq!(drifts.len(), 1, "{drifts:?}");
@@ -537,7 +537,7 @@ mod tests {
             chosen: Some("de".into()),
             vconsole: Some("us".into()),
             baked: Some("de".into()),
-            seam: true,
+            wired: true,
         };
         let drifts = crossed.drifts();
         assert_eq!(drifts.len(), 1, "{drifts:?}");
@@ -549,7 +549,7 @@ mod tests {
             chosen: Some("fr".into()),
             vconsole: Some("fr".into()),
             baked: Some("de".into()),
-            seam: true,
+            wired: true,
         };
         let drifts = rebaked.drifts();
         assert_eq!(drifts.len(), 1, "{drifts:?}");
@@ -558,7 +558,8 @@ mod tests {
 
         // The stanza file deleted: everything fell back to the default,
         // the image still bakes the layout — apply it back.
-        let deleted = Layers { chosen: None, vconsole: None, baked: Some("de".into()), seam: true };
+        let deleted =
+            Layers { chosen: None, vconsole: None, baked: Some("de".into()), wired: true };
         let drifts = deleted.drifts();
         assert_eq!(drifts.len(), 1, "{drifts:?}");
         assert!(drifts[0].cmd.contains("apply de"), "{}", drifts[0].cmd);
@@ -590,15 +591,15 @@ mod tests {
     }
 
     #[test]
-    fn an_image_without_the_seam_says_what_did_not_move() {
+    fn an_image_without_the_include_says_what_did_not_move() {
         let old_image = Layers {
             chosen: Some("de".into()),
             vconsole: Some("de".into()),
             baked: Some("de".into()),
-            seam: false,
+            wired: false,
         };
         let drifts = old_image.drifts();
         assert_eq!(drifts.len(), 1, "{drifts:?}");
-        assert!(drifts[0].detail.contains("predates the keymap seam"), "{}", drifts[0].detail);
+        assert!(drifts[0].detail.contains("predates the keymap include"), "{}", drifts[0].detail);
     }
 }

@@ -723,7 +723,7 @@ mod tests {
         ("cosmic", "schema_version = 1\n[system]\ndesktop = \"cosmic\"\n"),
         // The keymap: the compose block (vconsole.conf, the initramfs
         // regen), the session stanza COPY ahead of its validate, and
-        // the include seam's bytes — all gated on this one field, so
+        // the include line's bytes — all gated on this one field, so
         // the case pins all of them.
         ("keymap", "schema_version = 1\n[system]\ndesktop = \"niri\"\nkeymap = \"de\"\n"),
         (
@@ -765,29 +765,29 @@ mod tests {
         }
     }
 
-    /// The keymap seam's bytes live in readers that must not drift:
+    /// The keymap include's bytes live in readers that must not drift:
     /// the session config ships the include line `kuma keymap status`
     /// greps for, and the greeter wrapper assembles the stanza file the
     /// module names — ahead of nothing, as the last word.
     #[test]
-    fn the_keymap_seam_is_what_the_keymap_module_reads() {
+    fn the_keymap_include_is_what_the_keymap_module_reads() {
         assert!(
-            blocks::NIRI_EXTRAS.contains(crate::keymap::KDL_INCLUDE_SEAM),
-            "the session config's include line and keymap::KDL_INCLUDE_SEAM moved apart"
+            blocks::NIRI_EXTRAS.contains(crate::keymap::KDL_INCLUDE),
+            "the session config's include line and keymap::KDL_INCLUDE moved apart"
         );
         assert!(
             blocks::GREETER_SESSION.contains(crate::keymap::KEYMAP_KDL),
             "the greeter wrapper no longer assembles the stanza file the keymap module reads"
         );
-        // The seam sits ahead of the local.kdl include on purpose: the
-        // machine's layout wins over the defaults, a person's own
+        // The include sits ahead of the local.kdl include on purpose:
+        // the machine's layout wins over the defaults, a person's own
         // override still wins over the machine. Matched on the full
         // include lines — a comment can say "local.kdl" and the file's
-        // first mention is not the seam.
-        let seam = blocks::NIRI_EXTRAS.find(crate::keymap::KDL_INCLUDE_SEAM).unwrap();
+        // first mention is not the line.
+        let include = blocks::NIRI_EXTRAS.find(crate::keymap::KDL_INCLUDE).unwrap();
         let local =
             blocks::NIRI_EXTRAS.find("include optional=true \"~/.config/niri/local.kdl\"").unwrap();
-        assert!(seam < local, "the keymap include must precede the local.kdl seam");
+        assert!(include < local, "the keymap include must precede the local.kdl include");
     }
 
     #[test]

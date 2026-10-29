@@ -2226,7 +2226,8 @@ window-rule {
 
 // The machine's keymap ([system].keymap at compose time, `kuma keymap
 // apply` at runtime) rides as one input stanza in /etc/kuma/keymap.kdl,
-// included BEFORE the seam below so a person's own local.kdl still wins
+// included BEFORE the local.kdl include below so a person's own
+// override still wins
 // over the machine's layout. optional=true for the same reason the
 // local include carries it: machines that never name a keymap validate
 // with the file absent.
@@ -3473,7 +3474,7 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     // config already has both.
     // The machine's keymap stanza, when the declaration names one:
     // the session config's include (in NIRI_EXTRAS, ahead of the
-    // local.kdl seam) resolves at the validate below, so a stanza that
+    // local.kdl include) resolves at the validate below, so a stanza that
     // stopped parsing fails the build rather than shipping a session
     // that refuses its own reload. The TTY and boot layers of the same
     // value ride in the keymap block further down; the greeter's
