@@ -189,9 +189,9 @@ leave it out of anything you publish.
 its own foundation out of Fedora's packages. Naming `system.base` opts
 out and builds on the image you name instead.
 
-**Your machine's own settings stay out of the file.** Hostname, timezone
-and encryption belong to the machine. Two machines built from this one
-file can differ on all three.
+**Your machine's own settings stay out of the file.** Hostname, timezone,
+encryption and the keyboard layout belong to the machine. Two machines
+built from this one file can differ on all four.
 
 **One primary, and anyone else who needs an account.** `[user]` is the
 machine's primary and stays in its section forever. Additional accounts

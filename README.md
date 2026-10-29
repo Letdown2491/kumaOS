@@ -92,8 +92,9 @@ every key, and a test keeps it valid against the current schema.
 Some things stay out of the file on purpose. You never name a base:
 with `system.base` unset, kuma composes one from Fedora's
 repositories, and any bootc image can stand in if you prefer one.
-Hostname, timezone and disk encryption belong to the machine, not the
-file, so two machines built from one file can differ on all three.
+Hostname, timezone, disk encryption and the keyboard layout belong to
+the machine, not the file, so two machines built from one file can
+differ on all four.
 
 ## Status
 

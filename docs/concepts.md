@@ -133,7 +133,8 @@ enter from the registry, or from a local build?
   `[other_users]` are emitted for the boot sync to converge (added or
   moved; a DROPPED one refuses, because the sync creates accounts and
   never deletes them), and a field the compiler cannot carry (the
-  primary account's move, a backup, a timezone) refuses loudly instead
+  primary account's move, a backup, a timezone, a keymap — its
+  initramfs half is image content) refuses loudly instead
   of silently dropping a choice. What the delta does not carry is the
   release's own new curated packages and its newer converger scripts —
   the recipe the running kuma compiles with is the delta's ceiling, and
@@ -778,7 +779,13 @@ different screens, the same reason timezone stays out. The shell applies
 your changes live and persists the difference to
 `~/.config/niri/local.kdl`, the delta file the image's niri config
 includes last, so your choices win over the image's defaults without ever
-shadowing them.
+shadowing them. The machine's own keyboard layout rides the same merge
+shape one position earlier: a stanza in `/etc/kuma/keymap.kdl` the config
+includes ahead of `local.kdl`, so the machine's layout beats the image's
+defaults and your `local.kdl` — written by the shell's own settings —
+still beats the machine. `kuma keymap apply` moves it on a running
+machine; declaring `[system] keymap` bakes it into the image too, the
+part no runtime verb can reach.
 
 **Everything else in `/etc` the image never shipped.** `kuma doctor`
 watches the files this image owns and says nothing about the rest. A

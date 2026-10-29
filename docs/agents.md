@@ -55,7 +55,10 @@ between runs, and nothing promises they will not gain detail.
   `backup --json` reports the offsite repository, whether this machine has
   the credential the declaration names, and when a copy last completed.
   `hibernate --json` reports what a swapfile would cost and where it would go.
-  All seven change nothing, and `snapshot --restore --json`,
+  `keymap status --json` reads every keyboard layer's layout back — the
+  session and greeter stanza, the TTYs, the image's baked one — with the
+  disagreements in `drift`, the same words doctor grades. All eight change
+  nothing, and `snapshot --restore --json`,
   `backup --restore --json` and `hibernate --off --json` stay dry runs naming
   what they would overwrite or remove until `--yes`.
 

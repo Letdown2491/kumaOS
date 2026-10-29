@@ -108,9 +108,9 @@ stored next to the key, so the wrap adds no second secret; it exists so
 a vault with an independent passphrase later needs no migration.
 
 **Machine state.** What is true of one machine rather than of the system it
-runs: hostname, timezone, which wifi network, the volume. kuma
-deliberately keeps it out of the declaration; the opposite of **system
-definition**.
+runs: hostname, timezone, the keyboard layout, which wifi network, the
+volume. kuma deliberately keeps it out of the declaration; the opposite
+of **system definition**.
 
 **ostree.** The technology underneath bootc that stores the system
 read-only and merges your `/etc` onto each new deployment.
