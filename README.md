@@ -158,9 +158,17 @@ a newer published kumaOS release and `kuma rollback` returns to the
 previous one, the declaration riding along either way. The file axis:
 `kuma sync` converges the running machine now, `kuma diff` shows what
 it has that the file does not, and `kuma capture` writes that drift
-back as a proposal instead of an error to erase. Everything else —
-snapshots, backups, hibernate, doctor, completions — is `kuma --help`
-away, and every command ends by naming the legal next ones.
+back as a proposal instead of an error to erase.
+
+The package lists have their own shortcuts: `kuma add tailscale --rpm`
+writes the line you would have typed, and `kuma remove tailscale` drops
+a package from whichever list has it — the file stays the one place the
+machine is described. `kuma clean` reclaims a builder's leftovers:
+dangling images, abandoned build containers, stale composed bases. And
+`kuma completions fish` teaches your shell the verbs, so the ones you
+have not memorized finish themselves. Everything else — snapshots,
+backups, hibernate, doctor — is `kuma --help` away, and every command
+ends by naming the legal next ones.
 
 ## How it compares
 
