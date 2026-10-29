@@ -4,6 +4,45 @@
 //! and timers, so a diff is safe to run out of curiosity. The one thing
 //! doctor writes is kuma's own deployed-image stamp, which it refreshes
 //! from the truth it alone (having root) can see.
+//!
+//! Check conventions. Every check below is one of two species, and its
+//! own doc comment says which by naming what produces the drift it
+//! grades:
+//!
+//! - **Floor checks** grade the image's baked posture — greenboot's
+//!   machinery, the signature policy, the encryption choice, the
+//!   hibernate geometry — the values an image either carried or did not.
+//!   Permanent by design: the boot smoke's hardening lap pins the same
+//!   floor (a floor change is a two-file change, blocks.rs AND the lap),
+//!   and a posture either baked or not has no retirement to state.
+//! - **Drift reconcilers** grade stateful drift a running machine
+//!   accumulates: timers that stopped, links a disable left dangling, a
+//!   person's /etc edits, a shadow config one copy away. Each exists
+//!   because some machine, once, drifted.
+//!
+//! The retirement rule, so doctor only grows while the growth is real:
+//! a drift reconciler retires once every supported install path has run
+//! it — new installs never had the drift, and upgraded installs have had
+//! at least one doctor run that converged. The audit question beneath
+//! the rule is *what produces this drift today*, and there are exactly
+//! three honest answers, two of which never die: an image outside every
+//! supported upgrade chain (the only answer that retires — the check
+//! goes, its tests with it, and the boot smoke's doctor lap reads the
+//! graded document by check name and asserts no count, so the retirement
+//! is a silent no-op there), the machine's own converger misbehaving
+//! (perpetual — a check on the converger, not on a migration), and the
+//! person at the keyboard (perpetual). When a check is added whose only
+//! producer is a one-time transition, its retirement condition goes in
+//! its own doc comment in the same commit.
+//!
+//! Audit ledger. 44.15.0 (#56): none retire. Every reconciler's drift is
+//! still produced by a supported path — upgrades from pre-feature images
+//! (greenboot's boot counter, the signature policy, the kuma-shell unit,
+//! the accounts bridge), whose machines are exactly who the checks exist
+//! for — or by ordinary use, which never stops producing drift to grade.
+//! The names the smoke pins today (signatures, hibernate, lid,
+//! snapshots) are all posture or converger grades; the next audit asks
+//! the same question of whatever is new.
 
 use crate::config::Config;
 use crate::hibernate;
