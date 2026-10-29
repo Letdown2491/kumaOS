@@ -30,6 +30,8 @@
 //! state the refusal list exists for.
 
 use anyhow::{bail, Context, Result};
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 
 use crate::host::{note, run_host};
 use crate::state::BAKED_CONFIG;
@@ -294,6 +296,37 @@ fn baked_keymap() -> Result<Option<String>> {
         .map(String::from))
 }
 
+/// The write half of `apply`, split from the verb so the mode and the
+/// atomicity are testable against a tempdir the way the heal's and the
+/// entry writer's are. Temp in the destination's own directory, 0644
+/// explicit — the stanza carries no secret and the greeter's own user
+/// has to read it, so a hardened root umask must not be able to lock
+/// the greeter out of the layout silently — then rename, with the temp
+/// cleaned up if the rename refuses. The create covers pre-seam images,
+/// whose compose never made `/etc/kuma`.
+pub(crate) fn write_stanza_file(path: &Path, layout: &str) -> Result<()> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", path.display()))?;
+    std::fs::create_dir_all(dir).with_context(|| {
+        format!("cannot create {}: kuma keymap apply needs root", dir.display())
+    })?;
+    let tmp = dir.join(".keymap.kdl.kuma-tmp");
+    std::fs::write(&tmp, stanza(layout)).with_context(|| {
+        format!(
+            "cannot write {}: kuma keymap apply needs root — `sudo kuma keymap apply {layout}`",
+            path.display()
+        )
+    })?;
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644))?;
+    if let Err(err) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err)
+            .with_context(|| format!("cannot put the stanza in place at {}", path.display()));
+    }
+    Ok(())
+}
+
 /// `kuma keymap apply`: write the layout into the layers a runtime verb
 /// can move, and say plainly which one it cannot. Root's job — the
 /// stanza lives in /etc and localectl answers to polkit — and a call
@@ -305,11 +338,10 @@ pub(crate) fn apply(layout: &str, json: bool) -> Result<()> {
     // The session and greeter layer: one file, both readers. niri
     // watches the files it includes, so the running session picks the
     // change up on its own; the greeter assembles its copy at wrapper
-    // start, so it picks the change up on its next start.
-    let stanza = stanza(layout);
-    std::fs::write(KEYMAP_KDL, &stanza).with_context(|| {
-        format!("cannot write {KEYMAP_KDL}: kuma keymap apply needs root — `sudo kuma keymap apply {layout}`")
-    })?;
+    // start, so it picks the change up on its next start. Atomic, so a
+    // crash mid-write never leaves a half stanza for the greeter's
+    // next start to assemble a broken config from.
+    write_stanza_file(Path::new(KEYMAP_KDL), layout)?;
     note(&format!(
         "{KEYMAP_KDL}: the session and greeter layer written; the session reloads as \
          niri notices the file, the greeter on its next start"
@@ -530,6 +562,31 @@ mod tests {
         let drifts = deleted.drifts();
         assert_eq!(drifts.len(), 1, "{drifts:?}");
         assert!(drifts[0].cmd.contains("apply de"), "{}", drifts[0].cmd);
+    }
+
+    #[test]
+    fn the_stanza_write_is_the_entry_writer_s_own_shape() {
+        // The audit's fix: temp in the destination's own directory, the
+        // mode set before the rename, no temp left behind. The mode is
+        // the security-relevant half — the greeter's own user reads
+        // this file, so a hardened root umask must not be able to land
+        // it 0600 and lock the greeter out of the layout silently.
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("nested").join("keymap.kdl");
+        write_stanza_file(&dest, "de").unwrap();
+        let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644, "the stanza is world-readable on purpose");
+        assert!(
+            !dir.path().join("nested").join(".keymap.kdl.kuma-tmp").exists(),
+            "the rename leaves no temp behind"
+        );
+        assert_eq!(parse_stanza(&std::fs::read_to_string(&dest).unwrap()).as_deref(), Some("de"));
+        // A second write is the rename over the old file: the bytes
+        // move, the mode holds.
+        write_stanza_file(&dest, "us").unwrap();
+        let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644);
+        assert_eq!(parse_stanza(&std::fs::read_to_string(&dest).unwrap()).as_deref(), Some("us"));
     }
 
     #[test]
