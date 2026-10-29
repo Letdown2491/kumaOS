@@ -2,6 +2,82 @@
 
 ## Unreleased
 
+## v44.15.0 (2026-10-29)
+
+- **One keyboard layout, every layer, with the boot layer made honest.**
+  `[system].keymap` ("de", "us", "de-latin1" — the console's vocabulary,
+  because one value has to work for the console and the session both)
+  composes a niri input stanza into `/etc/kuma/keymap.kdl`, included
+  ahead of the `local.kdl` seam so the machine's layout beats the
+  defaults and a person's own override still beats the machine; writes
+  `/etc/vconsole.conf` ahead of the build's one initramfs regeneration,
+  so the LUKS passphrase prompt speaks it too; and the greeter's
+  session wrapper appends the same stanza to a runtime copy of its
+  pinned config. `kuma keymap apply <layout>` moves the three runtime
+  layers on a booted machine and says plainly which layer it cannot
+  move: the initramfs is image content, moved by declaring the keymap
+  and rebuilding, never by the verb. `kuma keymap status --json` reads
+  every layer back, the image's baked one included, and `kuma doctor`
+  warns when the layers disagree — the common drift being exactly the
+  quiet one, the prompt that kept speaking the old layout. COSMIC
+  machines get the vconsole and boot layers; there is no session
+  stanza to include. A keymap move refuses the delta compiler, because
+  the runtime layers are three of the four and carrying them alone
+  would half-converge (#58).
+
+- **The account bridge's gap has a heal.** The delta is compiled by the
+  machine's own binary — the release the machine is leaving — and a
+  binary predating the account emission stages a deployment whose
+  `/usr/lib/kuma/users.d` is empty while the re-baked declaration still
+  names the accounts: the ride carries the names, nothing carries the
+  dropins, and `/usr` is read-only at runtime, so nothing at boot could
+  write them where the converger looks. `kuma-user-sync.service`'s
+  ExecStartPre (`kuma accounts-heal`) fills the hole from the ride into
+  `/var/lib/kuma/users.d` — 0600, the emission's own shape — the sync's
+  loop converges the account the same boot, a dropin takes it back, and
+  the heal retires its own file. `kuma doctor` cross-checks the
+  declaration's additional accounts against what actually carries them,
+  so the silent shape a stale compiler leaves is a finding (#60). The
+  smoke's delta lane runs the true scenario on the N-1 compiler that
+  needs it: 44.14.0 emits the dropin, 44.13.0 predates the emission,
+  and the proof waits for the road whose N-1 can carry it.
+
+- **boot-titles guarantees /boot is writable itself.** No unit in the
+  boot graph owns the rw half — ostree-remount does not touch it, and
+  the guest's boot.mount comes from the initramfs — so a machine with
+  stale titles to fix could only fail the write. With titles to write,
+  the caller remounts rw on a bounded retry (ten rounds × 200 ms, the
+  mountinfo read the authority) and refuses loudly if the filesystem
+  stays read-only; a machine with nothing to fix touches no mounts
+  (#59).
+
+- **The release page teaches image verification, not just artifact
+  verification.** The body's verify section now names the thing most
+  kuma machines actually run: `cosign verify --key cosign.pub` against
+  the pinned `niri-<version>` tag — the key form, because a podman
+  policy.json can name a key and not a keyless identity, which is why
+  publish.yml signs with one — the key fetched from the release tag
+  that names the code which shipped, and the digest-pinned form beside
+  it, the verify response being where the digest comes from. A test
+  holds release.yml and publish.yml to one registry path and one tag
+  scheme, the same standard the asset names were already held to (#57).
+
+- **doctor states its check conventions.** Two species, written where
+  the checks live: floor checks grade the image's baked posture and are
+  permanent by design — the boot smoke's hardening lap pins the same
+  floor — and drift reconcilers grade stateful drift, retiring once
+  every supported install path has run them. The 44.15.0 audit's
+  ledger: none retire; every reconciler's drift is still produced by a
+  supported upgrade chain or by ordinary use, and the smoke's doctor
+  lap reads by check name and asserts no count, so a retirement, when
+  one eventually comes, is a silent no-op there (#56).
+
+- **The prose names its shortcuts as commands.** The README answers
+  "why this exists" before "what do I type", and the everyday-use
+  section names `kuma add`, `kuma remove`, `kuma clean` and `kuma
+  completions` as commands — the verb-documentation gate reads pages
+  for command mentions, and bare words in a list are not one.
+
 ## v44.14.0 (2026-10-24)
 
 - **A machine-added account converges through a delta.** The delta
