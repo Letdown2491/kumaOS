@@ -185,7 +185,7 @@ prints into `[user]` as `password_hash`. Without it the account exists
 but cannot log in. Anyone who can read the image can read that hash, so
 leave it out of anything you publish.
 
-**You did not name a base image, and you do not have to.** kuma builds
+**You did not name a base, and you do not have to.** kuma builds
 its own foundation out of Fedora's packages. Naming `system.base` opts
 out and builds on the image you name instead.
 

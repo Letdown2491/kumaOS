@@ -786,7 +786,9 @@ real machine carries dozens of legitimately local files, and a check
 that lists them all is one you learn to scroll past. Two shapes are
 always wrong rather than merely undeclared, and doctor reports both: a
 flatpak override pointing at nothing, and an enabled unit with no unit
-file behind it.None of this is a to-do list. Some of it is a boundary that will not
+file behind it.
+
+None of this is a to-do list. Some of it is a boundary that will not
 move (identity, secrets). Some of it is a decision that could (dconf,
 the portal store). None of it is an oversight.
 
