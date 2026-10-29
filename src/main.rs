@@ -1,3 +1,4 @@
+mod accounts;
 mod backup;
 mod bootentries;
 mod capture;
@@ -487,6 +488,20 @@ enum Cmd {
     /// against a directory tree instead of asserted about a heredoc.
     #[command(hide = true)]
     BootTitles,
+    /// Fill account holes the ride names and no dropin carries
+    ///
+    /// Hidden for the same reason as boot-titles: nothing asks a person
+    /// to run it. kuma-user-sync.service's ExecStartPre runs it on every
+    /// boot (#60): the delta is compiled by the machine's own binary,
+    /// and one whose vintage predates the account emission stages a
+    /// deployment whose users.d carries no dropin while the re-baked
+    /// ride still names the accounts. The heal bridges the ride into
+    /// machine state, where the converger's second loop reads it. A verb
+    /// rather than a shell script because the ride is TOML and the
+    /// ownership rule (a dropin takes the account back) is worth testing
+    /// against a directory tree.
+    #[command(hide = true)]
+    AccountsHeal,
     /// Converge one store's Flatpak permission overrides to the declaration
     ///
     /// Hidden for the same reason as boot-titles: two units run it,
@@ -760,6 +775,7 @@ fn run(
             )
         }
         Cmd::BootTitles => boot_titles(),
+        Cmd::AccountsHeal => accounts::heal(),
         Cmd::FlatpakOverrides { scope } => flatpak_overrides(scope),
         Cmd::Hibernate { size, off, yes, json: _ } => hibernate_cmd(size, off, yes, json),
         Cmd::Schema => schema(),

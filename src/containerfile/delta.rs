@@ -391,16 +391,10 @@ pub(crate) fn compile(
         if baked.other_users.get(name) == Some(extra) {
             continue;
         }
-        let mut decl = format!("KUMA_USER='{}'\n", name);
-        if let Some(shell) = &extra.shell {
-            decl.push_str(&format!("KUMA_SHELL='/usr/bin/{shell}'\n"));
-        }
-        if !extra.groups.is_empty() {
-            decl.push_str(&format!("KUMA_GROUPS='{}'\n", extra.groups.join(" ")));
-        }
-        if let Some(hash) = &extra.password_hash {
-            decl.push_str(&format!("KUMA_PASSWORD_HASH='{hash}'\n"));
-        }
+        // The KUMA_* shape has one owner (the boot-time heal shares it,
+        // so a bridged account and an emitted one source the same
+        // bytes): this is the dropin half of that shape.
+        let decl = crate::accounts::account_keys(name, extra);
         e.raw("\n");
         let dropin = e.stage(&format!("kuma-user-{name}"), decl);
         e.copy_private(&dropin, &format!("/usr/lib/kuma/users.d/{name}"));

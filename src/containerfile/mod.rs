@@ -3116,6 +3116,15 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         assert!(USER_SYNC_SCRIPT.contains("if [ -f /usr/lib/kuma/user ]"));
         assert!(USER_SYNC_SCRIPT.contains(r#"[ -n "${KUMA_USER:-}" ] || return 0"#));
         assert!(USER_SYNC_SCRIPT.contains("for account_file in /usr/lib/kuma/users.d/*"));
+        // The heal's machine-state loop (#60): the image's users.d is
+        // read-only at runtime, so the ride-named accounts a stale
+        // compiler's delta left undropped bridge through /var instead —
+        // and the unit runs the heal itself, before the script.
+        assert!(USER_SYNC_SCRIPT.contains("for account_file in /var/lib/kuma/users.d/*"));
+        assert!(USER_SYNC_SERVICE.contains("ExecStartPre=/usr/bin/kuma accounts-heal"));
+        let pre = USER_SYNC_SERVICE.find("ExecStartPre=").unwrap();
+        let start = USER_SYNC_SERVICE.find("ExecStart=").unwrap();
+        assert!(pre < start, "the heal runs before the convergence");
     }
 
     /// A shell the image does not install locks every account made on

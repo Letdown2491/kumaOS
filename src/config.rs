@@ -1666,6 +1666,12 @@ pub(crate) mod tests {
                 "hidden; kuma-boot-titles.service runs it and nothing asks a person to",
             ),
             (
+                "accounts-heal",
+                "hidden; kuma-user-sync.service's ExecStartPre runs it and nothing asks a \
+                 person to — the gap it heals is #60's, and the converger it serves is \
+                 documented as [other_users] rather than as a command",
+            ),
+            (
                 "flatpak-overrides",
                 "hidden; two units and `kuma sync` run it, and the feature it converges \
                  is documented as [overrides] rather than as a command",

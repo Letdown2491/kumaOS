@@ -493,9 +493,7 @@ mod tests {
     /// fifth field, the per-mount options the sixth. #59's guarantee
     /// reads the same file the kernel writes.
     fn mountinfo_line(root: &str, mount_point: &str, options: &str) -> String {
-        format!(
-            "42 0 253:2 {root} {mount_point} {options} shared:1 - ext4 /dev/vda2 rw,relatime\n"
-        )
+        format!("42 0 253:2 {root} {mount_point} {options} shared:1 - ext4 /dev/vda2 rw,relatime\n")
     }
 
     #[test]

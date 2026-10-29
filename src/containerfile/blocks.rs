@@ -1632,6 +1632,11 @@ Before=systemd-user-sessions.service greetd.service
 
 [Service]
 Type=oneshot
+# The heal first (#60): account files the baked declaration names and no
+# dropin carries go into machine state, where the script's second loop
+# reads them. Failing here fails the unit loudly — an untrusted account
+# ride is not one to converge around.
+ExecStartPre=/usr/bin/kuma accounts-heal
 ExecStart=/usr/libexec/kuma-user-sync
 
 [Install]
@@ -1753,6 +1758,20 @@ converge_account
 # declaration names no additional accounts; the -f guard skips the
 # unmatched glob.
 for account_file in /usr/lib/kuma/users.d/*; do
+    [ -f "$account_file" ] || continue
+    unset KUMA_USER KUMA_SHELL KUMA_GROUPS KUMA_PASSWORD_HASH KUMA_SSH_KEY
+    . "$account_file"
+    converge_account
+done
+
+# Machine state fills the image's holes, the same rule /var/lib/kuma/user
+# runs on for the primary. The files here are the heal's (#60): a delta
+# compiled by a binary predating the account emission stages no dropin,
+# while the declaration it re-baked into /usr/lib/kuma/kuma.toml still
+# names the accounts — the heal bridges the ride into this directory, and
+# retires a file the moment a dropin takes the account back. The keys
+# are unset before each source for the same reason the image loop's are.
+for account_file in /var/lib/kuma/users.d/*; do
     [ -f "$account_file" ] || continue
     unset KUMA_USER KUMA_SHELL KUMA_GROUPS KUMA_PASSWORD_HASH KUMA_SSH_KEY
     . "$account_file"

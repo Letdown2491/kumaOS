@@ -1564,6 +1564,82 @@ fn read_dir_has_files(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// The additional accounts the ride names, as bare names: doctor
+/// cross-checks existence, not contents. A ride that does not parse
+/// reads as naming nothing — the heal's own loud refusal is the check
+/// for that failure, and two checks refusing for one reason is noise.
+fn ride_account_names(ride: Option<&str>) -> Vec<String> {
+    ride.map(|text| {
+        toml::from_str::<toml::Value>(text)
+            .ok()
+            .and_then(|value| {
+                value.get("other_users")?.as_table().map(|table| table.keys().cloned().collect())
+            })
+            .unwrap_or_default()
+    })
+    .unwrap_or_default()
+}
+
+/// The accounts an image's converger can actually create: the check
+/// #60's doctor pass owes — `user_sync_has_an_account` grades the
+/// converger's inputs, and those inputs can be green while the
+/// declaration's `[other_users]` is carried by nothing, which is the
+/// silent shape a stale compiler's delta leaves. An account named by
+/// the declaration and carried by no dropin and no machine-state file
+/// is a login that will never exist and a boot that says nothing about
+/// it. The fix is `kuma sync`: restarting the unit runs its heal, which
+/// bridges the ride into machine state, and the account converges now
+/// rather than at the next boot.
+fn declared_accounts_missing(
+    names: &[String],
+    image_users_d: &Path,
+    machine_users_d: &Path,
+) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| !image_users_d.join(name).exists() && !machine_users_d.join(name).exists())
+        .cloned()
+        .collect()
+}
+
+fn check_declared_accounts(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
+    let ride = std::fs::read_to_string(BAKED_CONFIG).ok();
+    let names = ride_account_names(ride.as_deref());
+    if names.is_empty() {
+        return;
+    }
+    let missing = declared_accounts_missing(
+        &names,
+        Path::new(crate::accounts::IMAGE_USERS_D),
+        Path::new(crate::accounts::MACHINE_USERS_D),
+    );
+    let plural = if names.len() == 1 { "" } else { "s" };
+    if missing.is_empty() {
+        report(
+            Grade::Ok,
+            "accounts",
+            format!(
+                "the declaration's {} additional account{plural} {} carried",
+                names.len(),
+                if names.len() == 1 { "is" } else { "are" }
+            ),
+            None,
+        );
+    } else {
+        let list = missing.join(", ");
+        let fix = Action::new("sync", "kuma sync", "re-run convergence now");
+        report(
+            Grade::Warn,
+            "accounts",
+            format!(
+                "the declaration names {list} and no dropin or machine-state file carries \
+                 it — the account will not exist until the heal runs"
+            ),
+            Some(fix),
+        );
+    }
+}
+
 /// The oneshots record their last run in Result=; the timers are what
 /// keeps long-uptime machines converged.
 ///
@@ -1601,6 +1677,7 @@ fn convergence_targets(
 }
 
 fn check_convergence(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
+    check_declared_accounts(report);
     let targets = convergence_targets(
         user_sync_has_an_account(
             Path::new(BAKED_USER),
@@ -4186,6 +4263,42 @@ mod tests {
         std::fs::create_dir(&additional).unwrap();
         std::fs::write(additional.join("partner"), "KUMA_USER='partner'\n").unwrap();
         assert!(user_sync_has_an_account(&baked, &installed, &additional));
+    }
+
+    /// #60's cross-check: an account the ride names is carried by a
+    /// dropin or by the heal's machine-state file, and one named by
+    /// neither is the silent shape a stale compiler's delta leaves.
+    #[test]
+    fn an_account_nothing_carries_is_named_as_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (image, machine) = (dir.path().join("image.d"), dir.path().join("machine.d"));
+
+        // A ride naming two accounts, one carried by each half.
+        std::fs::create_dir_all(&image).unwrap();
+        std::fs::create_dir_all(&machine).unwrap();
+        std::fs::write(image.join("partner"), "").unwrap();
+        std::fs::write(machine.join("deltauser"), "").unwrap();
+        let names = vec!["partner".to_string(), "deltauser".to_string()];
+        assert!(declared_accounts_missing(&names, &image, &machine).is_empty());
+
+        // Neither half carries ghost: the gap, named.
+        let names = vec!["ghost".to_string()];
+        assert_eq!(declared_accounts_missing(&names, &image, &machine), vec!["ghost".to_string()]);
+    }
+
+    /// The ride's names are read tolerantly — keys, not structure — so
+    /// a section whose meaning moved is the heal's loud refusal and not
+    /// this check's business.
+    #[test]
+    fn the_ride_s_names_are_read_tolerantly() {
+        assert!(ride_account_names(None).is_empty());
+        assert!(ride_account_names(Some("schema_version = 1\n[system]\n")).is_empty());
+        let ride = "schema_version = 1\n[other_users.partner]\nshell = \"fish\"\n";
+        assert_eq!(ride_account_names(Some(ride)), vec!["partner".to_string()]);
+        // A meaning moved inside: keys-only reading names what is
+        // there, and the heal refuses on the shape it alone reads.
+        let moved = "schema_version = 1\n[other_users.partner]\nshel = \"fish\"\n";
+        assert_eq!(ride_account_names(Some(moved)), vec!["partner".to_string()]);
     }
 
     /// The branch that fires when something is actually wrong, which on a
