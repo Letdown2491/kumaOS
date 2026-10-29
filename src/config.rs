@@ -1468,6 +1468,76 @@ pub(crate) mod tests {
         }
     }
 
+    /// The release page's image verification section names the registry
+    /// path and the tag scheme publish.yml actually pushes. A verify
+    /// command naming an image nobody published reads as a check that
+    /// passed — the same standard the asset names are held to above —
+    /// so the two workflows answer for each other here: one registry
+    /// path, one tag scheme, and the key the verify names committed
+    /// where the page says it is.
+    #[test]
+    fn the_release_pages_image_verification_names_what_publish_pushes() {
+        let read = |name: &str| {
+            std::fs::read_to_string(format!(
+                "{}/.github/workflows/{name}",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap()
+        };
+        let release = read("release.yml");
+        let publish = read("publish.yml");
+
+        // The registry path, computed in both workflows: the page and
+        // the push must not drift into two different images.
+        assert!(
+            release.contains("image=ghcr.io/$owner/kuma"),
+            "the release workflow's what step should output the image path publish.yml pushes"
+        );
+        assert!(
+            publish.contains("repo=\"ghcr.io/$owner/kuma\""),
+            "publish.yml moved off the path the release page verifies"
+        );
+
+        // The pinned tag scheme: <tier>-<version>, tier niri because the
+        // tag road is niri-only, version from Cargo.toml in both.
+        assert!(
+            release.contains(":niri-${{ steps.what.outputs.version }}"),
+            "the release page should verify the image's pinned tag, not a shape publish.yml never pushed"
+        );
+        assert!(
+            publish.contains("-$version"),
+            "publish.yml moved off the pinned-tag scheme the release page names"
+        );
+
+        // The image's trust shape is the KEY, not the binaries' keyless
+        // identity: a policy.json can name a key and not a keyless
+        // identity, which is why publish.yml signs with one and the
+        // page must not teach the other.
+        assert!(
+            release.contains("cosign verify --key cosign.pub"),
+            "the release page should verify the image against the committed public key"
+        );
+        assert!(
+            release.contains("/raw/${{ steps.what.outputs.tag }}/cosign.pub"),
+            "the page should hand over the key from the tag that names the code that shipped"
+        );
+        assert!(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("cosign.pub").exists(),
+            "the committed public key the page names exists"
+        );
+        // And not the keyless shape the blobs use — that command
+        // verifies nothing about an image signed by key. Line-level:
+        // the identity-pinned blocks belong to the blobs, and none of
+        // them may grow an image reference.
+        assert!(
+            release
+                .lines()
+                .filter(|l| l.contains("--certificate-identity-regexp"))
+                .all(|l| !l.contains("ghcr.io")),
+            "a keyless verify line names the image; the image's trust shape is the key"
+        );
+    }
+
     /// The same trap, one asset over, and a worse one to fall into: the
     /// ISO is what a stranger downloads first, and it is 1.8 GB of it.
     /// The walkthrough leads with that URL, so a rename on either side

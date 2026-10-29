@@ -67,6 +67,14 @@ jobs:
           set -euo pipefail
           version=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "kuma") | .version')
+          # The image the release page's verification section names: the
+          # registry path publish.yml pushes to — owner lowercased because
+          # ghcr rejects an uppercase path, the same tr publish.yml runs —
+          # and the version the image's pinned tag carries (publish.yml
+          # reads the same Cargo.toml line this version came from).
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=ghcr.io/$owner/kuma" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           # The asset name carries no version on purpose. A versioned
           # filename would make releases/latest/download/<name> change
           # every release, so the README could never hold a durable URL,
@@ -346,6 +354,23 @@ jobs:
               --certificate-identity-regexp '^${{ github.server_url }}/${{ github.repository }}/.+@refs/tags/' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
               ${{ steps.pkg.outputs.name }}
+          ```
+
+          The image this release publishes verifies with the committed
+          public key — the same key every kuma machine's own policy
+          enforces on update:
+
+          ```console
+          $ curl -sSLO ${{ github.server_url }}/${{ github.repository }}/raw/${{ steps.what.outputs.tag }}/cosign.pub
+          $ cosign verify --key cosign.pub ${{ steps.what.outputs.image }}:niri-${{ steps.what.outputs.version }}
+          ```
+
+          The moving tag is the convenience and the digest is the proof;
+          the verify response prints the digest it checked, and the same
+          command against that digest pins the bytes:
+
+          ```console
+          $ cosign verify --key cosign.pub ${{ steps.what.outputs.image }}@sha256:<digest the verify above printed>
           ```
 
           Built from `${{ github.sha }}`.
