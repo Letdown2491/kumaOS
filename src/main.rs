@@ -2374,6 +2374,16 @@ fn boot_titles() -> Result<()> {
     if !entries.is_dir() {
         return Ok(());
     }
+    // #59: the write's precondition has no owner in the boot graph —
+    // boot.mount orders the mount and ostree-remount does not touch
+    // /boot, and the road's delta lap hit EROFS exactly in that gap. A
+    // machine with stale titles guarantees rw itself, bounded, before
+    // the write; a machine with nothing to fix touches no mounts. The
+    // refusal is loud by design: a title the filesystem will not hold
+    // is a boot menu that lies about what it boots.
+    if !bootentries::stale(entries, Path::new("/")).is_empty() {
+        bootentries::ensure_writable().context("guaranteeing /boot is writable")?;
+    }
     let moved =
         bootentries::apply(entries, Path::new("/")).context("rewriting the boot menu's titles")?;
     for retitle in &moved {

@@ -210,6 +210,13 @@ fn write_title(entry: &Path, title: &str) -> std::io::Result<()> {
 /// first error is still returned, so the unit fails and `kuma doctor`
 /// reports it under `units` rather than the whole thing passing
 /// silently.
+///
+/// The caller guarantees /boot is writable first — [`ensure_writable`],
+/// which `boot_titles` runs when this would have work to do (#59: the
+/// road's delta lap hit EROFS here on a runner, and no unit in the boot
+/// graph owns the rw half of /boot, so there is no ordering edge to
+/// name). Nothing here touches mounts: this function stays pure, and a
+/// machine with nothing to fix writes nothing.
 pub fn apply(entries: &Path, sysroot: &Path) -> std::io::Result<Vec<Retitle>> {
     let mut moved = Vec::new();
     let mut failed = None;
@@ -227,6 +234,60 @@ pub fn apply(entries: &Path, sysroot: &Path) -> std::io::Result<Vec<Retitle>> {
         Some(err) => Err(err),
         None => Ok(moved),
     }
+}
+
+/// The mount whose titles this module writes, as the remount names it.
+pub(crate) const BOOT: &str = "/boot";
+
+/// The bound on the rw guarantee: remount attempts, and the pause
+/// between them. One attempt is nearly always the whole story — a
+/// remount is synchronous — and the bound exists for the boot whose
+/// filesystem comes up stubborn, not for a wait somebody can feel.
+const REMOUNT_ROUNDS: u32 = 10;
+const REMOUNT_PAUSE: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Whether `/proc/self/mountinfo` reports the /boot mount read-only.
+/// Pure so the parsing can be tested against the real file's shape. A
+/// bind of /boot appears as its own line, so any ro line counts: the
+/// truth the writer needs is "a write may still fail", and one ro view
+/// of the mount is that truth.
+fn boot_is_ro(mountinfo: &str) -> bool {
+    mountinfo.lines().any(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        // The path is the fifth field and the per-mount options the
+        // sixth; anything shorter is a continuation line or noise, and
+        // a mount point that is not /boot is somebody else's mount —
+        // the ESP's own ro line under /boot/efi says nothing here.
+        if fields.len() < 6 || fields[4] != BOOT {
+            return false;
+        }
+        !fields[5].split(',').any(|opt| opt == "rw")
+    })
+}
+
+/// Make /boot writable, or say why not. Returns Ok the moment the
+/// kernel reports the mount rw; each round remounts rw and lets the
+/// next round's read confirm it — the read is the authority, the
+/// remount is the act. Exhausting the bound is the loud refusal the
+/// unit's failure exists to carry (#59: a title the filesystem will
+/// not hold is a title the boot menu lies about).
+pub(crate) fn ensure_writable() -> std::io::Result<()> {
+    for round in 0..REMOUNT_ROUNDS {
+        let info = std::fs::read_to_string("/proc/self/mountinfo")?;
+        if !boot_is_ro(&info) {
+            return Ok(());
+        }
+        if round > 0 {
+            std::thread::sleep(REMOUNT_PAUSE);
+        }
+        crate::host::run_host(&["mount", "-o", "remount,rw", BOOT])
+            .map_err(|err| std::io::Error::other(format!("remounting {BOOT} rw: {err:#}")))?;
+    }
+    Err(std::io::Error::other(format!(
+        "{BOOT} stayed read-only through {REMOUNT_ROUNDS} remount attempts; \
+         refusing to write the boot menu's titles into a filesystem that \
+         will not hold them"
+    )))
 }
 
 #[cfg(test)]
@@ -426,5 +487,35 @@ mod tests {
         assert_eq!(without_slot("kumaOS 0.12.0 (Beorn) (ostree:3)"), "kumaOS 0.12.0 (Beorn)");
         // A version that ends in a parenthesis of its own keeps it.
         assert_eq!(without_slot("kumaOS 0.12.0 (Beorn)"), "kumaOS 0.12.0 (Beorn)");
+    }
+
+    /// Real-shaped /proc/self/mountinfo lines: the mount point is the
+    /// fifth field, the per-mount options the sixth. #59's guarantee
+    /// reads the same file the kernel writes.
+    fn mountinfo_line(root: &str, mount_point: &str, options: &str) -> String {
+        format!(
+            "42 0 253:2 {root} {mount_point} {options} shared:1 - ext4 /dev/vda2 rw,relatime\n"
+        )
+    }
+
+    #[test]
+    fn the_rw_guarantee_reads_the_kernel_s_own_word() {
+        // The healthy boot: rw is where the writer needs it.
+        assert!(!boot_is_ro(&mountinfo_line("/", "/boot", "rw,relatime")));
+        // The runner's failing boot: the same line, read-only.
+        assert!(boot_is_ro(&mountinfo_line("/", "/boot", "ro,relatime")));
+        // The ESP sits under /boot/efi and is often mounted ro; it says
+        // nothing about /boot.
+        assert!(!boot_is_ro(&mountinfo_line("/", "/boot/efi", "ro,relatime")));
+        // A line whose root (fourth field) mentions /boot but whose
+        // mount point is elsewhere is somebody else's mount.
+        assert!(!boot_is_ro(&mountinfo_line("/boot", "/", "ro,relatime")));
+        // A bind over /boot reports as its own line: any read-only view
+        // of the mount is the one truth the writer needs.
+        let mut info = mountinfo_line("/", "/boot", "rw,relatime");
+        info.push_str(&mountinfo_line("/", "/boot", "ro,relatime"));
+        assert!(boot_is_ro(&info));
+        // Continuation and junk lines are skipped, not crashes.
+        assert!(!boot_is_ro("short line\n\n"));
     }
 }
