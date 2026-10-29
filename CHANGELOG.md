@@ -72,6 +72,25 @@
   lap reads by check name and asserts no count, so a retirement, when
   one eventually comes, is a silent no-op there (#56).
 
+- **The third audit ran before the release.** Two lanes over
+  everything 44.15.0 ships (#63, the #55 pattern). Performance read
+  the compose question by construction — the keymap's boot layer feeds
+  the build's existing initramfs regeneration, zero added dracut
+  minutes on keyed builds — and the boot graph's delta: the heal a
+  no-op read on gapless machines, boot-titles' remount retry bounded
+  at ~2 s and only when titles need writing, the seam one stat per
+  niri load, check_keymap four file reads against the ~6.6 s doctor
+  baseline. Security walked the keymap value's road (one validator,
+  three sinks — a KDL string, a single-quoted echo, an argv), the
+  trust directions (a root-written stanza user-read; the heal steered
+  solely by the ride), the heal's writes, boot-titles' remount, and
+  the release page's interpolations. One finding: `kuma keymap apply`
+  was the one writer in the tree off the house shape — now temp and
+  rename with an explicit 0644, so a hardened umask cannot lock the
+  greeter out of its own layout and a crash cannot leave a half stanza
+  behind. Hand-forward: per-unit boot timing on green runs, carried
+  from #55.
+
 - **The prose names its shortcuts as commands.** The README answers
   "why this exists" before "what do I type", and the everyday-use
   section names `kuma add`, `kuma remove`, `kuma clean` and `kuma
