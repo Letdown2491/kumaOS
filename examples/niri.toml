@@ -43,6 +43,14 @@ shell = "fish"
 # Installs the matching glibc langpack and sets LANG.
 # locale = "en_US.UTF-8"
 
+# The keyboard layout ("de", "us", "de-latin1"): one value for every
+# layer that speaks it — the session and the greeter (a niri input
+# stanza), the TTYs (/etc/vconsole.conf), and the LUKS passphrase
+# prompt, because naming one regenerates the initramfs. Machine-level
+# at runtime via `kuma keymap apply`; a move here is image content, so
+# the delta compiler refuses it.
+# keymap = "de"
+
 # The primary account, created on first boot and converged on every boot
 # after: shell, declared groups, and kuma-managed ssh keys.
 #

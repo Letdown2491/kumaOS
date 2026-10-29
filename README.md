@@ -164,11 +164,15 @@ The package lists have their own shortcuts: `kuma add tailscale --rpm`
 writes the line you would have typed, and `kuma remove tailscale` drops
 a package from whichever list has it — the file stays the one place the
 machine is described. `kuma clean` reclaims a builder's leftovers:
-dangling images, abandoned build containers, stale composed bases. And
-`kuma completions fish` teaches your shell the verbs, so the ones you
-have not memorized finish themselves. Everything else — snapshots,
-backups, hibernate, doctor — is `kuma --help` away, and every command
-ends by naming the legal next ones.
+dangling images, abandoned build containers, stale composed bases.
+`kuma keymap apply de` writes one keyboard layout across the session,
+the greeter and the TTYs at once — and reports honestly that the LUKS
+passphrase prompt's layout is image content, moved by declaring
+`[system] keymap` and rebuilding. And `kuma completions fish` teaches
+your shell the verbs, so the ones you have not memorized finish
+themselves. Everything else — snapshots, backups, hibernate, doctor —
+is `kuma --help` away, and every command ends by naming the legal next
+ones.
 
 ## How it compares
 

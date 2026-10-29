@@ -12,6 +12,7 @@ mod host;
 mod inspect;
 mod install;
 mod inventory;
+mod keymap;
 mod liveiso;
 mod lock;
 mod overrides;
@@ -474,6 +475,14 @@ enum Cmd {
         #[arg(value_name = "ACCOUNT")]
         account: Option<String>,
     },
+    /// Apply a keyboard layout across the session, the greeter and the
+    /// TTYs — and say plainly what it cannot move: the initramfs (the
+    /// LUKS passphrase prompt's layout) is image content, moved by
+    /// declaring [system].keymap and rebuilding, never by this verb.
+    Keymap {
+        #[command(subcommand)]
+        cmd: KeymapCmd,
+    },
     /// Print shell completions (e.g. `kuma completions fish | source`)
     Completions {
         /// Shell to generate for
@@ -516,6 +525,30 @@ enum Cmd {
     },
 }
 
+/// The keymap verb's two halves: the write (`apply`, root's job, three
+/// layers plus an honest line about the fourth) and the read (`status`,
+/// every layer including the image's baked one).
+#[derive(Debug, Subcommand)]
+enum KeymapCmd {
+    /// Write the layout into the session, the greeter and /etc/vconsole.conf
+    Apply {
+        /// The keymap name as `localectl list-keymaps` spells it
+        /// (e.g. de, us, de-latin1). The same value has to work for the
+        /// console and the session both, so XKB variant spellings do not
+        /// fit here.
+        layout: String,
+        /// Report the result as JSON (progress moves to stderr)
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read every layer's layout back, including the image's baked one
+    Status {
+        /// Report as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let explicit = cli.config.is_some();
@@ -553,7 +586,8 @@ fn main() -> Result<()> {
             | Cmd::Capture { json, .. }
             | Cmd::Remove { json, .. }
             | Cmd::Hibernate { json, .. }
-            | Cmd::Install { json, .. } => Some(*json),
+            | Cmd::Install { json, .. }
+            | Cmd::Keymap { cmd: KeymapCmd::Apply { json, .. } } => Some(*json),
             _ => None,
         }
     };
@@ -571,7 +605,8 @@ fn main() -> Result<()> {
         | Cmd::Check { json }
         | Cmd::Doctor { json, .. }
         | Cmd::Snapshot { json, .. }
-        | Cmd::Backup { json, .. } => *json || root_json,
+        | Cmd::Backup { json, .. }
+        | Cmd::Keymap { cmd: KeymapCmd::Status { json } } => *json || root_json,
         _ => false,
     };
     if json_mode {
@@ -777,6 +812,13 @@ fn run(
         Cmd::BootTitles => boot_titles(),
         Cmd::AccountsHeal => accounts::heal(),
         Cmd::FlatpakOverrides { scope } => flatpak_overrides(scope),
+        Cmd::Keymap { cmd } => match cmd {
+            // apply's JSON resolution happened in main (the mutating
+            // or-pattern); status is a read verb and resolves its own,
+            // the way diff and doctor do.
+            KeymapCmd::Apply { layout, json: _ } => keymap::apply(&layout, json),
+            KeymapCmd::Status { json } => keymap::status(json || root_json),
+        },
         Cmd::Hibernate { size, off, yes, json: _ } => hibernate_cmd(size, off, yes, json),
         Cmd::Schema => schema(),
         Cmd::Passwd { account } => passwd(account.as_deref()),

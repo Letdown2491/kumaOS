@@ -86,6 +86,7 @@ struct Baked {
     timezone: Option<String>,
     hostname: Option<String>,
     ca_certificates: BTreeMap<String, String>,
+    keymap: Option<String>,
     brew_flag: bool,
     packages: config::Packages,
     services: config::Services,
@@ -135,6 +136,7 @@ impl Baked {
             timezone: system.timezone.clone(),
             hostname: system.hostname.clone(),
             ca_certificates: system.ca_certificates.clone(),
+            keymap: system.keymap.clone(),
             brew_flag: system.brew,
             packages: section(root, "packages", Default::default)?,
             services: section(root, "services", Default::default)?,
@@ -192,6 +194,21 @@ pub(crate) fn compile(
     }
     if declared.system.ca_certificates != baked.ca_certificates {
         refusals.push("  - [system] ca_certificates: `kuma update` full-rebuilds".to_string());
+    }
+    // The keymap is the one setting a delta cannot carry at all: its
+    // initramfs half — the layout the LUKS passphrase prompt speaks —
+    // is image content, and a delta that moved the runtime layers
+    // alone would half-converge into a prompt that lies about its own
+    // keyboard. The full rebuild regenerates the initramfs; nothing
+    // lighter can.
+    if declared.system.keymap != baked.keymap {
+        refusals.push(
+            "  - [system] keymap: the initramfs half of it (the LUKS passphrase prompt's \
+             layout) is image content the delta does not carry, and a keymap moved \
+             everywhere but there leaves the prompt speaking the old one; `kuma update` \
+             full-rebuilds"
+                .to_string(),
+        );
     }
     // The account rides the image, and the delta carries the release's
     // own baked [user] untouched: the machine's declaration is COPY'd
@@ -936,6 +953,31 @@ mod tests {
         .unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("timezone"), "{msg}");
+        assert!(msg.contains("kuma update"), "{msg}");
+    }
+
+    #[test]
+    fn a_keymap_move_refuses_because_the_delta_cannot_carry_the_initramfs() {
+        // The runtime layers a delta COULD carry are three of the four;
+        // the fourth — the initramfs the LUKS passphrase prompt speaks
+        // — is image content. Carrying three would leave the prompt
+        // speaking the old layout, so the move refuses whole.
+        let err = compile(
+            &declared(
+                "schema_version = 1\n\
+                 [system]\n\
+                 desktop = \"niri\"\n\
+                 keymap = \"de\"\n\
+                 [snapshots]\n\
+                 enable = true\n",
+            ),
+            BASE,
+            &release(),
+            units(),
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("[system] keymap"), "{msg}");
         assert!(msg.contains("kuma update"), "{msg}");
     }
 

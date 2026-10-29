@@ -431,6 +431,16 @@ pub struct System {
     /// (C.UTF-8).
     #[serde(default)]
     pub locale: Option<String>,
+    /// The keyboard layout, e.g. "de", "us", "de-latin1" — one value for
+    /// every layer that speaks it: the session and the greeter (a niri
+    /// input stanza included ahead of local.kdl), the TTYs
+    /// (/etc/vconsole.conf), and — because naming one regenerates the
+    /// initramfs — the LUKS passphrase prompt. Unset keeps the default.
+    /// Machine-level at runtime via `kuma keymap apply`; a move here is
+    /// image content, so the delta compiler refuses it (`kuma update`
+    /// full-rebuilds).
+    #[serde(default)]
+    pub keymap: Option<String>,
 }
 
 impl Config {
@@ -659,6 +669,14 @@ impl Config {
         }
         if let Some(locale) = &self.system.locale {
             validate_name(locale, "system.locale", &['_', '.', '-', '@'])?;
+        }
+        // The keymap's vocabulary is the console's own (crate::keymap
+        // owns the rule, the same one `kuma keymap apply` enforces at
+        // runtime): the value rides into a KDL string and a KEYMAP=
+        // line verbatim, and XKB variant spellings do not fit — the
+        // same value has to work for the console and the session both.
+        if let Some(keymap) = &self.system.keymap {
+            crate::keymap::validate(keymap)?;
         }
         // Same character rules as user.shell: both end up as
         // /usr/bin/<name> in a shell fragment the boot converger sources.

@@ -629,7 +629,17 @@ exec 2> >(exec logger -t kuma-greeter)
 # timeout, or greeter exit with its status. Say so — three laps of a
 # silent "greeter exited without creating a session" bought this.
 echo >&2 "wrapper: greetd started the session (pid $$)"
-niri -c /usr/share/kumaos/greeter-niri.kdl &
+# The machine's keymap, when one is named, rides as an appended stanza:
+# niri merges includes positionally, so the assembled copy's last word
+# wins — the same shape the session config gives its include. Assembled
+# under XDG_RUNTIME_DIR because the pinned config is image content and
+# this one is the greeter's own.
+greeter_niri=/usr/share/kumaos/greeter-niri.kdl
+if [ -f /etc/kuma/keymap.kdl ]; then
+  greeter_niri="$XDG_RUNTIME_DIR/kuma-greeter-niri.kdl"
+  cat /usr/share/kumaos/greeter-niri.kdl /etc/kuma/keymap.kdl > "$greeter_niri"
+fi
+niri -c "$greeter_niri" &
 niri_pid=$!
 started=$SECONDS
 cleanup() { kill "$niri_pid" 2>/dev/null; }
@@ -2214,6 +2224,14 @@ window-rule {
     }
 }
 
+// The machine's keymap ([system].keymap at compose time, `kuma keymap
+// apply` at runtime) rides as one input stanza in /etc/kuma/keymap.kdl,
+// included BEFORE the seam below so a person's own local.kdl still wins
+// over the machine's layout. optional=true for the same reason the
+// local include carries it: machines that never name a keymap validate
+// with the file absent.
+include optional=true "/etc/kuma/keymap.kdl"
+
 // The machine's own deltas, and the LAST thing in this file on purpose:
 // niri merges includes positionally, so whatever is here wins over
 // everything above it. Without this a user who wants one setting changed
@@ -3453,6 +3471,17 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     // seded rather than appended to NIRI_EXTRAS because niri rejects a
     // second top-level `layout`/`hotkey-overlay` node, and the default
     // config already has both.
+    // The machine's keymap stanza, when the declaration names one:
+    // the session config's include (in NIRI_EXTRAS, ahead of the
+    // local.kdl seam) resolves at the validate below, so a stanza that
+    // stopped parsing fails the build rather than shipping a session
+    // that refuses its own reload. The TTY and boot layers of the same
+    // value ride in the keymap block further down; the greeter's
+    // wrapper appends this file to its runtime copy at start.
+    if let Some(keymap) = &e.config.system.keymap {
+        let km = e.stage("keymap.kdl", crate::keymap::stanza(keymap));
+        e.copy(&km, crate::keymap::KEYMAP_KDL);
+    }
     e.raw(
         &format!("RUN grep -q '\"alacritty\"' /usr/share/doc/niri/default-config.kdl \\\n    && grep -qF '{NIRI_STOCK_LAUNCHER}' /usr/share/doc/niri/default-config.kdl \\\n    && grep -qF '{NIRI_STOCK_LOCK}' /usr/share/doc/niri/default-config.kdl \\\n    && grep -qF '{NIRI_STOCK_ORCA}' /usr/share/doc/niri/default-config.kdl \\\n    && grep -qF '// skip-at-startup' /usr/share/doc/niri/default-config.kdl \\\n    && grep -q '^layout {{' /usr/share/doc/niri/default-config.kdl \\\n    && mkdir -p /etc/niri \\\n    && sed -e 's/alacritty/kuma-term/g' -e '/starts waybar/d' -e '/^spawn-at-startup \"waybar\"$/d' -e '/XF86Audio/d' -e '/XF86MonBrightness/d' -e 's|// skip-at-startup|skip-at-startup|' -e '/^layout {{/a\\    background-color \"#11111B\"' -e 's|{NIRI_STOCK_LAUNCHER}|{NIRI_MENU_BIND}|' -e 's|{NIRI_STOCK_LOCK}|{NIRI_LOCK_BIND}|' -e '/pkill orca/d' -e '/^binds {{/r /usr/lib/kuma/niri-binds.kdl' /usr/share/doc/niri/default-config.kdl > /etc/niri/config.kdl \\\n    && cat /usr/lib/kuma/niri-extras.kdl >> /etc/niri/config.kdl \\\n    && niri validate --config /etc/niri/config.kdl\n"),
     );
@@ -4530,6 +4559,25 @@ fn locale(e: &mut Emitter<'_>) {
     e.raw(&format!("RUN echo 'LANG={locale}' > /etc/locale.conf\n"));
 }
 
+/// The keymap's TTY and boot layers in one write: /etc/vconsole.conf is
+/// the console's setting AND the initramfs's — dracut copies it into the
+/// initrd, and the initrd is what the LUKS passphrase prompt speaks.
+/// Registered before the plymouth block on purpose: the build's one
+/// initramfs regeneration lives there (every image runs it, measured
+/// into that block), so a compose that names a keymap gets the boot
+/// layer by landing the conf file ahead of it. A second regen here
+/// would pay the dracut minute twice per keyed build.
+/// The session/greeter stanza of the same value rides in desktop_niri,
+/// where the include that reads it is validated.
+fn keymap(e: &mut Emitter<'_>) {
+    let config = e.config;
+    let Some(keymap) = &config.system.keymap else {
+        return;
+    };
+    e.raw("\n");
+    e.raw(&format!("RUN echo 'KEYMAP={keymap}' > /etc/vconsole.conf\n"));
+}
+
 /// Anchors before branding only because everything after this point
 /// is cosmetic; what matters is that they land before anything that
 /// might need to trust them, and that update-ca-trust runs in the
@@ -5138,6 +5186,9 @@ pub(super) static BLOCKS: &[Block] = &[
     Block { name: "sshd", emit: sshd, units: &[] },
     Block { name: "services", emit: services, units: &[] },
     Block { name: "hardening", emit: hardening, units: &[] },
+    // Before plymouth on purpose: the build's one initramfs regen
+    // lives there, and the conf file has to exist ahead of it.
+    Block { name: "keymap", emit: keymap, units: &[] },
     Block { name: "fuse", emit: fuse, units: &[] },
     Block { name: "greenboot", emit: greenboot, units: &[] },
     Block { name: "plymouth", emit: plymouth, units: &[] },

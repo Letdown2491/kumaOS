@@ -828,6 +828,7 @@ pub fn doctor(json: bool, as_report: bool) -> Result<()> {
         check_encryption(&mut report);
         check_hibernate(&mut report);
         check_etc_drift(&mut report);
+        check_keymap(&mut report);
     } else if Path::new("/usr/lib/kuma").is_dir() {
         report(
             Grade::Warn,
@@ -2740,6 +2741,42 @@ fn check_etc_drift(report: &mut impl FnMut(Grade, &str, String, Option<Action>))
             "etc",
             format!("{owned} files this image owns in /etc, none shadowed locally"),
             None,
+        );
+    }
+}
+
+/// The keymap's layers against each other: the stanza file the session
+/// includes and the greeter's wrapper appends, the TTYs' vconsole.conf,
+/// and the layout the image baked into its initramfs — the LUKS
+/// passphrase prompt's, and the one layer no runtime verb can move. The
+/// common drift is exactly the quiet one: `kuma keymap apply` moved the
+/// runtime layers, nothing recomposed, and the prompt kept speaking the
+/// old layout. Warn, not Fail: every layer works, they just disagree.
+fn check_keymap(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
+    let layers = crate::keymap::Layers::read();
+    let drifts = layers.drifts();
+    if drifts.is_empty() {
+        // Report the agreement rather than going silent: "which layer
+        // answered" is otherwise indistinguishable from "the check
+        // never ran".
+        let named = layers.chosen.clone().or(layers.vconsole.clone()).or(layers.baked.clone());
+        match named {
+            Some(km) => report(Grade::Ok, "keymap", format!("every layer speaks {km:?}"), None),
+            None => report(
+                Grade::Ok,
+                "keymap",
+                "no layer names a keymap; the defaults hold".into(),
+                None,
+            ),
+        }
+        return;
+    }
+    for drift in &drifts {
+        report(
+            Grade::Warn,
+            "keymap",
+            drift.detail.clone(),
+            Some(Action::new(drift.verb, drift.cmd.clone(), drift.why.clone())),
         );
     }
 }
