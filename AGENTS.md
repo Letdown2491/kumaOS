@@ -33,8 +33,10 @@ running binary should always be a commit you can name.
 Commits are the agent's to make — the tree stays clean and every change
 is named by a commit — but `git push`, branch or tag, moves only on an
 explicit go: a branch push starts a 35-minute battery, and a `v*` tag
-starts the release road — the release page, then both image publishes
-(niri, cosmic) with their validation batteries, sequential — and neither
+starts the release road — the release page, then the niri image publish
+with its validation battery, sequential (the tag road is niri-only:
+publish-tag.yml has never carried a cosmic tag, and cosmic stays a
+manual publish.yml dispatch) — and neither
 is the agent's call to spend. And when a battery is red and a fix is
 ready: the fix commits, but the push waits until the running workflows
 have all concluded — a mid-battery push cuts the remaining laps off
