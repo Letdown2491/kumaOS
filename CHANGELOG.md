@@ -97,6 +97,17 @@
   completions` as commands — the verb-documentation gate reads pages
   for command mentions, and bare words in a list are not one.
 
+- **doctor's /etc drift check stops watching `/etc/vconsole.conf`.** The
+  file's sanctioned writer is `localectl set-keymap` — what `kuma keymap
+  apply` runs — and localectl rewrites the file in its own format (a
+  header, FONT, the XKB lines), so re-applying even the declared layout
+  re-shadowed the compose's one-liner and the byte compare warned again
+  on every legitimate apply. The TTY layer's semantics stay watched by
+  the keymap check, which reads the KEYMAP= line off every layer and
+  already narrates the dangerous case — a local copy holding back a
+  moved declaration — as layer-versus-initramfs drift with the right
+  fix attached.
+
 ## v44.14.0 (2026-10-24)
 
 - **A machine-added account converges through a delta.** The delta

@@ -53,6 +53,19 @@ pub fn etc_paths(config: &Config) -> Vec<String> {
     if config.system.hostname.is_none() {
         paths.retain(|p| p != "/etc/hostname");
     }
+    // vconsole.conf never stays owned, keymap declared or not: its
+    // sanctioned writer is `localectl set-keymap` — what `kuma keymap
+    // apply` runs — and localectl rewrites the file in its own format
+    // (a header, FONT, the XKB lines), so re-applying even the declared
+    // layout re-shadows the compose's one-liner and the byte compare
+    // would warn again on every legitimate apply. The hostname return
+    // to ownership when declared is the asymmetry that stays: a declared
+    // hostname is an opinion, while the keymap's runtime verb exists to
+    // move this very file. The semantics stay watched — check_keymap
+    // reads the KEYMAP= line off every layer, and a local copy holding
+    // back a moved declaration is exactly the layer-versus-initramfs
+    // drift it narrates.
+    paths.retain(|p| p != "/etc/vconsole.conf");
     paths
 }
 
@@ -4129,6 +4142,13 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         assert!(!niri.iter().any(|p| p == "/etc/hostname"));
         let pinned = etc_paths(&config("schema_version = 1\n[system]\nhostname = \"workbench\"\n"));
         assert!(pinned.iter().any(|p| p == "/etc/hostname"));
+
+        // The TTY layer is machine state even with a keymap declared:
+        // localectl (`kuma keymap apply`) rewrites the file in its own
+        // format, so the byte compare would re-warn on every legitimate
+        // apply. Its semantics are check_keymap's.
+        let keyed = etc_paths(&config("schema_version = 1\n[system]\nkeymap = \"de\"\n"));
+        assert!(!keyed.iter().any(|p| p == "/etc/vconsole.conf"), "{keyed:?}");
     }
 
     /// A file picker that never appears, which is what niri shipped until
