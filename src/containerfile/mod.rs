@@ -1825,6 +1825,28 @@ mod tests {
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     }
 
+    /// The 7.x runner kernels race the syscalls around a just-written
+    /// script against the kernel's own write-deny bookkeeping: an exec
+    /// of a file this thread wrote and closed answers ETXTBSY (errno 26)
+    /// and clears within tens of milliseconds (measured 2026-08-22 on a
+    /// tree identical to a passing run, then the 20261010 image's
+    /// 7.0.0-1012-azure), and the 20261030 cron lap moved the same
+    /// denial onto the write itself — a file that did not exist an
+    /// instant before. Retry on errno 26 so these tests assert the
+    /// launch script's honesty instead of the kernel's timing.
+    fn txtbsy_retry<T>(mut op: impl FnMut() -> std::io::Result<T>) -> T {
+        let mut attempt = 0u64;
+        loop {
+            match op() {
+                Err(e) if e.raw_os_error() == Some(26) && attempt < 10 => {
+                    std::thread::sleep(std::time::Duration::from_millis(25 + 50 * attempt));
+                    attempt += 1;
+                }
+                other => return other.unwrap(),
+            }
+        }
+    }
+
     /// The verb reaches the terminal as separate arguments.
     ///
     /// This is the whole reason the held script takes `"$@"` instead of a
@@ -1840,41 +1862,26 @@ mod tests {
         std::fs::create_dir(&bin).unwrap();
         // A fake kuma-term that prints each argument on its own line, so
         // the boundaries between them are visible in the output.
-        std::fs::write(
-            bin.join("kuma-term"),
-            "#!/usr/bin/bash
+        txtbsy_retry(|| {
+            std::fs::write(
+                bin.join("kuma-term"),
+                "#!/usr/bin/bash
 for a in \"$@\"; do printf '%s\\n' \"$a\"; done
 ",
-        )
-        .unwrap();
+            )
+        });
         let launch = dir.path().join("kuma-launch");
-        std::fs::write(&launch, KUMA_LAUNCH).unwrap();
+        txtbsy_retry(|| std::fs::write(&launch, KUMA_LAUNCH));
         for path in [bin.join("kuma-term"), launch.clone()] {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        // CI's runner sporadically answers the exec of a just-written
-        // script with ETXTBSY: measured 2026-08-22, 380 tests green and
-        // this one red on a tree identical to a passing run. A moment
-        // later the same exec answers fine, so ask a few times rather
-        // than flake the suite on the filesystem's bookkeeping.
-        let mut out = None;
-        for _ in 0..5 {
-            match std::process::Command::new(&launch)
+        let out = txtbsy_retry(|| {
+            std::process::Command::new(&launch)
                 .args(["snapshot", "restore", "/home/a b"])
                 .env("PATH", bin.to_str().unwrap())
                 .output()
-            {
-                Err(e) if e.raw_os_error() == Some(26) => {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-                other => {
-                    out = Some(other.unwrap());
-                    break;
-                }
-            }
-        }
-        let out = out.expect("five ETXTBSY in a row is a broken box, not a flake");
+        });
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         let lines: Vec<&str> = std::str::from_utf8(&out.stdout).unwrap().lines().collect();
         assert_eq!(&lines[..3], ["-e", "/usr/bin/bash", "-lc"], "{lines:?}");
@@ -1896,30 +1903,15 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         let empty = dir.path().join("bin");
         std::fs::create_dir(&empty).unwrap();
         let launch = dir.path().join("kuma-launch");
-        std::fs::write(&launch, KUMA_LAUNCH).unwrap();
+        txtbsy_retry(|| std::fs::write(&launch, KUMA_LAUNCH));
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&launch, std::fs::Permissions::from_mode(0o755)).unwrap();
-        // The exec can lose a race with the file's own close on the
-        // 20261010 runner image's kernel (7.0.0-1012-azure): "Text file
-        // busy" (ETXTBSY, 26) for a file this thread wrote and closed -
-        // the 6.x kernels never raced it, and the denial clears within
-        // tens of milliseconds. Retry a few times so the test asserts
-        // the launch script's honesty instead of the kernel's timing.
-        let mut attempt = 0u64;
-        let out = loop {
-            match std::process::Command::new(&launch)
+        let out = txtbsy_retry(|| {
+            std::process::Command::new(&launch)
                 .arg("doctor")
                 .env("PATH", empty.to_str().unwrap())
                 .output()
-            {
-                Err(e) if e.raw_os_error() == Some(26) && attempt < 10 => {
-                    std::thread::sleep(std::time::Duration::from_millis(25 + 50 * attempt));
-                    attempt += 1;
-                }
-                other => break other,
-            }
-        }
-        .unwrap();
+        });
         assert!(!out.status.success());
         assert!(
             String::from_utf8_lossy(&out.stderr).contains("no terminal"),
@@ -1934,10 +1926,10 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
     fn kuma_launch_refuses_an_empty_call() {
         let dir = tempfile::tempdir().unwrap();
         let launch = dir.path().join("kuma-launch");
-        std::fs::write(&launch, KUMA_LAUNCH).unwrap();
+        txtbsy_retry(|| std::fs::write(&launch, KUMA_LAUNCH));
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&launch, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let out = std::process::Command::new(&launch).output().unwrap();
+        let out = txtbsy_retry(|| std::process::Command::new(&launch).output());
         assert_eq!(out.status.code(), Some(2));
         assert!(String::from_utf8_lossy(&out.stderr).contains("usage:"));
     }
