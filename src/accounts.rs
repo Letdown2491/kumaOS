@@ -304,12 +304,12 @@ mod tests {
     fn a_ride_this_kuma_cannot_read_is_a_loud_refusal() {
         let dir = tempfile::tempdir().unwrap();
         let ahead = "schema_version = 99\n[other_users.deltauser]\nshell = \"fish\"\n";
-        assert!(heal_from(Some(ahead), &dir.path(), &dir.path()).is_err());
+        assert!(heal_from(Some(ahead), dir.path(), dir.path()).is_err());
         // A meaning moved inside the section: the refusal is the
         // contract's, spelled out, not a silent hole.
         let moved_meaning = "schema_version = 1\n[other_users.deltauser]\nshel = \"fish\"\n";
         let err =
-            format!("{:#}", heal_from(Some(moved_meaning), &dir.path(), &dir.path()).unwrap_err());
+            format!("{:#}", heal_from(Some(moved_meaning), dir.path(), dir.path()).unwrap_err());
         assert!(err.contains("cannot read"), "{err}");
     }
 }
