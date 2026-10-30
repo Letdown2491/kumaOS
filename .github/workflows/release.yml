@@ -73,8 +73,10 @@ jobs:
           # and the version the image's pinned tag carries (publish.yml
           # reads the same Cargo.toml line this version came from).
           owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "image=ghcr.io/$owner/kuma" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo "image=ghcr.io/$owner/kuma"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
           # The asset name carries no version on purpose. A versioned
           # filename would make releases/latest/download/<name> change
           # every release, so the README could never hold a durable URL,
