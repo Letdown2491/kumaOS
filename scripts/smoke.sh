@@ -811,7 +811,17 @@ await_healthy_boot() {
 
     local deadline=$((SECONDS + ssh_deadline))
     until guest true; do
-        kill -0 "$qemu" 2>/dev/null || bad "qemu died${when}; console at $log"
+        kill -0 "$qemu" 2>/dev/null || {
+            # What the failure leaves behind is the next diagnosis's
+            # input: an "egl: no drm render node available" death has a
+            # node story — modes, ownership, whether vgem's node survived
+            # at all — that a 0-byte console cannot tell (boot-delta,
+            # 2026-10-30: the action's open check passed, qemu's first
+            # line did not, seventeen minutes later).
+            ls -la /dev/dri/ >&2 || true
+            stat -c '%n %a %U:%G' /dev/dri/renderD* >&2 2>/dev/null || true
+            bad "qemu died${when}; console at $log"
+        }
         [ $SECONDS -lt $deadline ] || bad "no ssh within ${ssh_deadline}s${when}; console at $log"
         sleep 5
     done
