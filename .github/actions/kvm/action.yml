@@ -205,6 +205,19 @@ runs:
         # has to be local" had stood as an assumption for months.
         echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
             | sudo tee /etc/udev/rules.d/99-kvm.rules
+        # The chmod 666 above is a raw devtmpfs edit, and udev's database
+        # still holds 0600 root:root for this node: whichever event udev
+        # processes for the device next re-applies the database over the
+        # chmod. Boot-delta's node was open at the check above and 0600 by
+        # qemu's launch seventeen minutes later — "egl: no drm render node
+        # available" at qemu's first line, a 0-byte console — while the
+        # boot job's node, same run, same action, booted fine, and nothing
+        # in the lap touches /dev/dri in between: udev's re-application is
+        # the only writer (2026-10-30). The rule pins the node the way
+        # 99-kvm.rules pins /dev/kvm: whichever event comes next, the
+        # mode re-applies as 0666, not the database's 0600.
+        echo "KERNEL==\"$(basename "$vgem_node")\", SUBSYSTEM==\"drm\", MODE=\"0666\"" \
+            | sudo tee /etc/udev/rules.d/99-vgem-render.rules
         sudo udevadm control --reload-rules
         sudo udevadm trigger --name-match=kvm
         # trigger queues the event and returns, so without settle this
@@ -212,6 +225,21 @@ runs:
         # check below while the other two passed, which reads as flake and
         # is not.
         sudo udevadm settle
+
+        # The settle is the last udev work this action causes, so this is
+        # the last word on the node: re-open it the way qemu will, after
+        # the queue has drained. The re-chmod is the belt for a reversion
+        # that landed between the first chmod and the rule write, and the
+        # rule is what makes the heal durable — every processing after
+        # this point applies 0666, so an open node stays open. Loud here
+        # rather than as a confusing qemu error minutes later.
+        sudo chmod 666 "$vgem_node" 2>/dev/null || true
+        test -r "$vgem_node" && test -w "$vgem_node" || {
+            ls -la /dev/dri/ >&2 || true
+            stat -c '%n %a %U:%G' /dev/dri/renderD* >&2 2>/dev/null || true
+            echo "$vgem_node lost the qemu user's open access by the time udev's queue drained"
+            exit 1
+        }
 
         # Loud here rather than as a confusing qemu error minutes later.
         test -w /dev/kvm || { echo "no write access to /dev/kvm"; exit 1; }
