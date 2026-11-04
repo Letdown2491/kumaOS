@@ -206,20 +206,47 @@ fn stamp_matches_pin(stamp: &str, sha: &str, version: Option<&str>) -> bool {
 /// What a sibling binary says about itself. Both streams are read:
 /// clap writes `--version` to stdout and the kumaui binaries print their
 /// line there too, but a binary that answers on stderr still answered.
+///
+/// The exec retries on ETXTBSY (errno 26): the caller may have written
+/// the sibling an instant before — the test suite writes stubs and this
+/// gate immediately execs them, and a real compose execs siblings right
+/// after a fresh `cargo install` — and the 7.x runner kernels deny
+/// exec of a just-closed file for tens of milliseconds (the launch-test
+/// family's three dated bites; same race, write side guarded in
+/// `txtbsy_retry`).
 fn sibling_stamp(parent: &Path, name: &str) -> Result<String> {
-    let out = std::process::Command::new(parent.join(name))
-        .arg("--version")
-        .output()
-        .with_context(|| {
+    let attempt = |out: std::io::Result<std::process::Output>| -> Result<Vec<u8>> {
+        let out = out.with_context(|| {
             format!(
                 "running {name} --version to read its stamp; the binary must be \
                  runnable beside the kuma doing the build"
             )
         })?;
-    if !out.status.success() {
-        bail!("{name} --version exited nonzero; refusing to compose around an unprovable stamp");
+        if !out.status.success() {
+            bail!(
+                "{name} --version exited nonzero; refusing to compose around an unprovable stamp"
+            );
+        }
+        Ok(out.stdout.into_iter().chain(out.stderr).collect::<Vec<u8>>())
+    };
+    let bin = parent.join(name);
+    let mut tries = 0u64;
+    loop {
+        match attempt(std::process::Command::new(&bin).arg("--version").output()) {
+            // ETXTBSY: the file is real, the kernel's timing is the
+            // problem — back off and exec again.
+            Err(e)
+                if e.chain().any(|c| {
+                    c.downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.raw_os_error() == Some(26))
+                }) && tries < 10 =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(25 + 50 * tries));
+                tries += 1;
+            }
+            other => return other.map(|b| String::from_utf8_lossy(&b).into_owned()),
+        }
     }
-    Ok(format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
 }
 
 /// What a staged sibling must answer for. The nostr road's three
