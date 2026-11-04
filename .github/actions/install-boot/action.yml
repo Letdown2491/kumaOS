@@ -36,6 +36,33 @@ inputs:
 runs:
   using: composite
   steps:
+    # The runner's 88 GB is a budget this lap now spends to the edge: the
+    # compose (~5.5 GB of podman storage), the exported OCI, the pull that
+    # unpacks it again, and a 15 GB disk.raw from the install stage, all
+    # in one home volume. The 2026-11-04 laps died unpacking the pulled
+    # OCI — "no space left on device" in overlay-layers/tmp — after the
+    # image grew past whatever slack the preinstalled packs left. The
+    # runner's own dev packs are the slack: dotnet, android, ghc, CodeQL,
+    # boost, and friends are 25+ GB nothing in this lap reads, and
+    # docker's image cache is more. Reclaim before the build, and log the
+    # measured delta so the next drift is named in GB rather than guessed.
+    - name: reclaim the runner's disk
+      shell: bash
+      run: |
+        echo "free before: $(df -BG / | awk 'NR==2{print $4}')"
+        sudo rm -rf \
+          /usr/share/dotnet \
+          /usr/local/lib/android \
+          /usr/local/share/boost \
+          /usr/local/share/EnhancedPython \
+          /usr/local/share/powershell \
+          /opt/ghc /usr/local/.ghc \
+          /opt/hostedtoolcache/CodeQL \
+          /opt/hostedtoolcache/go \
+          /opt/hostedtoolcache/PyPy
+        sudo docker image prune -af 2>/dev/null || true
+        echo "free after:  $(df -BG / | awk 'NR==2{print $4}')"
+
     - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
     - shell: bash
