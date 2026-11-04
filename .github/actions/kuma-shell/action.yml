@@ -82,9 +82,12 @@ runs:
       run: |
         set -euo pipefail
         cd "$(mktemp -d)"
-        curl --proto '=https' --tlsv1.2 --retry 10 --location --silent --show-error \
-          https://ffmpeg.org/releases/ffmpeg-8.0.tar.xz | tar -xJ
-        cd ffmpeg-8.0
+        # ffmpeg.org resets connections from Actions egress IPs (the
+        # anonymous-curl lesson, again), so the sources come from the
+        # FFmpeg GitHub mirror instead; same 8.0 source tree.
+        curl --proto '=https' --tlsv1.2 --retry 10 --location --silent --show-error --fail \
+          https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n8.0.tar.gz | tar -xz
+        cd FFmpeg-n8.0
         ./configure --prefix=/usr/local \
           --disable-doc --disable-programs --disable-avdevice \
           --disable-network --disable-autodetect \
