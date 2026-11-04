@@ -27,7 +27,16 @@ pub const CURRENT_SCHEMA: u32 = 1;
 // followed again; the heartbeat below is its tripwire. The mirror
 // package (kuma-compose-env) is the pin's leftover; its last-good tag
 // now names the September float the pin served and has no consumer.
-pub const DEFAULT_BASE: &str = "quay.io/fedora/fedora-bootc:44";
+//
+// The 45 bump (2026-11-04) rides the GA digest
+// sha256:8076cf4ff9d1fda1fcc759c021b8c317fe2b687ae51259e45917c95fed3308bc
+// (built 2026-10-31, the release compose) — the tag was frozen at GA
+// and only moves once base-images grows its 45 renovate lane, so the
+// first 45 locks compose from exactly the bits that digest carries.
+// The compose env runs rpm-ostree 2026.3, which knows F45's relocated
+// repo configs (/usr/share/dnf5/repos.d); older envs are the failure
+// mode. See notes/45.0.0-*-research.md and -precode-testing.md.
+pub const DEFAULT_BASE: &str = "quay.io/fedora/fedora-bootc:45";
 
 /// A kuma system declaration: the one file that describes a machine.
 #[derive(Debug, Deserialize, JsonSchema)]

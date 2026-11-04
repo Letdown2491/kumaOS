@@ -4337,7 +4337,7 @@ fn install(disk: Option<&Path>, request: install::Request) -> Result<()> {
 /// kuma image itself: mksquashfs and xorriso are build tools that no
 /// kuma machine should carry, and installing them into a throwaway
 /// container keeps them off both the host and the media.
-const ISO_BUILD_IMAGE: &str = "registry.fedoraproject.org/fedora:44";
+const ISO_BUILD_IMAGE: &str = "registry.fedoraproject.org/fedora:45";
 
 /// The tag the live root filesystem is built under. Distinct from the
 /// image being shipped, and disposable: it exists between the two
