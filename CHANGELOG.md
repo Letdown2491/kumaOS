@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **The base moves to Fedora 45.** `DEFAULT_BASE` is
+  `quay.io/fedora/fedora-bootc:45` and the ISO build container is
+  `fedora:45` — the next composed image is F45 root to toe (kernel
+  7.2, systemd 262, dnf5 5.4.6, podman 6), everything layered on top
+  baked fresh as always. The seed rides the GA digest
+  (`sha256:8076cf4f…`, the 2026-10-31 release compose; the tag is
+  frozen until base-images grows its 45 renovate lane), and the
+  compose env's rpm-ostree 2026.3 knows F45's relocated repo configs
+  (`/usr/share/dnf5/repos.d`). The greeter PAM stacks moved from
+  `/etc/pam.d` to `/usr/lib/pam.d` and the keyring assert follows
+  (`8906e62`); the oo7 secrets change is met by staying on
+  gnome-keyring for now — the adopt lane and its preconditions are
+  the research notes' subject, not this release's. The one F45 name
+  change in the package set (`mesa-va-drivers` folded into
+  `mesa-dri-drivers`) is handled by the mesa block's own version
+  guard, which only ever installs the freeworld side. Research trail:
+  `notes/45.0.0-*.md`.
+
 ## v44.15.0 (2026-10-29)
 
 - **One keyboard layout, every layer, with the boot layer made honest.**
