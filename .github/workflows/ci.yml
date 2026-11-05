@@ -377,10 +377,10 @@ jobs:
       (github.event_name != 'schedule' || needs.when.outputs.daily == 'true')
     # Two laps and, since #65's fallback gate, TWO full builds in the
     # guest: the delta arm plus the fallback's full compile, each with
-    # its own pull, reboot cycle, and convergence waits. The 90 the
-    # delta arm alone needed fit neither; the canceled 42073653334 is
-    # the measurement.
-    timeout-minutes: 135
+    # its own pull, reboot cycle, and convergence waits. 90 fit the
+    # delta arm alone; 135 died canceled mid-fallback twice
+    # (42073653334, 42088394029). 180 is the measured sum plus room.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: smoke (boot + delta upgrade)
