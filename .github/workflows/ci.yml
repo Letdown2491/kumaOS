@@ -57,9 +57,7 @@ jobs:
   # string. Changing the time in the `schedule:` block above would have
   # left all four matching nothing: both crons would run only the cheap
   # jobs, the daily boot heartbeat would stop, and the workflow would
-  # stay green, because a skipped job is a green job. The hibernate job
-  # consumes this output too and deliberately gates differently, daily or
-  # dispatch and never a push; the reasons are in its own comment.
+  # stay green, because a skipped job is a green job.
   #
   # A job rather than an `env:` value, because `env` is not available in
   # a job-level `if:` and actionlint says so. The cost is one runner
@@ -70,7 +68,7 @@ jobs:
     # a guard job that takes 3s
     timeout-minutes: 5
     outputs:
-      daily: ${{ steps.q.outputs.daily }}
+      heavy: ${{ steps.q.outputs.heavy }}
     steps:
       - id: q
         env:
@@ -78,13 +76,31 @@ jobs:
           WEEKLY_CRON: "0 6 * * 1"
         run: |
           set -euo pipefail
+          # The tier switch. The heavy VM battery (boot, install, iso,
+          # dead-disk, boot-delta, upgrade-fallback) proves boot
+          # machinery and the upgrade road -- guarantees that are real
+          # but that nothing user-visible rides a push to main for:
+          # releases ride tags, and the tag road runs its own battery.
+          # Per-push they made every landed fix wait two-plus hours
+          # behind jobs whose ceilings were already losing to runner
+          # variance (three canceled ceilings in one day:
+          # 42073653334, 42088394029, 42110419759). So they run on the
+          # daily heartbeat and on workflow_dispatch, never on a push
+          # and never on a tag (the tag road's own battery covers it,
+          # sequentially, where it gates). Per-push stays the fast
+          # tier: test, clippy, audit, interop, image -- about half an
+          # hour to green.
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            echo "heavy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "${{ github.event_name }}" != schedule ]; then
-            echo "daily=false" >> "$GITHUB_OUTPUT"
+            echo "heavy=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           case "${{ github.event.schedule }}" in
-            "$DAILY_CRON")  echo "daily=true"  >> "$GITHUB_OUTPUT" ;;
-            "$WEEKLY_CRON") echo "daily=false" >> "$GITHUB_OUTPUT" ;;
+            "$DAILY_CRON")  echo "heavy=true"  >> "$GITHUB_OUTPUT" ;;
+            "$WEEKLY_CRON") echo "heavy=false" >> "$GITHUB_OUTPUT" ;;
             # Loud, because the alternative is the failure this job
             # exists to prevent: an unrecognised schedule would answer
             # "not daily", the slow jobs would skip, and the run would be
@@ -300,10 +316,7 @@ jobs:
   boot:
     runs-on: ubuntu-24.04
     needs: when
-    if: >-
-      github.event_name != 'pull_request' &&
-      !startsWith(github.ref, 'refs/tags/') &&
-      (github.event_name != 'schedule' || needs.when.outputs.daily == 'true')
+    if: needs.when.outputs.heavy == 'true'
     timeout-minutes: 60
     strategy:
       # One example failing says nothing about the others, and cancelling
@@ -371,10 +384,7 @@ jobs:
   boot-delta:
     runs-on: ubuntu-24.04
     needs: when
-    if: >-
-      github.event_name != 'pull_request' &&
-      !startsWith(github.ref, 'refs/tags/') &&
-      (github.event_name != 'schedule' || needs.when.outputs.daily == 'true')
+    if: needs.when.outputs.heavy == 'true'
     # The delta arm alone: check, staged delta, reboot, divergences.
     # Its fallback half lives in the upgrade-fallback job below, so
     # the lap's two full builds run in parallel instead of queueing
@@ -407,10 +417,7 @@ jobs:
   upgrade-fallback:
     runs-on: ubuntu-24.04
     needs: when
-    if: >-
-      github.event_name != 'pull_request' &&
-      !startsWith(github.ref, 'refs/tags/') &&
-      (github.event_name != 'schedule' || needs.when.outputs.daily == 'true')
+    if: needs.when.outputs.heavy == 'true'
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -450,10 +457,7 @@ jobs:
   install:
     runs-on: ubuntu-24.04
     needs: when
-    if: >-
-      github.event_name != 'pull_request' &&
-      !startsWith(github.ref, 'refs/tags/') &&
-      (github.event_name != 'schedule' || needs.when.outputs.daily == 'true')
+    if: needs.when.outputs.heavy == 'true'
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -506,9 +510,7 @@ jobs:
   hibernate:
     runs-on: ubuntu-24.04
     needs: when
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'schedule' && needs.when.outputs.daily == 'true')
+    if: needs.when.outputs.heavy == 'true'
     # Longer than the install job it is built from, because it pays for
     # two boots and a hibernation on top of the same install.
     timeout-minutes: 120
@@ -549,10 +551,7 @@ jobs:
   dead-disk:
     runs-on: ubuntu-24.04
     needs: when
-    if: >-
-      github.event_name != 'pull_request' &&
-      !startsWith(github.ref, 'refs/tags/') &&
-      (github.event_name != 'schedule' || needs.when.outputs.daily == 'true')
+    if: needs.when.outputs.heavy == 'true'
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -598,10 +597,7 @@ jobs:
   iso:
     runs-on: ubuntu-24.04
     needs: when
-    if: >-
-      github.event_name != 'pull_request' &&
-      !startsWith(github.ref, 'refs/tags/') &&
-      (github.event_name != 'schedule' || needs.when.outputs.daily == 'true')
+    if: needs.when.outputs.heavy == 'true'
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
