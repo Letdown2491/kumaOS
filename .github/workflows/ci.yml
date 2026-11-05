@@ -375,7 +375,12 @@ jobs:
       github.event_name != 'pull_request' &&
       !startsWith(github.ref, 'refs/tags/') &&
       (github.event_name != 'schedule' || needs.when.outputs.daily == 'true')
-    timeout-minutes: 90
+    # Two laps and, since #65's fallback gate, TWO full builds in the
+    # guest: the delta arm plus the fallback's full compile, each with
+    # its own pull, reboot cycle, and convergence waits. The 90 the
+    # delta arm alone needed fit neither; the canceled 42073653334 is
+    # the measurement.
+    timeout-minutes: 135
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: smoke (boot + delta upgrade)
