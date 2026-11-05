@@ -2771,6 +2771,25 @@ smoke_published() {
         before=$(booted_digest)
         [ -n "$before" ] || bad "could not read the booted digest before upgrading"
 
+        # The verb, not just the engine (#65): the fetch lane is what a
+        # media-installed machine runs, and `kuma upgrade --check` is
+        # the first thing a user runs on it. A verb that cannot see a
+        # newer release while bootc can — or that routes a
+        # registry-origin machine onto the delta lane — is the failure
+        # the user feels first, and the engine's green here would hide
+        # it. The origin is the published repo over HTTPS, so no
+        # insecure allowance is needed.
+        gsudo "sh -c 'kuma upgrade --check --json 2>/tmp/kuma-check.err'" \
+            >"$dir/upgrade-fetch-check.json" \
+            || { gsudo "cat /tmp/kuma-check.err" || true; bad "kuma upgrade --check failed on the fetch-lane machine"; }
+        python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+assert d["lane"] == "fetch", d
+assert d["current"] is False, d
+assert d["release"]["digest"], d' "$dir/upgrade-fetch-check.json" \
+            || bad "the check did not report the fetch lane and a newer release"
+        ok "kuma upgrade --check reports the fetch lane and a newer release"
+
         echo "   .. upgrading to $UPGRADE_TO (pulling inside the guest)"
         # Captured, not discarded: a three-second failure says nothing on
         # the console, and the run this comment answers died reporting
@@ -3335,6 +3354,35 @@ assert d["digest"] == sys.argv[2], d' "$dir/upgrade-yes.json" "$want" ||
     fi
 
     ok "the nostr layer's preset stands down, reversible by declaration"
+
+    # --- the fallback half (#65) ----------------------------------------
+    #
+    # A declaration that moves what no delta can carry used to refuse
+    # the upgrade outright, and the refusal's own remedy (`kuma update`)
+    # was broken across a version skew. Now the verb falls back: the
+    # FULL compiler, FROM the release digest already pulled — hostname,
+    # keymap, [user] all ride, and the release's binaries stand. The
+    # drift here is a hostname, the field most machines have moved;
+    # against the machine's OWN baked baseline (the post-delta
+    # deployment's) nothing else moves, so the staged image is exactly
+    # the fallback's output. The binary performing it is the release's
+    # N — the N-1's own fallback is the point release's road to prove —
+    # but the compile-build-stage path is one shared code path, and
+    # this is its gate.
+    gsudo "sed -i 's/^hostname = .*/hostname = \"delta-drifted\"/' /root/kuma.toml" ||
+        bad "cannot drift the machine's hostname"
+    gsudo "grep -q '^hostname' /root/kuma.toml" ||
+        gsudo "sed -i '/^desktop/a hostname = \"delta-drifted\"' /root/kuma.toml" ||
+        bad "cannot declare the drifted hostname"
+    gsudo "sh -c 'env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --yes --json --config /root/kuma.toml 2>/tmp/kuma-upgrade.err'" \
+        >"$dir/upgrade-fallback.json" \
+        || { gsudo "cat /tmp/kuma-upgrade.err" || true; bad "the fallback upgrade (a moved hostname) failed — did the refusal come back?"; }
+    python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+assert d["staged"] is True, d
+assert d["digest"] == sys.argv[2], d' "$dir/upgrade-fallback.json" "$want" \
+        || bad "the fallback staged something other than the release it checked"
+    ok "the moved-hostname declaration staged through the fallback, not a refusal"
 
     stop_delta_registry
 }
