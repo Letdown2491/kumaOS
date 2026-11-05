@@ -386,12 +386,28 @@ bad()  {
 # image's default repo set, so the retries are CDN hygiene, not a
 # product dodge: a build that fails three times fails loudly either
 # way.
+#
+# A failed attempt also evicts the compose cache. The cachedir is a
+# named volume the next attempt remounts, and libdnf honors the repos'
+# metadata_expire in it — the F45 updates-archive vendor repo says
+# 6h. That repo is single-host with no mirrors to rotate, and it
+# regenerates continuously, GCing old repodata as it goes: a compose
+# that races a regeneration caches a repomd.xml naming files that no
+# longer exist, and every retry that reuses the cache re-requests the
+# same 404s until the six hours die (measured 2026-11-05, runs
+# 41949476445 and 41955323294 — boot-delta then install, three
+# identical attempts each at two-minute spacing, the same
+# `cannot update repo 'updates-archive'` every time, while other jobs
+# on fresh caches passed). The eviction costs the retry its package
+# downloads; without it the retries cost nothing at all, which is the
+# wrong thing for them to cost.
 kuma_build() {
     local attempt
     for attempt in 1 2 3; do
         if "$KUMA" --config "$1" build --tag "$2" >/dev/null; then
             return 0
         elif [ "$attempt" -lt 3 ]; then
+            podman volume rm -f kuma-compose-cache >/dev/null 2>&1 || true
             sleep 120
         fi
     done
