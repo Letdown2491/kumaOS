@@ -13,6 +13,14 @@ on:
       - "v*"
   pull_request:
   workflow_dispatch:
+    # The tier switch, by hand. The full battery is what a dispatch is
+    # FOR -- but a release branch wants its fast tier green before the
+    # tag road's own battery spends, so the input is real.
+    inputs:
+      heavy:
+        description: "Run the heavy VM battery (boot, install, iso, delta, fallback)"
+        type: boolean
+        default: true
   # A dependency becomes vulnerable on the day the advisory lands, not on
   # the day someone next touches the code. Pushes alone would mean a
   # quiet week is indistinguishable from a clean one, so the audit gets a
@@ -91,7 +99,7 @@ jobs:
           # tier: test, clippy, audit, interop, image -- about half an
           # hour to green.
           if [ "${{ github.event_name }}" = workflow_dispatch ]; then
-            echo "heavy=true" >> "$GITHUB_OUTPUT"
+            echo "heavy=${{ inputs.heavy }}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "${{ github.event_name }}" != schedule ]; then
