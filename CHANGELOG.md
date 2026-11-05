@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v44.15.1 (2026-11-05)
+
 - **`kuma upgrade` no longer refuses a moved declaration — the delta
   lane always has a path.** The diff baseline was the release's baked
   example, so any machine whose declaration ever named a custom
