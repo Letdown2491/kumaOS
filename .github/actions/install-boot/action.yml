@@ -101,7 +101,7 @@ runs:
         # the day it lands instead of a week of red installs later.
         echo "podman version: $(podman --version)"
         major=$(podman --version | awk '{print $NF}' | cut -d. -f1)
-        if [ "${major:-0}" -ge 5 ]; then
+        if [ "${major:-0}" -ge 6 ]; then
           for d in /usr/local/bin /usr/local/sbin /usr/bin /usr/sbin /bin /sbin; do
             # Found, not exited: the probes at the bottom gate a shipped
             # podman the same as a repaired one, because a shipped one
@@ -126,6 +126,16 @@ runs:
           # bottles podman for linux, so the repair pours rather than
           # builds; a runner without it fails here, naming the absence,
           # instead of twenty minutes later at the COPY.
+          #
+          # The floor moved to 6 with the F45 base (2026-11-05): the
+          # install container is now the F45 image, whose podman 6.1.3
+          # reads the additional image store the runner's podman writes —
+          # and 6.x read a 5.x-written store with "reading layer ...:
+          # layer not known" at bootc install's unencapsulate (the first
+          # 45 lap, run 41933716954: install and dead-disk died at the
+          # same point after a complete pull and build). 6.0's split
+          # image store is the writer/reader pairing that changed; pour
+          # 6.x so the store is written and read by the same family.
           [ -x /home/linuxbrew/.linuxbrew/bin/brew ] \
             || { echo "podman $major is too old for the install's build and there is no Homebrew to repair with" >&2; exit 1; }
           eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
