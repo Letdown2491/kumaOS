@@ -800,7 +800,20 @@ fi
 # at the same path, so one config describes it for both: the host's
 # store is an additional image store, which is what lets an image built
 # here rather than pulled resolve its base layers.
-conf=$(mktemp)
+#
+# The config is mounted at a custom path and named by
+# CONTAINERS_STORAGE_CONF, not dropped at /etc/containers/storage.conf.
+# The F45 base ships a vendor rootful drop-in
+# (/usr/share/containers/storage.rootful.conf.d/00-vendor-rootful.conf)
+# whose additionalimagestores replaces this script's list in the default
+# config chain, so bootc's spawned skopeo resolves parent layers against
+# /usr/lib/containers/storage alone and the unencapsulate dies with
+# `reading layer ...: layer not known` after a complete pull (the first
+# 45 laps: 41933716954, 41941070448 — install, dead-disk and boot all
+# three, whatever podman version wrote the runner's store). The
+# environment variable bypasses drop-ins entirely, which is what makes
+# the list this script writes the one that counts.
+conf=/run/kuma-install-storage.conf
 cat > "$conf" <<STORAGE
 [storage]
 driver = "overlay"
@@ -828,7 +841,8 @@ podman --root "$store" --runroot /run/kuma-install --storage-driver overlay \
     -v "$TMPDIR:/var/tmp" \
     -v /dev:/dev -v "$mnt:$mnt" -v "$fsmnt:$fsmnt" \
     -v /var/lib/containers:/var/lib/kuma-host-store \
-    -v "$conf:/etc/containers/storage.conf:ro" \
+    -v "$conf:/run/kuma-install-storage.conf:ro" \
+    --env CONTAINERS_STORAGE_CONF="/run/kuma-install-storage.conf" \
     @TAG@ \
     bootc install to-filesystem \
         --source-imgref "containers-storage:@TAG@" \
