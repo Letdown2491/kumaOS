@@ -3530,9 +3530,13 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     // login) and indiscriminate. Scope it: the XDG_* trio is how
     // niri.service finds the logind session; PATH carries the login
     // shell's profile.d additions (brew) into everything niri spawns.
-    // grep first so the build fails if a niri update rewords the script.
+    // Idempotent by shape, not by guard: the sed's pattern only
+    // matches the UNPATCHED line, so it is a no-op on a base that
+    // already carries the patch — the release image this fallback
+    // FROMs was built by this very compiler — and the assert after it
+    // keeps the loud failure if a niri update rewords the script.
     e.raw(
-        "RUN grep -qx '    systemctl --user import-environment' /usr/bin/niri-session \\\n    && sed -i 's/^    systemctl --user import-environment$/    systemctl --user import-environment PATH XDG_SESSION_ID XDG_SEAT XDG_VTNR/' /usr/bin/niri-session\n",
+        "RUN sed -i 's/^    systemctl --user import-environment$/    systemctl --user import-environment PATH XDG_SESSION_ID XDG_SEAT XDG_VTNR/' /usr/bin/niri-session \\\n    && grep -q '    systemctl --user import-environment PATH XDG_SESSION_ID XDG_SEAT XDG_VTNR' /usr/bin/niri-session\n",
     );
     e.raw(
         "RUN systemctl set-default graphical.target && systemctl enable greetd.service firewalld.service power-profiles-daemon.service bluetooth.service cups.service avahi-daemon.service chronyd.service\n",
@@ -3586,8 +3590,12 @@ fn desktop_cosmic(e: &mut Emitter<'_>) {
         // appended to the config cosmic-greeter.service reads.
         // test -f first so a moved config fails the build instead
         // of autologin silently not happening.
+        // Appended once, guarded by its own marker: a base that
+        // already carries the stanza (the release image this fallback
+        // FROMs) must not carry it twice — a duplicated [initial_session]
+        // table is a TOML parse error at greetd, not a cosmetic one.
         e.raw(&format!(
-            "RUN test -f /etc/greetd/cosmic-greeter.toml && printf '\\n[initial_session]\\ncommand = \"start-cosmic\"\\nuser = \"{name}\"\\n' >> /etc/greetd/cosmic-greeter.toml\n"
+            "RUN test -f /etc/greetd/cosmic-greeter.toml && ! grep -q '^\\[initial_session\\]' /etc/greetd/cosmic-greeter.toml && printf '\\n[initial_session]\\ncommand = \"start-cosmic\"\\nuser = \"{name}\"\\n' >> /etc/greetd/cosmic-greeter.toml\n"
         ));
     }
     // kuma declares the user and its look is settings, not a wizard —
