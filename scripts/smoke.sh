@@ -37,6 +37,12 @@
 #   scripts/smoke.sh --published <image> --hibernate --secure-boot
 #   scripts/smoke.sh --boot --delta niri   # boot, then `kuma upgrade`
 #                                          # on the booted machine
+#   scripts/smoke.sh --boot --fallback-only niri
+#                                          # boot, then ONLY the #65
+#                                          # fallback arm of --delta
+#                                          # (its own CI job, so the
+#                                          # lap's two full builds run
+#                                          # in parallel)
 #
 # --delta rides the boot stage and, after the boot assertions pass,
 # drives `kuma upgrade` on the booted machine itself: the delta lane's
@@ -189,6 +195,7 @@ DELTA_TARGET=""
 DEAD_DISK=0
 UPGRADE_TO=""
 DELTA=0
+DELTA_FALLBACK_ONLY=0
 ENCRYPTED=0
 HIBERNATE=0
 SECURE_BOOT=0
@@ -210,6 +217,10 @@ while [ $# -gt 0 ]; do
         --dead-disk) DEAD_DISK=1 ;;
         --upgrade-to) UPGRADE_TO=${2:?--upgrade-to needs an image reference}; shift ;;
         --delta) DELTA=1 ;;
+        --fallback-only)
+            DELTA=1
+            DELTA_FALLBACK_ONLY=1
+            ;;
         --encrypted) ENCRYPTED=1 ;;
         --hibernate) HIBERNATE=1 ;;
         --secure-boot) SECURE_BOOT=1 ;;
@@ -3079,6 +3090,141 @@ stop_delta_registry() {
 # assumed: the lane infers {release repo}:{release tag} exactly this
 # way, and a lap that pushed anywhere else would watch the verb refuse
 # an update the lap itself misplaced.
+# The delta arm's upgrade-and-assert half: everything that only the
+# delta lane's own verb proves -- the staged delta, the reboot into
+# it, the divergences alive in the booted deployment. The fallback
+# arm skips it entirely; the two belong to separate CI jobs so the
+# lap's two full builds do not queue behind each other.
+run_delta_half() {
+    local name=$1 machine_tag=$2 target_ref=${3:-} sudo_pass=${4:-}
+    local dir="vm-smoke/$name"
+    # The verb runs as root so its internal sudo calls (skopeo,
+    # bootc, the stage) are passwordless; the kuma account's wheel
+    # sudo needs a password no non-interactive session can answer.
+    # --json because the assertions parse, not grep prose.
+    local before after want version_before n1_version n1_accounts_ride=0
+    version_before=$(gsudo "kuma --version")
+    if [[ "$version_before" =~ ^kuma\ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+        n1_version=${BASH_REMATCH[1]}
+        [ "$(printf '%s\n%s\n' "$n1_version" 44.14.0 | sort -V | head -1)" = 44.14.0 ] &&
+            n1_accounts_ride=1
+    fi
+    before=$(booted_digest) || bad "could not read the booted digest before the upgrade"
+    gsudo "sh -c 'env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --check --json --config /root/kuma.toml 2>/tmp/kuma-upgrade.err'" \
+        >"$dir/upgrade-check.json" \
+        || { gsudo "cat /tmp/kuma-upgrade.err" || true; bad "the delta lane's check failed on the booted machine"; }
+    python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+assert d["lane"] == "delta", d
+assert d["current"] is False, d
+assert d["release"]["digest"], d' "$dir/upgrade-check.json" ||
+        bad "the check did not report a newer release on the delta lane"
+    want=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["release"]["digest"])' \
+        "$dir/upgrade-check.json")
+    ok "the check reports a newer release ($want)"
+
+    gsudo "sh -c 'env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --yes --json --config /root/kuma.toml 2>/tmp/kuma-upgrade.err'" \
+        >"$dir/upgrade-yes.json" \
+        || { gsudo "cat /tmp/kuma-upgrade.err" || true; bad "the delta upgrade failed on the booted machine"; }
+    python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+assert d["staged"] is True, d
+assert d["digest"] == sys.argv[2], d' "$dir/upgrade-yes.json" "$want" ||
+        bad "the delta upgrade did not stage the release it checked"
+    # The lock names the release the delta compiled from; it is
+    # written beside the declaration (/root/kuma.lock here), which
+    # dies with the reboot — so the read is before it, and asserts
+    # that the lane wrote it at all.
+    gsudo "grep -F $want /root/kuma.lock" >/dev/null ||
+        bad "the delta left no release record in the lock"
+    ok "the delta staged, and the lock names the release"
+
+    echo "   .. rebooting into the delta"
+    gsudo "systemctl reboot" >/dev/null 2>&1 || true
+    local gone=0
+    while guest true 2>/dev/null && [ $gone -lt 60 ]; do sleep 2; gone=$((gone + 2)); done
+    await_healthy_boot "$qemu" "$log" \
+        "the delta machine came back" \
+        "greenboot says the delta deployment is healthy" \
+        " after the delta upgrade" 1800
+
+    after=$(booted_digest) || bad "could not read the booted digest after the upgrade"
+    [ "$before" != "$after" ] ||
+        bad "still booted on $before after the delta upgrade; nothing actually moved"
+    ok "moved from ${before:0:19} to ${after:0:19}"
+
+    # The version skew, asserted where it exists: with the road's real
+    # release named, the machine's binary is N-1 before the reboot and N
+    # after -- the lap's whole question, stated in one line.
+    if [ -n "$target_ref" ]; then
+        local version_after
+        version_after=$(gsudo "kuma --version")
+        [ "$version_before" != "$version_after" ] ||
+            bad "the machine's kuma still reports $version_after; the release did not move the binary"
+        ok "the binary moved with the release ($version_before -> $version_after)"
+    fi
+
+    # The divergences, alive in the booted deployment — the
+    # machine's and the release's, decided the compiler's way. rpm
+    # -q rather than a file probe: the delta's dnf ran at build
+    # time, and "the package is in the image" is the claim.
+    gsudo "rpm -q cowsay" | grep -q cowsay ||
+        bad "the delta's package is not in the booted deployment"
+    ok "the delta's package is installed"
+    # #53's contract, converged for real on every arm whose N-1 can
+    # carry it: the account the machine declared exists, out of wheel
+    # as declared, with its key served where sshd looks. On an older
+    # N-1 the gate stands the assertions down — the machine's
+    # declaration still names the account, and nothing the release
+    # owns can converge it yet.
+    if [ $n1_accounts_ride -eq 1 ]; then
+        gsudo "id -u deltauser" >/dev/null ||
+            bad "the delta's additional account was never converged at first boot"
+        gsudo "id -nG deltauser" | grep -qw wheel &&
+            bad "the delta's additional account landed in wheel; groups = [] said not to"
+        gsudo "cat /etc/kuma/keys/deltauser" | grep -q "delta@kuma" ||
+            bad "the delta's additional account carries no key file"
+        ok "the delta's additional account converged at first boot"
+    else
+        echo "   .. the N-1's delta compiler (kuma ${n1_version:-unknown}) predates added accounts; the account's convergence is the next road's to prove"
+    fi
+    local rebaked
+    rebaked=$(gsudo "cat /usr/lib/kuma/kuma.toml")
+    printf '%s\n' "$rebaked" | grep -q cowsay ||
+        bad "the booted deployment's baked declaration is not the machine's"
+    printf '%s\n' "$rebaked" | grep -A1 '^\[nostr\]' | grep -q "enable = false" ||
+        bad "the booted deployment's declaration does not carry the nostr disable"
+    if [ $n1_accounts_ride -eq 1 ]; then
+        printf '%s\n' "$rebaked" | grep -q '^\[other_users.deltauser\]' ||
+            bad "the re-baked declaration lost the additional account"
+    fi
+    ok "the declaration was re-baked onto the deployment"
+    # The delta's deliverable is the preset file: the compile wrote the
+    # disable lines and preset-applied them into the image's /etc. The
+    # enablement is #54's converger's to state, and since 44.14 it
+    # states it: the boot-time unit re-applies the baked preset on the
+    # booted machine, where nothing applied one since the build — so
+    # the disable takes the enable link the old image merged into /etc
+    # with it, and the global is-enabled read is the flip itself.
+    gsudo "cat /usr/lib/systemd/user-preset/50-kuma-nostr.preset" |
+        grep -qx "disable kuma-nostrd.service" ||
+        bad "the delta's preset does not stand the nostr layer down"
+    gsudo "systemctl --global is-enabled kuma-nostrd.service || true" |
+        grep -qx "disabled" ||
+        bad "the nostr enablement did not converge through the delta (the preset converger did not flip it)"
+    if [ -z "$target_ref" ]; then
+        # The fabricated release's both-ways divergence, asserted in the
+        # re-baked declaration too: the machine's kept package survived
+        # the compile, the release's extra did not.
+        printf '%s\n' "$rebaked" | grep -q git-core-doc ||
+            bad "the re-baked declaration lost the package the machine's declaration keeps"
+        printf '%s\n' "$rebaked" | grep -q '"sl"' &&
+            bad "the re-baked declaration names the release's extra; the declaration wins"
+    fi
+
+    ok "the nostr layer's preset stands down, reversible by declaration"
+}
+
 run_delta_arm() {
     local name=$1 machine_tag=$2 target_ref=${3:-} sudo_pass=${4:-}
     local dir="vm-smoke/$name"
@@ -3248,148 +3394,40 @@ assert not naked, "%d layers lost their zstd-chunked annotations" % len(naked)' 
     # which is the next road's to prove (the v44.14.0 road's lap died
     # here: 44.13.0 -> 44.14.0 is the one transition where this gate
     # is shut; measured 2026-10-25).
-    local n1_accounts_ride=0
-    local n1_version=""
-    local version_before=""
-    version_before=$(gsudo "kuma --version")
-    if [[ "$version_before" =~ ^kuma\ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
-        n1_version=${BASH_REMATCH[1]}
-        [ "$(printf '%s\n%s\n' "$n1_version" 44.14.0 | sort -V | head -1)" = 44.14.0 ] &&
-            n1_accounts_ride=1
-    fi
     gsudo "sh -c 'printf \"\n[other_users.deltauser]\nshell = \\\"fish\\\"\ngroups = []\nssh_keys = [\\\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIsmokedelta delta@kuma\\\"]\n\" >> /root/kuma.toml'" ||
         bad "cannot declare an additional account in the machine's declaration"
     ok "the machine's declaration diverges from the release"
 
-    # The verb runs as root so its internal sudo calls (skopeo,
-    # bootc, the stage) are passwordless; the kuma account's wheel
-    # sudo needs a password no non-interactive session can answer.
-    # --json because the assertions parse, not grep prose.
-    local before after want
-    before=$(booted_digest) || bad "could not read the booted digest before the upgrade"
-    gsudo "sh -c 'env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --check --json --config /root/kuma.toml 2>/tmp/kuma-upgrade.err'" \
-        >"$dir/upgrade-check.json" \
-        || { gsudo "cat /tmp/kuma-upgrade.err" || true; bad "the delta lane's check failed on the booted machine"; }
-    python3 -c 'import json,sys
-d = json.load(open(sys.argv[1]))
-assert d["lane"] == "delta", d
-assert d["current"] is False, d
-assert d["release"]["digest"], d' "$dir/upgrade-check.json" ||
-        bad "the check did not report a newer release on the delta lane"
-    want=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["release"]["digest"])' \
-        "$dir/upgrade-check.json")
-    ok "the check reports a newer release ($want)"
-
-    gsudo "sh -c 'env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --yes --json --config /root/kuma.toml 2>/tmp/kuma-upgrade.err'" \
-        >"$dir/upgrade-yes.json" \
-        || { gsudo "cat /tmp/kuma-upgrade.err" || true; bad "the delta upgrade failed on the booted machine"; }
-    python3 -c 'import json,sys
-d = json.load(open(sys.argv[1]))
-assert d["staged"] is True, d
-assert d["digest"] == sys.argv[2], d' "$dir/upgrade-yes.json" "$want" ||
-        bad "the delta upgrade did not stage the release it checked"
-    # The lock names the release the delta compiled from; it is
-    # written beside the declaration (/root/kuma.lock here), which
-    # dies with the reboot — so the read is before it, and asserts
-    # that the lane wrote it at all.
-    gsudo "grep -F $want /root/kuma.lock" >/dev/null ||
-        bad "the delta left no release record in the lock"
-    ok "the delta staged, and the lock names the release"
-
-    echo "   .. rebooting into the delta"
-    gsudo "systemctl reboot" >/dev/null 2>&1 || true
-    local gone=0
-    while guest true 2>/dev/null && [ $gone -lt 60 ]; do sleep 2; gone=$((gone + 2)); done
-    await_healthy_boot "$qemu" "$log" \
-        "the delta machine came back" \
-        "greenboot says the delta deployment is healthy" \
-        " after the delta upgrade" 1800
-
-    after=$(booted_digest) || bad "could not read the booted digest after the upgrade"
-    [ "$before" != "$after" ] ||
-        bad "still booted on $before after the delta upgrade; nothing actually moved"
-    ok "moved from ${before:0:19} to ${after:0:19}"
-
-    # The version skew, asserted where it exists: with the road's real
-    # release named, the machine's binary is N-1 before the reboot and N
-    # after -- the lap's whole question, stated in one line.
-    if [ -n "$target_ref" ]; then
-        local version_after
-        version_after=$(gsudo "kuma --version")
-        [ "$version_before" != "$version_after" ] ||
-            bad "the machine's kuma still reports $version_after; the release did not move the binary"
-        ok "the binary moved with the release ($version_before -> $version_after)"
-    fi
-
-    # The divergences, alive in the booted deployment — the
-    # machine's and the release's, decided the compiler's way. rpm
-    # -q rather than a file probe: the delta's dnf ran at build
-    # time, and "the package is in the image" is the claim.
-    gsudo "rpm -q cowsay" | grep -q cowsay ||
-        bad "the delta's package is not in the booted deployment"
-    ok "the delta's package is installed"
-    # #53's contract, converged for real on every arm whose N-1 can
-    # carry it: the account the machine declared exists, out of wheel
-    # as declared, with its key served where sshd looks. On an older
-    # N-1 the gate stands the assertions down — the machine's
-    # declaration still names the account, and nothing the release
-    # owns can converge it yet.
-    if [ $n1_accounts_ride -eq 1 ]; then
-        gsudo "id -u deltauser" >/dev/null ||
-            bad "the delta's additional account was never converged at first boot"
-        gsudo "id -nG deltauser" | grep -qw wheel &&
-            bad "the delta's additional account landed in wheel; groups = [] said not to"
-        gsudo "cat /etc/kuma/keys/deltauser" | grep -q "delta@kuma" ||
-            bad "the delta's additional account carries no key file"
-        ok "the delta's additional account converged at first boot"
+    local want
+    if [ $DELTA_FALLBACK_ONLY -eq 1 ]; then
+        # The fallback-only arm (#65, split from the delta half so the
+        # lap's two full builds run in two parallel CI jobs): the same
+        # registry, the same riders in the declaration, but the verb is
+        # asked once — the hostname drift below is what no delta can
+        # carry, so the compile it takes is the fallback's, and the
+        # staged digest is still the release's. The check is the cheap
+        # read that names the digest the assert wants; the lane it
+        # reports is still delta, because nothing has drifted the
+        # uncarryable field yet.
+        gsudo "sh -c 'env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --check --json --config /root/kuma.toml 2>/tmp/kuma-upgrade.err'" \
+            >"$dir/upgrade-check.json" \
+            || { gsudo "cat /tmp/kuma-upgrade.err" || true; bad "the fallback arm's check failed on the booted machine"; }
+        want=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["release"]["digest"])' \
+            "$dir/upgrade-check.json")
+        ok "the fallback arm's check names the release ($want)"
     else
-        echo "   .. the N-1's delta compiler (kuma ${n1_version:-unknown}) predates added accounts; the account's convergence is the next road's to prove"
+        run_delta_half "$name" "$machine_tag" "$target_ref" "$sudo_pass"
     fi
-    local rebaked
-    rebaked=$(gsudo "cat /usr/lib/kuma/kuma.toml")
-    printf '%s\n' "$rebaked" | grep -q cowsay ||
-        bad "the booted deployment's baked declaration is not the machine's"
-    printf '%s\n' "$rebaked" | grep -A1 '^\[nostr\]' | grep -q "enable = false" ||
-        bad "the booted deployment's declaration does not carry the nostr disable"
-    if [ $n1_accounts_ride -eq 1 ]; then
-        printf '%s\n' "$rebaked" | grep -q '^\[other_users.deltauser\]' ||
-            bad "the re-baked declaration lost the additional account"
-    fi
-    ok "the declaration was re-baked onto the deployment"
-    # The delta's deliverable is the preset file: the compile wrote the
-    # disable lines and preset-applied them into the image's /etc. The
-    # enablement is #54's converger's to state, and since 44.14 it
-    # states it: the boot-time unit re-applies the baked preset on the
-    # booted machine, where nothing applied one since the build — so
-    # the disable takes the enable link the old image merged into /etc
-    # with it, and the global is-enabled read is the flip itself.
-    gsudo "cat /usr/lib/systemd/user-preset/50-kuma-nostr.preset" |
-        grep -qx "disable kuma-nostrd.service" ||
-        bad "the delta's preset does not stand the nostr layer down"
-    gsudo "systemctl --global is-enabled kuma-nostrd.service || true" |
-        grep -qx "disabled" ||
-        bad "the nostr enablement did not converge through the delta (the preset converger did not flip it)"
-    if [ -z "$target_ref" ]; then
-        # The fabricated release's both-ways divergence, asserted in the
-        # re-baked declaration too: the machine's kept package survived
-        # the compile, the release's extra did not.
-        printf '%s\n' "$rebaked" | grep -q git-core-doc ||
-            bad "the re-baked declaration lost the package the machine's declaration keeps"
-        printf '%s\n' "$rebaked" | grep -q '"sl"' &&
-            bad "the re-baked declaration names the release's extra; the declaration wins"
-    fi
-
-    ok "the nostr layer's preset stands down, reversible by declaration"
 
     # --- the fallback half (#65) ----------------------------------------
-    #
+
     # A declaration that moves what no delta can carry used to refuse
     # the upgrade outright, and the refusal's own remedy (`kuma update`)
     # was broken across a version skew. Now the verb falls back: the
     # FULL compiler, FROM the release digest already pulled — hostname,
     # keymap, [user] all ride, and the release's binaries stand. The
     # drift here is a hostname, the field most machines have moved;
-    # against the machine's OWN baked baseline (the post-delta
+    # against the machine's OWN baked baseline (the booted
     # deployment's) nothing else moves, so the staged image is exactly
     # the fallback's output. The binary performing it is the release's
     # N — the N-1's own fallback is the point release's road to prove —

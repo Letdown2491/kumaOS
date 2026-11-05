@@ -375,12 +375,12 @@ jobs:
       github.event_name != 'pull_request' &&
       !startsWith(github.ref, 'refs/tags/') &&
       (github.event_name != 'schedule' || needs.when.outputs.daily == 'true')
-    # Two laps and, since #65's fallback gate, TWO full builds in the
-    # guest: the delta arm plus the fallback's full compile, each with
-    # its own pull, reboot cycle, and convergence waits. 90 fit the
-    # delta arm alone; 135 died canceled mid-fallback twice
-    # (42073653334, 42088394029). 180 is the measured sum plus room.
-    timeout-minutes: 180
+    # The delta arm alone: check, staged delta, reboot, divergences.
+    # Its fallback half lives in the upgrade-fallback job below, so
+    # the lap's two full builds run in parallel instead of queueing
+    # behind each other in one guest (135 and 180-minute ceilings both
+    # died canceled mid-fallback: 42073653334, 42088394029).
+    timeout-minutes: 105
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: smoke (boot + delta upgrade)
@@ -394,6 +394,37 @@ jobs:
         if: failure() || cancelled()
         with:
           name: console-boot-delta
+          path: vm-smoke/console-niri.log
+          if-no-files-found: warn
+
+  # The fallback arm of the delta lap (#65), on its own machine: boot,
+  # seed the lap registry, drift the declaration's hostname — a field
+  # no delta can carry — and prove `kuma upgrade --yes` stages the
+  # full compile FROM the release instead of refusing. Runs beside
+  # boot-delta, not after it: the arm needs only the boot stage's
+  # machine and registry, and serially the two full builds cost one
+  # job more than any ceiling we were willing to name.
+  upgrade-fallback:
+    runs-on: ubuntu-24.04
+    needs: when
+    if: >-
+      github.event_name != 'pull_request' &&
+      !startsWith(github.ref, 'refs/tags/') &&
+      (github.event_name != 'schedule' || needs.when.outputs.daily == 'true')
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: smoke (boot + upgrade fallback)
+        uses: ./.github/actions/install-boot
+        with:
+          smoke_args: --boot --fallback-only niri
+      - name: guest console
+        if: failure() || cancelled()
+        run: tail -200 vm-smoke/console-niri.log || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: failure() || cancelled()
+        with:
+          name: console-upgrade-fallback
           path: vm-smoke/console-niri.log
           if-no-files-found: warn
 
