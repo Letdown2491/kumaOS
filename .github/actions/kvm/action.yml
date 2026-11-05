@@ -165,15 +165,37 @@ runs:
         # three otherwise identical jobs, the settle lesson's twin).
         # So wait for the node to exist, then open the one node.
         waited=0
-        while [ ! -c "$vgem_node" ] && [ "$waited" -lt 50 ]; do
+        while [ ! -c "$vgem_node" ] && [ "$waited" -lt 300 ]; do
             sleep 0.1
             waited=$((waited + 1))
         done
-        sudo chmod 666 "$vgem_node" 2>/dev/null || true
+        # And the wait is not the whole settle either: the chmod and the
+        # open check are a pair that can still lose the race, because a
+        # node devtmpfs creates late does not carry the chmod back in
+        # time — one boot-delta runner materialized renderD128 in the
+        # same second the check ran (2026-11-05, run 41949476445), so
+        # the chmod above had fired at a nonexistent path, failed
+        # silently, and the check met a fresh 660 root:render node. So
+        # the chmod rides inside the check's retry: settle, open,
+        # re-chmod, re-open, up to thirty seconds, and the dump runs
+        # only when a full window of both has lost.
+        opened=0
+        retried=0
+        while [ "$retried" -lt 100 ]; do
+            if [ -c "$vgem_node" ]; then
+                sudo chmod 666 "$vgem_node" 2>/dev/null || true
+                if test -r "$vgem_node" && test -w "$vgem_node"; then
+                    opened=1
+                    break
+                fi
+            fi
+            sleep 0.3
+            retried=$((retried + 1))
+        done
         # The check is the qemu user's, not root's: ls sees a node root
         # owns, open is what qemu needs. What the failure leaves behind
         # is the next diagnosis's input.
-        test -r "$vgem_node" && test -w "$vgem_node" || {
+        [ "$opened" = 1 ] || {
             ls -la /dev/dri/ >&2 || true
             stat -c '%n %a %U:%G' /dev/dri/renderD* >&2 2>/dev/null || true
             id >&2
