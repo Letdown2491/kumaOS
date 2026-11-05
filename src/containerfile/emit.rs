@@ -88,11 +88,14 @@ pub(crate) struct Emitter<'c> {
     pub(crate) release_version: Option<String>,
 }
 
-/// The context files that are compiled kuma binaries rather than
-/// compiler-generated text: a build FROM a release image never copies
-/// these, because the FROM layers already carry them. Everything else
-/// the walk stages is recipe-shaped content the compiling binary owns.
-const RELEASE_BINARIES: [&str; 9] = [
+/// The context files that ship from beside the running kuma rather
+/// than out of the walk — the compiled binaries, and the kumaui
+/// desktop entries and icons the entries' COPYs name. A build FROM a
+/// release image never copies any of them, because the FROM layers
+/// already carry them (and the build host's would be a version
+/// downgrade). Everything else the walk stages is recipe-shaped
+/// content the compiling binary owns.
+const RELEASE_SHIPPED: [&str; 15] = [
     "kuma",
     "kuma-nostrd",
     "kuma-nostr",
@@ -102,6 +105,12 @@ const RELEASE_BINARIES: [&str; 9] = [
     "kuma-files",
     "kuma-term",
     "kuma-monitor",
+    "kuma-files.desktop",
+    "kuma-term.desktop",
+    "kuma-monitor.desktop",
+    "kuma-files.png",
+    "kuma-term.png",
+    "kuma-monitor.png",
 ];
 
 impl<'c> Emitter<'c> {
@@ -119,9 +128,10 @@ impl<'c> Emitter<'c> {
     }
 
     /// FROM a release image: the full walk compiles as usual, but the
-    /// release's binaries and version identity stand — see the field
-    /// docs. The fallback behind the delta lane's upgrade.
-    pub(crate) fn from_release(mut self, version: &str) -> Self {
+    /// release's binaries, entries, icons, and version identity stand
+    /// — see the field docs. The fallback behind the delta lane's
+    /// upgrade.
+    pub(crate) fn riding_release(mut self, version: &str) -> Self {
         self.from_release = true;
         self.release_version = Some(version.to_string());
         self
@@ -188,6 +198,12 @@ impl<'c> Emitter<'c> {
 
     /// `COPY name dest`
     pub(crate) fn copy(&mut self, file: &Staged, dest: &str) {
+        // The release-shipped entries and icons ride the same gate as
+        // the binaries (see copy_exec): the FROM layers carry them.
+        if self.from_release && RELEASE_SHIPPED.contains(&file.name.as_str()) {
+            self.copied.insert(file.name.clone());
+            return;
+        }
         self.text.push_str(&format!("COPY {} {}\n", file.name, dest));
         self.copied.insert(file.name.clone());
     }
@@ -199,7 +215,7 @@ impl<'c> Emitter<'c> {
     /// release's are the truth this build crosses to, and the build
     /// host's would be a downgrade baked in silently.
     pub(crate) fn copy_exec(&mut self, file: &Staged, dest: &str) {
-        if self.from_release && RELEASE_BINARIES.contains(&file.name.as_str()) {
+        if self.from_release && RELEASE_SHIPPED.contains(&file.name.as_str()) {
             self.copied.insert(file.name.clone());
             return;
         }
