@@ -105,6 +105,31 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
+      # Same reclaim the install-boot action runs, same reason: the build
+      # needs the compose's podman storage and the pulled layers in one
+      # home volume, and the runner's dev packs are 25+ GB of slack
+      # nothing here reads. The 45 publish died without it (2026-11-05,
+      # run 42020847684): the base grew — kernel 7.2, the CJK variable
+      # fonts — and the commit of the font layer wrote "no space left on
+      # device" three attempts running. Log the delta so the next drift
+      # is named in GB rather than guessed.
+      - name: reclaim the runner's disk
+        shell: bash
+        run: |
+          echo "free before: $(df -BG / | awk 'NR==2{print $4}')"
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /usr/local/share/boost \
+            /usr/local/share/EnhancedPython \
+            /usr/local/share/powershell \
+            /opt/ghc /usr/local/.ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /opt/hostedtoolcache/go \
+            /opt/hostedtoolcache/PyPy
+          sudo docker image prune -af 2>/dev/null || true
+          echo "free after:  $(df -BG / | awk 'NR==2{print $4}')"
+
       # The binary is baked into the image by `kuma build`, so its build
       # paths ride along into everything published. Same remap as
       # release.yml; scripts/publish-audit.sh fails on any that survive.
@@ -172,6 +197,13 @@ jobs:
             fi
             [ "$attempt" -lt 3 ] || exit 1
             echo "::warning::build attempt $attempt failed; retrying"
+            # Evict before the retry: the cachedir is a named volume the
+            # next attempt remounts, and a cached repomd naming GC'd
+            # repodata (updates-archive, single-host, metadata_expire=6h)
+            # makes every retry re-request the same 404s. The eviction
+            # costs the retry its package downloads; without it the
+            # retries cost nothing at all.
+            podman volume rm -f kuma-compose-cache >/dev/null 2>&1 || true
             sleep 120
           done
 
