@@ -127,21 +127,27 @@ enter from the registry, or from a local build?
   and stages (`--yes`).
 - **A machine running a local build** (a declaration compiled in) cannot
   plain-fetch — the newer release would not carry its choices. It
-  delta-builds from the release image with its declaration compiled in:
-  packages and firmware become a set difference, `[nostr]` becomes a
-  preset file, converged lists re-bake, additional accounts in
-  `[other_users]` are emitted for the boot sync to converge (added or
-  moved; a DROPPED one refuses, because the sync creates accounts and
-  never deletes them), and a field the compiler cannot carry (the
-  primary account's move, a backup, a timezone, a keymap — its
-  initramfs half is image content) refuses loudly instead
-  of silently dropping a choice. What the delta does not carry is the
-  release's own new curated packages and its newer converger scripts —
-  the recipe the running kuma compiles with is the delta's ceiling, and
-  the next `kuma update` full rebuild catches those up. The resolution
-  lands in `kuma.lock`'s `release` slot, so `git diff kuma.lock` tells
-  both stories: the base move (`update`) and the release move
-  (`upgrade`).
+  delta-builds from the release image with its declaration compiled in,
+  diffed against the machine's OWN baked declaration — what its last
+  build honored — not against the release's example: a declaration
+  stable since the last build diffs clean no matter how far it has
+  drifted from the example. Packages and firmware become a set
+  difference, `[nostr]` becomes a preset file, converged lists re-bake,
+  additional accounts in `[other_users]` are emitted for the boot sync
+  to converge (added or moved; a DROPPED one rides the fallback below,
+  because the sync creates accounts and never deletes them). A field
+  the delta compiler cannot carry (the primary account's move, a
+  backup, a timezone, a keymap — its initramfs half is image content)
+  no longer refuses: the upgrade falls back to compiling the FULL
+  declaration FROM the release digest it already pulled — hostname,
+  the keymap's initramfs half, and the account all ride — while the
+  release's own binaries, version label, and branding stand. What
+  either build does not carry is the release's own new curated
+  packages and its newer converger scripts — the recipe the running
+  kuma compiles with is the delta's ceiling, and the next `kuma
+  update` full rebuild catches those up. The resolution lands in
+  `kuma.lock`'s `release` slot, so `git diff kuma.lock` tells both
+  stories: the base move (`update`) and the release move (`upgrade`).
 - **A headless machine** has no release tier to fetch; `kuma update`
   remains its path.
 

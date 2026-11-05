@@ -58,7 +58,8 @@ primary is; at most one account in the declaration may autologin. See
 **Delta build.** A build that compiles your declaration on top of a
 published release image instead of from the base, so a locally built
 machine can take a new release without giving up what makes it its own.
-What a delta refuses to carry is named in
+What a delta does not carry — and the full-compile fallback that takes
+over when it is asked to — is named in
 [how kuma behaves](concepts.md#two-axes-the-declaration-and-the-release).
 
 **Deployment.** One bootable system on the machine; a bootc machine keeps

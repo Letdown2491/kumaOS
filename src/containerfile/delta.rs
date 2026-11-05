@@ -1,23 +1,27 @@
 //! The delta compiler: a declaration, compiled onto a release image.
 //!
 //! `kuma upgrade` on a machine whose release enters from local builds
-//! pulls the published release, reads the declaration baked into it
-//! (the example's), diffs it against this machine's, and compiles the
-//! DIVERGENCES as a Containerfile layer stack FROM the release digest.
-//! The base image keeps its own binaries, units, and identity — the
-//! delta carries only what the declaration moves.
+//! pulls the published release, reads the BOOTED image's baked
+//! declaration — what the machine's last build actually honored, read
+//! from the running system — diffs the machine's declaration against
+//! it, and compiles the DIVERGENCES as a Containerfile layer stack
+//! FROM the release digest. The base image keeps its own binaries,
+//! units, and identity — the delta carries only what the declaration
+//! moved since the machine's last build.
 //!
 //! The diff is declaration-shaped, not field-list-shaped: every field
 //! the compiler tolerantly reads gets diffed, and each divergence is
 //! routed through the recipe's own generators (the same dnf layer
 //! shape, the same preset grammar, the same snapshot templates a full
-//! build would use). A field the compiler cannot carry as a delta
-//! refuses loudly rather than silently dropping a choice: `[user]`, a
-//! DROPPED additional account, an autologin move, `[backup]`, CAs,
-//! timezone, and hostname ride a full rebuild (`kuma update`), which
-//! moves the base pin with them. Added and moved accounts in
-//! `[other_users]` ride — the dropin is runtime convergence since
-//! 44.14.
+//! build would use). A field the compiler cannot carry as a delta is
+//! reported to the caller (`divergences`), and the caller's fallback
+//! takes over: a FULL declaration compile FROM the release digest —
+//! the whole compiler, so `[user]`, hostname, a keymap's initramfs
+//! half, `[backup]`, CAs, timezone all ride — with the release's own
+//! binaries, version label, and branding standing. The delta lane's
+//! old hard refusal is gone: an upgrade never dead-ends on a moved
+//! declaration. Added and moved accounts in `[other_users]` ride —
+//! the dropin is runtime convergence since 44.14.
 //!
 //! Tolerance runs one way. Unknown keys at the top level and unknown
 //! top-level sections are ignored — this read happens exactly once per
@@ -150,37 +154,49 @@ impl Baked {
     }
 }
 
-/// Compile the declaration's divergences from the release's baked
-/// declaration into a delta plan: Containerfile text plus every file
-/// it stages. The caller writes the context — the declaration itself
-/// rides as `kuma.toml` (the plan names it through the supplied-file
-/// door), and no binary is ever staged: the base image's are newer
-/// than anything this kuma could put beside them.
-pub(crate) fn compile(
+/// The shared front half of every delta compile: tolerantly read the
+/// baseline, refuse a schema that outruns the compiler, and collect
+/// the divergences the delta compiler cannot carry.
+fn read_and_diff(
     declared: &Config,
     base_text: &str,
-    release: &Release,
     units: BaseUnits,
-) -> Result<emit::Plan> {
+) -> Result<(Baked, Vec<String>)> {
     let root: toml::Value =
-        toml::from_str(base_text).context("the release image's baked declaration is unreadable")?;
+        toml::from_str(base_text).context("the baseline declaration is unreadable")?;
     let baked = Baked::extract(&root)?;
-
     if baked.schema_version > declared.schema_version {
         bail!(
-            "the release's declaration speaks schema {} while this kuma writes {}: the \
+            "the baseline declaration speaks schema {} while this kuma writes {}: the \
              delta compiler predates the release. Upgrade kuma first (dnf or the release \
              image), then `kuma upgrade`.",
             baked.schema_version,
             declared.schema_version
         );
     }
+    let refusals = refusals_for(declared, &baked, units);
+    Ok((baked, refusals))
+}
 
-    // ---- everything the compiler refuses, collected before it emits ----
+/// The divergences the delta compiler cannot carry, read off the
+/// machine's declaration against a baseline declaration's text. Empty
+/// means a delta carries this machine; non-empty means the caller's
+/// fallback — a full compile FROM the release, which `upgrade_delta_apply`
+/// owns — is the honest road, and the vector says what moved.
+pub(crate) fn divergences(
+    declared: &Config,
+    base_text: &str,
+    units: BaseUnits,
+) -> Result<Vec<String>> {
+    Ok(read_and_diff(declared, base_text, units)?.1)
+}
+
+/// Everything the compiler refuses, collected before it emits.
+fn refusals_for(declared: &Config, baked: &Baked, units: BaseUnits) -> Vec<String> {
     let mut refusals: Vec<String> = Vec::new();
     if declared.system.desktop != baked.desktop {
         refusals.push(format!(
-            "  - desktop: the declaration says {:?}, the release image's baked one says \
+            "  - desktop: the declaration says {:?}, the baseline declaration says \
              {:?}. The release tag follows the declaration's desktop, so this is a \
              release built from a differently-shaped example; `kuma update`.",
             declared.system.desktop, baked.desktop
@@ -234,7 +250,7 @@ pub(crate) fn compile(
     // carry without lying about convergence.
     if !declared.other_users.is_empty() && !units.user_sync_accounts {
         refusals.push(
-            "  - [other_users]: the release image's account converger predates additional \
+            "  - [other_users]: the baseline image's account converger predates additional \
              accounts — a dropin it carried would sit ignored; `kuma update` full-rebuilds \
              once, and every release after carries them"
                 .to_string(),
@@ -243,7 +259,7 @@ pub(crate) fn compile(
     for name in baked.other_users.keys() {
         if !declared.other_users.contains_key(name) {
             refusals.push(format!(
-                "  - [other_users.{name}]: the release names this account and the \
+                "  - [other_users.{name}]: the baseline names this account and the \
                  declaration does not; the sync creates accounts, it never deletes them, \
                  so the delta does not carry a removal; `kuma update` full-rebuilds"
             ));
@@ -287,6 +303,22 @@ pub(crate) fn compile(
                 .to_string(),
         );
     }
+    refusals
+}
+
+/// Compile the declaration's divergences from the baseline
+/// declaration into a delta plan: Containerfile text plus every file
+/// it stages. The caller writes the context — the declaration itself
+/// rides as `kuma.toml` (the plan names it through the supplied-file
+/// door), and no binary is ever staged: the base image's are newer
+/// than anything this kuma could put beside them.
+pub(crate) fn compile(
+    declared: &Config,
+    base_text: &str,
+    release: &Release,
+    units: BaseUnits,
+) -> Result<emit::Plan> {
+    let (baked, refusals) = read_and_diff(declared, base_text, units)?;
     if !refusals.is_empty() {
         bail!(
             "the delta compiler carries packages, firmware, services, [nostr] arming and \
@@ -598,6 +630,9 @@ pub(crate) fn compile(
         e.raw("\n");
         e.copy(&flatpaks, "/usr/lib/kuma/flatpaks");
     }
+    // The brew machinery's presence is a refusal field (above), so
+    // reaching here the declared and baked flags agree.
+    let declared_brew = declared.system.brew || !declared.packages.brew.is_empty();
     if declared_brew && declared.packages.brew != baked.packages.brew {
         let mut list = declared.packages.brew.join("\n");
         if !list.is_empty() {
@@ -1428,5 +1463,48 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n")
             + "\n"
+    }
+
+    /// The baseline change is the upgrade path's contract: the diff
+    /// runs against whatever baseline the caller supplies — for
+    /// `upgrade_delta_apply`, the BOOTED image's baked declaration —
+    /// so a machine whose declaration is stable since its last build
+    /// diffs clean no matter how far it has drifted from the release
+    /// example.
+    #[test]
+    fn a_stable_declaration_diffs_clean_against_its_own_baseline() {
+        // The example's hostname is the release's; the machine's own
+        // is different and old. Against the example, the move is
+        // named; against the machine's baseline, nothing moves.
+        let cfg = declared(
+            "schema_version = 1\n\
+             [system]\n\
+             desktop = \"niri\"\n\
+             hostname = \"anvil\"\n",
+        );
+        let moves = divergences(&cfg, BASE, units()).unwrap();
+        assert!(moves.iter().any(|m| m.contains("hostname")));
+        let baseline = "schema_version = 1\n\
+                        [system]\n\
+                        desktop = \"niri\"\n\
+                        hostname = \"anvil\"\n";
+        assert!(divergences(&cfg, baseline, units()).unwrap().is_empty());
+    }
+
+    /// A declaration that moves several uncarryable fields names them
+    /// all in one read — the fallback's inventory, not a first-error
+    /// bail.
+    #[test]
+    fn divergences_collect_rather_than_bail() {
+        let cfg = declared(
+            "schema_version = 1\n\
+             [system]\n\
+             desktop = \"niri\"\n\
+             hostname = \"anvil\"\n\
+             timezone = \"Europe/Oslo\"\n",
+        );
+        let moves = divergences(&cfg, BASE, units()).unwrap();
+        assert!(moves.iter().any(|m| m.contains("hostname")));
+        assert!(moves.iter().any(|m| m.contains("timezone")));
     }
 }

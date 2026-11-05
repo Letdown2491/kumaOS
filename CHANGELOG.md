@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **`kuma upgrade` no longer refuses a moved declaration — the delta
+  lane always has a path.** The diff baseline was the release's baked
+  example, so any machine whose declaration ever named a custom
+  hostname, keymap, or `[user]` account diverged forever and was
+  refused at every crossing (#65). The baseline is now the booted
+  image's baked declaration — what the machine's last build actually
+  honored — so a stable declaration diffs clean and compiles as the
+  small delta it is. And when the diff carries fields a delta cannot
+  take (a keymap moved since the last build, a changed account), the
+  verb no longer dead-ends: it compiles the FULL declaration FROM the
+  release digest it already pulled — the whole compiler, so hostname,
+  the initramfs half of the keymap, and the account all ride — while
+  the release's own binaries, version label, and branding stand. A
+  44.x binary can build this fallback (no compose env involved), which
+  is the road this point release gives every existing 44.15.0 machine.
 ## v44.15.0 (2026-10-29)
 
 - **One keyboard layout, every layer, with the boot layer made honest.**

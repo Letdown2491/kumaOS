@@ -127,7 +127,20 @@ pub fn generate(config: &Config) -> String {
 /// file it stages, from the same gates in the same functions, so the
 /// two halves of what an image carries cannot disagree.
 fn plan(config: &Config) -> emit::Plan {
-    let mut e = emit::Emitter::new(config);
+    plan_walk(emit::Emitter::new(config))
+}
+
+/// The upgrade fallback's walk: the FULL compiler, FROM a release
+/// image. The declaration compiles completely — hostname, keymap
+/// (initramfs included), the [user] account, everything the delta
+/// compiler refuses — while the release's own binaries, version label,
+/// and branding stand, so a 44.x binary can cross a machine to 45
+/// content without downgrading a single compiled binary on the way.
+pub(crate) fn plan_upgrade(config: &Config, release_version: &str) -> emit::Plan {
+    plan_walk(emit::Emitter::new(config).from_release(release_version))
+}
+
+fn plan_walk(mut e: emit::Emitter<'_>) -> emit::Plan {
     for block in blocks::BLOCKS {
         e.enter_block(block);
         (block.emit)(&mut e);
@@ -353,6 +366,24 @@ fn verify_sibling_stamps_loud(parent: &Path, config: &Config, loud: bool) -> Res
         }
     }
     Ok(())
+}
+
+/// The upgrade fallback's build context: the full declaration compiled
+/// FROM a release image. No binaries are staged — the release layers
+/// carry them, and the plan's from_release gate drops their COPY lines
+/// — so `kuma_binary` has no parameter here at all, which is the
+/// point: a 44.x binary can build this context without ever lending
+/// the image its own bytes.
+pub fn write_upgrade_context(
+    config: &Config,
+    config_text: &str,
+    release_version: &str,
+    dir: &Path,
+) -> Result<()> {
+    let plan = plan_upgrade(config, release_version);
+    std::fs::write(dir.join("kuma.toml"), config_text)?;
+    std::fs::write(dir.join("Containerfile"), &plan.text)?;
+    emit::materialize(&plan.files, dir)
 }
 
 pub fn write_context(
@@ -4292,5 +4323,34 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         assert!(!dir.path().join("greetd-config.toml").exists());
         assert!(!dir.path().join("mako.conf").exists());
         assert!(!dir.path().join("xsettingsd.conf").exists());
+    }
+
+    /// The upgrade fallback's shape: the FULL declaration compiles,
+    /// but the release image's identity stands. The compiling binary's
+    /// bytes never ride (the release's binaries stand — a 44.x binary
+    /// building this must not downgrade the 45 binary it delivers),
+    /// the version label reports the release, and the branding block
+    /// says nothing the release has not already said.
+    #[test]
+    fn the_upgrade_fallback_compiles_full_but_borrows_the_release_identity() {
+        let pinned = "ghcr.io/letdown2491/kuma@sha256:aaaabbbbccccdddd";
+        let cfg = config(&format!(
+            "schema_version = 1\n[system]\ndesktop = \"niri\"\nbase = \"{pinned}\"\n"
+        ));
+        let plan = plan_upgrade(&cfg, "45.0.1");
+        assert!(plan.text.contains(&format!("FROM {pinned}\n")));
+        assert!(plan.text.contains("LABEL org.opencontainers.image.version=\"45.0.1\""));
+        assert!(!plan.text.contains("COPY --chmod=755 kuma /usr/bin/kuma"));
+        assert!(!plan.text.contains("COPY --chmod=755 kuma-shell /usr/bin/kuma-shell"));
+        assert!(!plan.text.contains(&branding()));
+        // And the plain build's output DOES carry all three — the gate
+        // is the fallback's, not the blocks'.
+        let plain = generate(&config("schema_version = 1\n[system]\ndesktop = \"niri\"\n"));
+        assert!(plain.contains("COPY --chmod=755 kuma /usr/bin/kuma"));
+        assert!(plain.contains(&branding()));
+        assert!(plain.contains(&format!(
+            "LABEL org.opencontainers.image.version=\"{}\"",
+            env!("CARGO_PKG_VERSION")
+        )));
     }
 }

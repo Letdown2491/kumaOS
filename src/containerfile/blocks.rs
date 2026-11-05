@@ -4601,6 +4601,12 @@ fn ca_anchors(e: &mut Emitter<'_>) {
 }
 
 fn branding_span(e: &mut Emitter<'_>) {
+    // FROM a release image, the release's own branding stands: it is
+    // the version identity this build crosses to, and the compiling
+    // binary's would stamp the old number over it.
+    if e.from_release {
+        return;
+    }
     // The renderer (os-release identity and friends) is a moved
     // namesake; this span is the door it ships through.
     e.raw(&branding());
@@ -4629,7 +4635,10 @@ fn branding_span(e: &mut Emitter<'_>) {
 /// change on every edit.
 fn kuma_binary(e: &mut Emitter<'_>) {
     // Supplied by write_context from its own parameter: the running
-    // binary, not something the walk can render.
+    // binary, not something the walk can render. In a from_release
+    // build the COPY is dropped (the release's binary stands; the
+    // build host's would be a downgrade) and the RUN stays — it is
+    // the guard that the binary this image WILL run executes.
     let kuma = e.supplied("kuma");
     e.raw("\n");
     e.copy_exec(&kuma, "/usr/bin/kuma");
@@ -4675,7 +4684,12 @@ fn labels(e: &mut Emitter<'_>) {
     // a failed unit — invisible until the failed-unit grading landed, and
     // blamed for a week on the Fedora float. The number alone, like
     // os-release's: the full stamp's home is io.kuma.builder beside it.
-    e.raw(&format!("LABEL org.opencontainers.image.version=\"{}\"\n", env!("CARGO_PKG_VERSION")));
+    // FROM a release image, the release's version is what this image
+    // reports: the machine says the release it is crossing to, the way
+    // a delta's label already does.
+    let version =
+        e.release_version.clone().unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+    e.raw(&format!("LABEL org.opencontainers.image.version=\"{version}\"\n"));
 }
 
 fn sweep_lint(e: &mut Emitter<'_>) {

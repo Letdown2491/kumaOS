@@ -75,7 +75,34 @@ pub(crate) struct Emitter<'c> {
     copied: BTreeSet<String>,
     block_name: &'static str,
     block_units: &'static [(&'static str, Live)],
+    /// Set when this build FROMs a release image rather than a
+    /// composed base: the release layers already carry kuma's compiled
+    /// binaries, and the build host's copies would be a version
+    /// downgrade (the 44.x binary full-compiling a 45 crossing would
+    /// otherwise COPY itself over the 45 binary). copy_exec drops
+    /// exactly those COPY lines.
+    pub(crate) from_release: bool,
+    /// The release's version, for the label the image reports in a
+    /// from_release build: the machine reports the release it is
+    /// crossing to, never the compiler's number.
+    pub(crate) release_version: Option<String>,
 }
+
+/// The context files that are compiled kuma binaries rather than
+/// compiler-generated text: a build FROM a release image never copies
+/// these, because the FROM layers already carry them. Everything else
+/// the walk stages is recipe-shaped content the compiling binary owns.
+const RELEASE_BINARIES: [&str; 9] = [
+    "kuma",
+    "kuma-nostrd",
+    "kuma-nostr",
+    "nip46-relay",
+    "kuma-shell",
+    "kuma-greeter",
+    "kuma-files",
+    "kuma-term",
+    "kuma-monitor",
+];
 
 impl<'c> Emitter<'c> {
     pub(crate) fn new(config: &'c Config) -> Emitter<'c> {
@@ -86,7 +113,18 @@ impl<'c> Emitter<'c> {
             copied: BTreeSet::new(),
             block_name: "",
             block_units: &[],
+            from_release: false,
+            release_version: None,
         }
+    }
+
+    /// FROM a release image: the full walk compiles as usual, but the
+    /// release's binaries and version identity stand — see the field
+    /// docs. The fallback behind the delta lane's upgrade.
+    pub(crate) fn from_release(mut self, version: &str) -> Self {
+        self.from_release = true;
+        self.release_version = Some(version.to_string());
+        self
     }
 
     /// The block about to emit, so `enable` can hold its units to the
@@ -156,8 +194,15 @@ impl<'c> Emitter<'c> {
 
     /// `COPY --chmod=755 name dest` — executables, which arrive by the
     /// build's copy rather than a RUN chmod so the mode is in the layer
-    /// metadata where an audit can see it.
+    /// metadata where an audit can see it. In a from_release build the
+    /// compiled kuma binaries stay where the FROM layers put them: the
+    /// release's are the truth this build crosses to, and the build
+    /// host's would be a downgrade baked in silently.
     pub(crate) fn copy_exec(&mut self, file: &Staged, dest: &str) {
+        if self.from_release && RELEASE_BINARIES.contains(&file.name.as_str()) {
+            self.copied.insert(file.name.clone());
+            return;
+        }
         self.text.push_str(&format!("COPY --chmod=755 {} {}\n", file.name, dest));
         self.copied.insert(file.name.clone());
     }

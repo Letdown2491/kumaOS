@@ -2141,7 +2141,7 @@ fn upgrade_delta_apply(
     let scaffold = ReleaseScaffold { reference: pinned.clone(), reclaimed: false };
 
     note("Reading the release's baked declaration...");
-    let base_text = host_output(&[
+    let release_text = host_output(&[
         "podman",
         "run",
         "--rm",
@@ -2203,24 +2203,84 @@ fn upgrade_delta_apply(
         sshd_kuma_keys: probed("keys"),
     };
 
-    note("Compiling the declaration's deltas...");
+    // The diff baseline is the BOOTED image's baked declaration — what
+    // this machine's last build actually honored, readable straight off
+    // the running /usr — not the release's example. A machine whose
+    // declaration is stable since its last build diffs clean here no
+    // matter how far it has drifted from the example, and the release
+    // crossing compiles as the small delta it is. An image that predates
+    // baking carries no baseline; it diffs against the release's
+    // example, the historical behavior.
+    let baseline_text = match std::fs::read_to_string(state::BAKED_CONFIG) {
+        Ok(text) => text,
+        Err(_) => {
+            note(
+                "This machine's image carries no baked declaration; diffing against \
+                 the release's example...",
+            );
+            release_text
+        }
+    };
+
+    note("Diffing the declaration against the baseline...");
     let config_text = std::fs::read_to_string(config_path)
         .with_context(|| format!("cannot read {}", config_path.display()))?;
-    let dir = tempfile::tempdir().context("cannot create build directory")?;
-    containerfile::delta::write_context(
-        config,
-        &base_text,
-        &containerfile::delta::Release {
-            reference: inferred.to_string(),
-            digest: digest.clone(),
-            version: version.clone(),
-        },
-        units,
-        &config_text,
-        dir.path(),
-    )?;
+    let full_compile = match containerfile::delta::divergences(config, &baseline_text, units) {
+        Ok(moves) if moves.is_empty() => None,
+        Ok(moves) => {
+            note("The declaration moves what a delta cannot carry:");
+            for line in &moves {
+                note(line);
+            }
+            Some(())
+        }
+        Err(err) => {
+            note(&format!(
+                "The baseline declaration is unreadable to this compiler ({err}); \
+                 compiling the full declaration instead..."
+            ));
+            Some(())
+        }
+    };
 
-    note("Building the delta image...");
+    let dir = tempfile::tempdir().context("cannot create build directory")?;
+    let release = containerfile::delta::Release {
+        reference: inferred.to_string(),
+        digest: digest.clone(),
+        version: version.clone(),
+    };
+    if full_compile.is_none() {
+        note("Compiling the declaration's deltas...");
+        containerfile::delta::write_context(
+            config,
+            &baseline_text,
+            &release,
+            units,
+            &config_text,
+            dir.path(),
+        )?;
+    } else {
+        // The fallback that replaced the delta lane's refusal: the FULL
+        // compiler, FROM the release digest the upgrade already pulled.
+        // Everything the declaration says rides — hostname, the keymap's
+        // initramfs half, the [user] account — while the release's own
+        // binaries, version label, and branding stand (write_upgrade_context
+        // stages no binaries, so the compiling kuma never downgrades the
+        // release's). No compose env is needed: the dnf layers run in the
+        // release image's own environment, which is why a 44.x binary can
+        // build this across the 44→45 boundary.
+        note(
+            "Compiling the full declaration FROM the release (everything the \
+             declaration says rides)...",
+        );
+        let mut rebuilt: Config = toml::from_str(&config_text)
+            .with_context(|| format!("invalid config in {}", config_path.display()))?;
+        rebuilt.validate()?;
+        rebuilt.system.base = Some(pinned.clone());
+        containerfile::write_upgrade_context(&rebuilt, &config_text, &version, dir.path())?;
+    }
+
+    note("Building the upgrade image...");
     let previous = image_id(DEFAULT_TAG).ok();
     run_host(&[
         "podman",
@@ -2231,12 +2291,12 @@ fn upgrade_delta_apply(
     ])?;
     reclaim_stranded(DEFAULT_TAG, previous);
 
-    // The delta shares the release's layers now; the parent reference
-    // is scaffolding. Reclaimed before the stage so even a failed stage
-    // leaves nothing behind.
+    // The upgrade image shares the release's layers now; the parent
+    // reference is scaffolding. Reclaimed before the stage so even a
+    // failed stage leaves nothing behind.
     scaffold.reclaim_now();
 
-    note("Staging the delta image...");
+    note("Staging the upgrade image...");
     if !stage(DEFAULT_TAG)? {
         bail!("nothing staged; the system already runs this image");
     }
@@ -2255,13 +2315,22 @@ fn upgrade_delta_apply(
             .print(json, "");
         return Ok(());
     }
-    println!(
-        "Delta built: your declaration compiled onto kumaOS {version} ({}). Staged; it applies \
-         on next boot, and the previous deployment stays available for `kuma rollback`. The \
-         delta carries your declaration, not the release's own package updates — your next \
-         `kuma update` picks those up.",
-        digest.chars().take(14).collect::<String>(),
-    );
+    if full_compile.is_none() {
+        println!(
+            "Delta built: your declaration compiled onto kumaOS {version} ({}). Staged; it \
+             applies on next boot, and the previous deployment stays available for `kuma \
+             rollback`. The delta carries your declaration, not the release's own package \
+             updates — your next `kuma update` picks those up.",
+            digest.chars().take(14).collect::<String>(),
+        );
+    } else {
+        println!(
+            "Rebuilt from the release: your declaration compiled in full onto kumaOS \
+             {version} ({}). Staged; it applies on next boot, and the previous deployment \
+             stays available for `kuma rollback`.",
+            digest.chars().take(14).collect::<String>(),
+        );
+    }
     println!();
     print_actions(&[reboot]);
     Ok(())
