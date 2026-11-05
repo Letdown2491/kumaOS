@@ -137,7 +137,7 @@ fn plan(config: &Config) -> emit::Plan {
 /// and branding stand, so a 44.x binary can cross a machine to 45
 /// content without downgrading a single compiled binary on the way.
 pub(crate) fn plan_upgrade(config: &Config, release_version: &str) -> emit::Plan {
-    plan_walk(emit::Emitter::new(config).from_release(release_version))
+    plan_walk(emit::Emitter::new(config).riding_release(release_version))
 }
 
 fn plan_walk(mut e: emit::Emitter<'_>) -> emit::Plan {
@@ -4342,6 +4342,8 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         assert!(plan.text.contains("LABEL org.opencontainers.image.version=\"45.0.1\""));
         assert!(!plan.text.contains("COPY --chmod=755 kuma /usr/bin/kuma"));
         assert!(!plan.text.contains("COPY --chmod=755 kuma-shell /usr/bin/kuma-shell"));
+        assert!(!plan.text.contains("COPY kuma-files.desktop "));
+        assert!(!plan.text.contains("COPY kuma-files.png "));
         assert!(!plan.text.contains(&branding()));
         // And the plain build's output DOES carry all three — the gate
         // is the fallback's, not the blocks'.
