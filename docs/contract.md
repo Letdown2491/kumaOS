@@ -6,7 +6,7 @@ the test or check that holds it: a promise whose enforcement is gone is
 a bug in kuma, not a change of policy.
 
 The major version names the Fedora base a release builds on: 44.x tracks
-Fedora 44, and 45.x will track Fedora 45. The minor and patch carry
+Fedora 44, and 45.x tracks Fedora 45. The minor and patch carry
 kuma's own releases between bases. The major is not a promise boundary.
 A promise ends only in a release that announced the ending beforehand,
 through the deprecations described below.

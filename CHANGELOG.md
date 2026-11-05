@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v45.0.0 (2026-11-05)
+
 - **The base moves to Fedora 45.** `DEFAULT_BASE` is
   `quay.io/fedora/fedora-bootc:45` and the ISO build container is
   `fedora:45` — the next composed image is F45 root to toe (kernel
