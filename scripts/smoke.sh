@@ -37,6 +37,12 @@
 #   scripts/smoke.sh --published <image> --hibernate --secure-boot
 #   scripts/smoke.sh --boot --delta niri   # boot, then `kuma upgrade`
 #                                          # on the booted machine
+#   scripts/smoke.sh --boot --delta-only niri
+#                                          # boot, then ONLY the delta
+#                                          # half of --delta (the CI
+#                                          # boot-delta job's lane; the
+#                                          # fallback half lives in the
+#                                          # upgrade-fallback job)
 #   scripts/smoke.sh --boot --fallback-only niri
 #                                          # boot, then ONLY the #65
 #                                          # fallback arm of --delta
@@ -196,6 +202,7 @@ DEAD_DISK=0
 UPGRADE_TO=""
 DELTA=0
 DELTA_FALLBACK_ONLY=0
+DELTA_ONLY=0
 ENCRYPTED=0
 HIBERNATE=0
 SECURE_BOOT=0
@@ -217,6 +224,13 @@ while [ $# -gt 0 ]; do
         --dead-disk) DEAD_DISK=1 ;;
         --upgrade-to) UPGRADE_TO=${2:?--upgrade-to needs an image reference}; shift ;;
         --delta) DELTA=1 ;;
+        --delta-only)
+            # The delta arm without its fallback half — the CI boot-delta
+            # job's lane, whose fallback runs in the parallel
+            # upgrade-fallback job instead (see run_delta_arm's guard).
+            DELTA=1
+            DELTA_ONLY=1
+            ;;
         --fallback-only)
             DELTA=1
             DELTA_FALLBACK_ONLY=1
@@ -3439,6 +3453,21 @@ assert not naked, "%d layers lost their zstd-chunked annotations" % len(naked)' 
     fi
 
     # --- the fallback half (#65) ----------------------------------------
+    #
+    # Skipped on the --delta-only lane: the CI boot-delta job runs this
+    # arm's delta half, and the fallback half runs in the parallel
+    # upgrade-fallback job (--fallback-only) — the split's whole point
+    # was two full builds side by side, not queued behind each other in
+    # one guest. The shared lane runs both halves unguarded, and the
+    # job's 105-minute ceiling canceled it mid-fallback for that (the
+    # fallback's full compile lands ~100 minutes into the lap; run
+    # 42262045251 died at 105:19 with the build still going). The
+    # publish road's gate keeps both halves: its job has no tight
+    # ceiling, and its fallback is a real part of what it proves.
+    if [ $DELTA_ONLY -eq 1 ]; then
+        stop_delta_registry
+        return 0
+    fi
 
     # A declaration that moves what no delta can carry used to refuse
     # the upgrade outright, and the refusal's own remedy (`kuma update`)
