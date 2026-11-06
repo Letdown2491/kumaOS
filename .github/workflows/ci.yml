@@ -394,17 +394,20 @@ jobs:
     needs: when
     if: needs.when.outputs.heavy == 'true'
     # The delta arm alone: check, staged delta, reboot, divergences.
-    # Its fallback half lives in the upgrade-fallback job below, so
-    # the lap's two full builds run in parallel instead of queueing
-    # behind each other in one guest (135 and 180-minute ceilings both
-    # died canceled mid-fallback: 42073653334, 42088394029).
+    # --delta-only is that arm and nothing else — the fallback half
+    # runs in the upgrade-fallback job below, so the lap's two full
+    # builds run in parallel instead of queueing behind each other in
+    # one guest (135 and 180-minute ceilings both died canceled
+    # mid-fallback: 42073653334, 42088394029 — and the unguarded shared
+    # lane did it a third time at this job's own 105: 42262045251, the
+    # fallback compile ~100 minutes in when the ceiling fired).
     timeout-minutes: 105
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: smoke (boot + delta upgrade)
         uses: ./.github/actions/install-boot
         with:
-          smoke_args: --boot --delta niri
+          smoke_args: --boot --delta-only niri
       - name: guest console
         if: failure() || cancelled()
         run: tail -200 vm-smoke/console-niri.log || true
