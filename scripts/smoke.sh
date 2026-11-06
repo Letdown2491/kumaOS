@@ -334,15 +334,22 @@ dump_podman_store() {
     local image=$1
     printf '   --- root store, asked before the trap takes it down ---\n'
     podman --version || true
-    sudo podman --storage-driver=overlay images --format '{{.ID}} {{.Repository}}:{{.Tag}}' 2>&1 | head -10 || true
-    local iid
-    iid=$(sudo podman --storage-driver=overlay image inspect "$image" --format '{{.ID}}' 2>/dev/null) || return 0
-    echo "image id: $iid"
-    sudo podman --storage-driver=overlay image inspect "$image" \
-        --format '{{range .ParentLayers}}{{println .}}{{end}}' 2>&1 | tail -5 || true
+    # No --storage-driver flag on the reads: the flag overrides the
+    # config's driver, and against a store whose database records a
+    # different driver the probe itself errors instead of listing —
+    # the mismatch in the 44.15.2 road's dumps was the probe's own
+    # doing, and the forensics after it never ran. Plain reads see
+    # the store the way the sync wrote it, which is the fact wanted.
+    sudo podman images --format '{{.ID}} {{.Repository}}:{{.Tag}}' 2>&1 | head -10 || true
+    # The layer list, metadata-only. ParentLayers is gone from podman
+    # 6's inspect output, the inspect's failure used to `return 0`
+    # out of this hook entirely, and image tree survived both majors:
+    # every layer, resolved the way the install's proxy resolves them.
+    # Does the failing digest appear as the store recorded it?
+    sudo podman image tree "$image" 2>&1 || true
     sudo ls -la /var/lib/containers/storage/db.sql /var/lib/containers/storage/db.bolt 2>&1 | head -3 || true
     sudo du -sh /var/lib/containers/storage/overlay 2>/dev/null || true
-    sudo find /var/lib/containers/storage/overlay -maxdepth 1 -name '*' -type d 2>/dev/null | wc -l || true
+    sudo find /var/lib/containers/storage/overlay -maxdepth 1 -type d 2>/dev/null | wc -l || true
 }
 # exit, not return. Each example's stages run inside `if ( ... )`, and
 # bash disables `set -e` for the whole dynamic extent of a command whose
@@ -4457,9 +4464,47 @@ if [ -n "$PUBLISHED" ]; then
         # already carries. The tag part is arbitrary: the lane reads the
         # machine's release tier off its declaration, not off this tag.
         podman pull -q "$PUBLISHED" || bad "cannot pull the published machine $PUBLISHED"
+        # The sync's save|load round trip is the one install path that
+        # died on this road: the install container's layer proxy reads
+        # the loaded records and dies at "GetLayerInfoPiped ... layer
+        # not known". The natural experiments sort the variables: the
+        # same runner class, the same sync, the same pre-seeded root
+        # store, and a LOCALLY BUILT (unchunked) image through it —
+        # today's ci battery, green. The published chunked N-1 through
+        # the sync — dead three roads running. The same chunked bytes
+        # through the same sync on a sane store — a full local install
+        # on a development machine — green. The poison is the
+        # intersection: chunked layer records merged into the runner's
+        # pre-seeded store database (the road's dumps read an empty
+        # graph driver there). The rewrite removes the chunked half of
+        # that intersection: a local round trip through plain gzip —
+        # the manifest comes back with no chunk annotations, the image
+        # bytes unchanged — so the load merges the vanilla shape any
+        # containers-storage reads. skopeo, because podman push
+        # recompresses only toward a registry and the lap registry is
+        # not up yet.
+        mkdir -p vm-smoke/n1-rewrite
+        skopeo copy --remove-signatures --dest-compress-format gzip \
+            "containers-storage:$PUBLISHED" \
+            "oci-archive:vm-smoke/n1-rewrite/n1.tar:smoke" \
+            || bad "cannot rewrite the published machine's layers (gzip copy out)"
+        skopeo copy \
+            "oci-archive:vm-smoke/n1-rewrite/n1.tar:smoke" \
+            "containers-storage:localhost/kuma-delta-machine:smoke" \
+            || bad "cannot rewrite the published machine's layers (copy back)"
         machine_ref="localhost/kuma-delta-machine:smoke"
-        podman tag "$PUBLISHED" "$machine_ref" || bad "cannot retag the published machine for a localhost origin"
-        note "published delta: the machine is $machine_ref (from $PUBLISHED)"
+        # And the store the load merges into is not ours to trust
+        # either: the runner image seeds /var/lib/containers/storage
+        # with a database this lap never chose, and every store this
+        # repo controls — a virgin one, this machine's merged one —
+        # installs the same bytes green. Wipe it and let the sync
+        # create what it reads back. The root store is a cache by the
+        # product's own design — the sync rebuilds it on every vm and
+        # install, and a booted system's deployments live in ostree,
+        # not here — and on the runner this lap is the only writer
+        # that matters.
+        sudo rm -rf /var/lib/containers/storage
+        note "published delta: the machine is $machine_ref (from $PUBLISHED, layers rewritten plain)"
     fi
     if (smoke_published "$machine_ref" published "$port" "$DELTA_TARGET"); then
         PASS+=("published")

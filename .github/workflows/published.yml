@@ -193,9 +193,15 @@ jobs:
           fi
           command -v skopeo >/dev/null || sudo apt-get install -y -qq skopeo
           # The version being published already has its pinned tag by the
-          # time this runs, so "previous" is the highest one that is not
-          # it. Excluded by name rather than by comparison: a rebuilt tag
-          # would otherwise pick itself.
+          # time this runs, so "previous" is the highest pinned tag that
+          # is strictly OLDER than the version — the release this road
+          # really replaces. Excluded by comparison, not by name: "not
+          # it" let 45.0.0 serve as the previous release of a 44.15.2
+          # road — a downgrade no machine is ever offered, aimed at a
+          # gate whose machine must be the release the registry served
+          # before this one. A rebuilt tag equals the version, and an
+          # equal tag is not older, so the by-name exclusion the old
+          # derivation carried is subsumed.
           version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
           # Version-shaped tags only: the prefix match also catches the
           # road's own niri-staging candidate, and sort -V puts that
@@ -206,7 +212,10 @@ jobs:
           previous=$(skopeo list-tags "docker://$repo" \
             | jq -r '.Tags[] | select(test("^niri-[0-9]+[.][0-9]+[.][0-9]+$"))' \
             | sed 's/^niri-//' \
-            | grep -vx "$version" \
+            | while read -r tag; do
+                  { [ "$(printf '%s\n%s\n' "$tag" "$version" | sort -V | head -1)" = "$tag" ] &&
+                    [ "$tag" != "$version" ]; } && echo "$tag" || true
+              done \
             | sort -V | tail -1)
           # Loud, because a silent fallback here is the whole failure mode
           # this derivation exists to avoid.
@@ -268,10 +277,15 @@ jobs:
           # live lap "upgraded" the candidate onto itself and the
           # delta gate's version assertion held the release for it
           # (measured, the first tag road, 2026-10-22).
+          # Strictly OLDER than the version (see the cross-version
+          # fixture's derivation for why "not it" was not enough).
           previous=$(skopeo list-tags "docker://$repo" \
             | jq -r '.Tags[] | select(test("^niri-[0-9]+[.][0-9]+[.][0-9]+$"))' \
             | sed 's/^niri-//' \
-            | grep -vx "$version" \
+            | while read -r tag; do
+                  { [ "$(printf '%s\n%s\n' "$tag" "$version" | sort -V | head -1)" = "$tag" ] &&
+                    [ "$tag" != "$version" ]; } && echo "$tag" || true
+              done \
             | sort -V | tail -1)
           [ -n "$previous" ] || { echo "::error::no pinned niri-* tag older than $version"; exit 1; }
           echo "upgrading from $previous to $version through the delta lane"
