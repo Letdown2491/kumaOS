@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v45.0.1 (2026-11-06)
 
 - **`kuma upgrade` no longer refuses a moved declaration — the delta
   lane always has a path.** The diff baseline was the release's baked
@@ -16,7 +16,45 @@
   the initramfs half of the keymap, and the account all ride — while
   the release's own binaries, version label, and branding stand. A
   44.x binary can build this fallback (no compose env involved), which
-  is the road a 44.15.1 point release gives every existing machine.
+  is the road a 44.15.2 point release gives every existing machine.
+- **`kuma upgrade --check` tells a delta machine the truth.** The
+  delta lane's check compared the booted digest against the release
+  tag's — and a delta machine boots its own build, whose digest can
+  never equal the release's, so every machine that ever upgraded
+  through the delta lane was reported a step behind the release it
+  was current with (#67). The comparison reads the lock's release
+  story now (what the last upgrade compiled against); a machine with
+  no record gets an honest "cannot tell" and keeps the action, and
+  the fetch lane keeps the booted compare — it boots the release
+  itself.
+- **A no-op upgrade is a success.** A rebuild that reproduces the
+  image the machine already runs — same declaration, same release,
+  podman's layer cache — stages nothing, and the verb ended that in
+  `Error: nothing staged` with exit 1: an error for the system being
+  correct (#68). The no-op is confirmed against the digest bootc
+  itself compares, read out of root's store (the user's store answers
+  a different manifest digest for the same image — the save/load sync
+  re-serializes the manifest), reported as already-current, exit 0.
+  The unexplainable refusal stays an error.
+- **The machine runs what it runs.** `update --check` and `update`
+  read the Fedora release from the running system's os-release, not
+  the lock's base image — a delta upgrade boots the release's Fedora
+  while the lock's base half keeps the last full build's story, so a
+  machine booting 45 was told it runs 44 and an update announced a
+  release move that already happened (#69). The full compile inside
+  `kuma upgrade` also re-bases the lock's base story onto the release
+  image it actually FROM'd, so the next `git diff kuma.lock` and the
+  next `update` both read the build story straight.
+- **The smoke's upgrade failures dump the store that failed.** The
+  delta and fallback builds run in the guest; the runner-side dump
+  read a store that never saw a layer of the build. The failure
+  branches ask the guest's root store now (images, disk, df) while
+  the machine is still up (#66), and the delta lap proves the new
+  contracts where they live: the post-upgrade check says current,
+  the repeat upgrade stages the pure delta path, the no-op upgrade
+  exits zero, and the fallback's full compile re-bases the lock.
+
+## Unreleased
 
 ## v45.0.0 (2026-11-05)
 
