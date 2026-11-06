@@ -306,6 +306,30 @@ show_warnings() {
     while IFS= read -r warning; do printf '   warn: %s\n' "$warning"; done <"$WARNLOG"
     rm -f "$WARNLOG"
 }
+# What the root podman store holds when an install dies inside it. The
+# first 45-lap failure and its 44.15.1 sequel both died at bootc's
+# unencapsulate with `reading layer ...: layer not known` — an error
+# about store state that the store's owner is the only witness to, and
+# the runner deletes that witness with the job. Dump it while it exists:
+# the image's layer list (does the failing layer appear in the image's
+# own manifest as the store recorded it?), the layer data under overlay/
+# (is the blob there at all?), and the image database (which schema
+# wrote it — podman 6's split image store is the writer/reader pairing
+# this error class has died on twice now).
+dump_podman_store() {
+    local image=$1
+    printf '   --- root store, asked before the trap takes it down ---\n'
+    podman --version || true
+    sudo podman --storage-driver=overlay images --format '{{.ID}} {{.Repository}}:{{.Tag}}' 2>&1 | head -10 || true
+    local iid
+    iid=$(sudo podman --storage-driver=overlay image inspect "$image" --format '{{.ID}}' 2>/dev/null) || return 0
+    echo "image id: $iid"
+    sudo podman --storage-driver=overlay image inspect "$image" \
+        --format '{{range .ParentLayers}}{{println .}}{{end}}' 2>&1 | tail -5 || true
+    sudo ls -la /var/lib/containers/storage/db.sql /var/lib/containers/storage/db.bolt 2>&1 | head -3 || true
+    sudo du -sh /var/lib/containers/storage/overlay 2>/dev/null || true
+    sudo find /var/lib/containers/storage/overlay -maxdepth 1 -name '*' -type d 2>/dev/null | wc -l || true
+}
 # exit, not return. Each example's stages run inside `if ( ... )`, and
 # bash disables `set -e` for the whole dynamic extent of a command whose
 # exit status is being tested, so a `|| bad` that only returned printed
@@ -997,7 +1021,7 @@ smoke_published() {
         | "$KUMA" install --disk "$raw" --image "$image" \
             "${update_from[@]}" "${encrypt_args[@]}" "${swap_args[@]}" \
             --user "$user" --hostname smoketest --yes >/dev/null \
-        || bad "installing $image failed"
+        || { dump_podman_store "$image"; bad "installing $image failed"; }
     ok "installed $image${encrypt_args[*]:+ (encrypted)}${swap_args[*]:+ (with a swapfile)}"
 
     # A console the serial log can actually capture.
