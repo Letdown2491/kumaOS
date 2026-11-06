@@ -3425,6 +3425,17 @@ assert not naked, "%d layers lost their zstd-chunked annotations" % len(naked)' 
         ok "the fallback arm's check names the release ($want)"
     else
         run_delta_half "$name" "$machine_tag" "$target_ref" "$sudo_pass"
+        # The delta arm's `want` is local to it — its own check names
+        # the release, and the fallback-only arm re-runs that check
+        # itself. This shared arm has no check to re-run (the machine
+        # is already ON the release here), but the delta arm recorded
+        # the staged digest in its upgrade JSON, and that record is the
+        # same fact the assert below compares against. Without this
+        # read, `$want` is unbound under set -u and the lap dies at its
+        # last validator (measured 2026-11-06, run 42247408108 — the
+        # validator had never survived to run in CI).
+        want=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["digest"])' \
+            "$dir/upgrade-yes.json")
     fi
 
     # --- the fallback half (#65) ----------------------------------------
