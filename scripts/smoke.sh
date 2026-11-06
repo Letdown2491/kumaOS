@@ -330,6 +330,21 @@ dump_podman_store() {
     sudo du -sh /var/lib/containers/storage/overlay 2>/dev/null || true
     sudo find /var/lib/containers/storage/overlay -maxdepth 1 -name '*' -type d 2>/dev/null | wc -l || true
 }
+
+# The guest's store, for a failure the GUEST's build wrote. The delta
+# and fallback upgrades compile over ssh, in the guest's root store —
+# the host dump above reads the runner's, which never saw a layer of
+# it. A store error (GetLayerInfoPiped and friends) needs the layer set
+# and the disk the guest had when it died, and only the machine still
+# being up makes the question answerable: bad()'s dump runs before the
+# EXIT trap takes qemu down, and this rides the same window (#66).
+dump_guest_store() {
+    printf '   --- the guest'"'"'s root store, asked before the trap takes it down ---\n'
+    gsudo 'podman --version' || true
+    gsudo "podman images --format '{{.ID}} {{.Repository}}:{{.Tag}}'" 2>&1 | head -10 || true
+    gsudo 'podman system df' 2>&1 | head -6 || true
+    gsudo 'df -h /var/lib/containers/storage' 2>&1 | tail -2 || true
+}
 # exit, not return. Each example's stages run inside `if ( ... )`, and
 # bash disables `set -e` for the whole dynamic extent of a command whose
 # exit status is being tested, so a `|| bad` that only returned printed
@@ -3149,7 +3164,7 @@ assert d["release"]["digest"], d' "$dir/upgrade-check.json" ||
 
     gsudo "sh -c 'env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --yes --json --config /root/kuma.toml 2>/tmp/kuma-upgrade.err'" \
         >"$dir/upgrade-yes.json" \
-        || { gsudo "cat /tmp/kuma-upgrade.err" || true; bad "the delta upgrade failed on the booted machine"; }
+        || { gsudo "cat /tmp/kuma-upgrade.err" || true; dump_guest_store; bad "the delta upgrade failed on the booted machine"; }
     python3 -c 'import json,sys
 d = json.load(open(sys.argv[1]))
 assert d["staged"] is True, d
@@ -3247,6 +3262,56 @@ assert d["digest"] == sys.argv[2], d' "$dir/upgrade-yes.json" "$want" ||
     fi
 
     ok "the nostr layer's preset stands down, reversible by declaration"
+
+    # #67's contract, on the machine that just crossed: the check
+    # compares the LOCK's release story now, and the tag has not moved
+    # since the upgrade — "current" is the only honest answer. The
+    # booted digest never equals the release's on this lane, so this
+    # assertion is exactly what the old booted-digest compare got
+    # wrong: it reported a current machine a step behind, forever.
+    gsudo "sh -c 'env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --check --json --config /root/kuma.toml 2>/tmp/kuma-upgrade.err'" \
+        >"$dir/upgrade-check-after.json" \
+        || { gsudo "cat /tmp/kuma-upgrade.err" || true; bad "the delta lane's post-upgrade check failed"; }
+    python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+assert d["current"] is True, d' "$dir/upgrade-check-after.json" ||
+        bad "the check reports the machine a step behind the release it just upgraded to (#67)"
+    ok "the check says current after the upgrade (#67)"
+
+    # #68's contract, and it costs a second crossing: the machine's
+    # baseline IS the declaration now, so this upgrade takes the pure
+    # delta path and stages its own image — and the one after the next
+    # reboot reproduces the booted one out of podman's cache, where
+    # bootc stages nothing. That re-run is the fleet's most common
+    # upgrade, and the verb used to end it in "Error: nothing staged"
+    # — an error for the system being correct.
+    gsudo "sh -c 'env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --yes --json --config /root/kuma.toml 2>/tmp/kuma-upgrade.err'" \
+        >"$dir/upgrade-delta-again.json" \
+        || { gsudo "cat /tmp/kuma-upgrade.err" || true; dump_guest_store; bad "the repeat upgrade (pure delta path) failed"; }
+    python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+assert d["staged"] is True, d' "$dir/upgrade-delta-again.json" ||
+        bad "the repeat upgrade did not stage; the delta path should build its own image"
+    ok "the repeat upgrade staged through the pure delta path"
+
+    echo "   .. rebooting into the repeat upgrade"
+    gsudo "systemctl reboot" >/dev/null 2>&1 || true
+    gone=0
+    while guest true 2>/dev/null && [ $gone -lt 60 ]; do sleep 2; gone=$((gone + 2)); done
+    await_healthy_boot "$qemu" "$log" \
+        "the delta machine came back (second upgrade)" \
+        "greenboot says the repeat upgrade's deployment is healthy" \
+        " after the repeat upgrade" 1800
+
+    gsudo "sh -c 'env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --yes --json --config /root/kuma.toml 2>/tmp/kuma-upgrade.err'" \
+        >"$dir/upgrade-noop.json" \
+        || { gsudo "cat /tmp/kuma-upgrade.err" || true; dump_guest_store; bad "the no-op upgrade failed — a rebuilt-already-current machine must exit zero (#68)"; }
+    python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+assert d["staged"] is False, d
+assert d["current"] is True, d' "$dir/upgrade-noop.json" ||
+        bad "the no-op upgrade did not report already-current (#68)"
+    ok "the no-op upgrade reports already-current and exits zero (#68)"
 }
 
 run_delta_arm() {
@@ -3464,13 +3529,23 @@ assert not naked, "%d layers lost their zstd-chunked annotations" % len(naked)' 
         bad "cannot declare the drifted hostname"
     gsudo "sh -c 'env KUMA_RELEASE_REPO=10.0.2.2:$DELTA_PORT/kuma kuma upgrade --yes --json --config /root/kuma.toml 2>/tmp/kuma-upgrade.err'" \
         >"$dir/upgrade-fallback.json" \
-        || { gsudo "cat /tmp/kuma-upgrade.err" || true; bad "the fallback upgrade (a moved hostname) failed — did the refusal come back?"; }
+        || { gsudo "cat /tmp/kuma-upgrade.err" || true; dump_guest_store; bad "the fallback upgrade (a moved hostname) failed — did the refusal come back?"; }
     python3 -c 'import json,sys
 d = json.load(open(sys.argv[1]))
 assert d["staged"] is True, d
 assert d["digest"] == sys.argv[2], d' "$dir/upgrade-fallback.json" "$want" \
         || bad "the fallback staged something other than the release it checked"
     ok "the moved-hostname declaration staged through the fallback, not a refusal"
+
+    # #69's base half, on the lap whose upgrade IS the full compile:
+    # the lock's base story is the release image now — what the build
+    # FROM'd — not the stale story a delta (or a prior full build)
+    # left. The release question reads the running system since #69;
+    # the base half is the build story, and this is it telling the
+    # truth.
+    gsudo "grep -A2 -F '[base]' /root/kuma.lock" | grep -qF "10.0.2.2:$DELTA_PORT/kuma" ||
+        bad "the fallback's full compile left the lock's base story stale (#69)"
+    ok "the full compile re-based the lock onto the release (#69)"
 
     stop_delta_registry
 }

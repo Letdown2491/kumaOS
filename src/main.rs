@@ -1464,8 +1464,12 @@ fn update_check(config_path: &Path, json: bool) -> Result<()> {
     // Never a prediction. For a composed base the target is only knowable
     // by composing, and for a declared one it would cost a pull of the
     // base this command deliberately does not pull.
-    let release_now =
-        lock::for_config(config_path).and_then(|l| fedora_release_of(&l.base.reference));
+    //
+    // And never the lock's base image: the lock tells the build story,
+    // and on a machine whose boots stopped matching its builds (a delta
+    // upgrade) that story names a Fedora the machine does not run (#69).
+    // The running system is asked instead.
+    let release_now = fedora_release_of_system();
 
     if config.system.base.is_none() {
         // A composed base has no registry tag whose movement can be
@@ -1674,12 +1678,19 @@ fn upgrade_staged_response(
 
 fn update(config_path: &Path, tag: &str, yes: bool, json: bool) -> Result<()> {
     let config = Config::load(config_path)?;
-    // Both reads happen before the pull, and that is the whole trick.
-    // Pulling can move a declared tag, and a recompose replaces the
-    // content tag's image in place, so asking either of them afterwards
-    // returns the new answer to the old question.
+    // The before-release is the RUNNING system's own answer, read
+    // before anything moves: what the machine boots is what an update
+    // moves it FROM, and the lock's base half tells the build story
+    // instead — on a delta-upgraded machine those differ, and the lock
+    // is the one that lied (#69). The system read is immune to the
+    // pull below by nature: nothing `kuma update` does edits
+    // /usr/lib/os-release of the booted deployment.
+    // The after-release is read only once the build is done, because
+    // the pull can move a declared tag and a recompose replaces the
+    // content tag's image in place — asking earlier would answer the
+    // old question with the new answer.
     let before = lock::for_config(config_path);
-    let before_release = before.as_ref().and_then(|l| fedora_release_of(&l.base.reference));
+    let before_release = fedora_release_of_system();
     match &config.system.base {
         Some(base) => run_host(&["podman", "pull", base])?,
         // Composed base: the packages come from Fedora's repos at
@@ -1740,6 +1751,34 @@ fn update(config_path: &Path, tag: &str, yes: bool, json: bool) -> Result<()> {
 /// which is a reason to stay quiet rather than to guess.
 fn fedora_release_of(image: &str) -> Option<String> {
     os_release_of_image(image, "$VERSION_ID").ok().filter(|out| !out.is_empty())
+}
+
+/// What Fedora the RUNNING system is, read from the host's own
+/// /usr/lib/os-release.
+///
+/// The lock's base reference was the stand-in for this, and the stand-in
+/// lies the moment boots stop matching builds: a delta upgrade boots the
+/// release's Fedora while the lock's base half keeps the last full
+/// build's story, and a base image reclaimed from storage answers with
+/// whatever reclaim left behind (#69). The running system cannot lie —
+/// it is the machine the sentence is about.
+///
+/// `None` when the host does not say (a non-kumaOS host, or a read that
+/// failed), which the callers treat as stay-quiet rather than guess —
+/// the same courtesy fedora_release_of extends an unreadable image.
+fn fedora_release_of_system() -> Option<String> {
+    version_id_of(std::fs::read_to_string("/usr/lib/os-release").ok().as_deref())
+}
+
+/// The VERSION_ID out of os-release text, quotes and whitespace off.
+/// Split from the read so the parsing is a thing a test can hold
+/// without a filesystem.
+fn version_id_of(text: Option<&str>) -> Option<String> {
+    text?
+        .lines()
+        .find_map(|line| line.strip_prefix("VERSION_ID="))
+        .map(|v| v.trim().trim_matches('"').to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// A shell expansion evaluated against an image's own os-release.
@@ -1841,7 +1880,7 @@ fn upgrade(config_path: &Path, check: bool, yes: bool, json: bool) -> Result<()>
         ),
         UpgradeLane::Delta { inferred } => {
             if check {
-                upgrade_check(&deps, &inferred, false, json)
+                upgrade_check(config_path, &deps, &inferred, false, json)
             } else if yes {
                 upgrade_delta_apply(
                     config_path,
@@ -1870,7 +1909,7 @@ fn upgrade(config_path: &Path, check: bool, yes: bool, json: bool) -> Result<()>
         }
         UpgradeLane::Fetch { origin } => {
             if check {
-                upgrade_check(&deps, &origin, true, json)
+                upgrade_check(config_path, &deps, &origin, true, json)
             } else if yes {
                 upgrade_fetch(&origin, json)
             } else {
@@ -1943,7 +1982,27 @@ fn upgrade_lane_in(repo: &str, desktop: config::Desktop, booted: &deployment::Sl
     UpgradeLane::Delta { inferred: format!("{}:{tag}", repo) }
 }
 
+/// The delta lane's --check verdict, decided by the record the lane
+/// itself writes. `Current` needs a record that names the digest the
+/// tag serves; `Unknown` is the no-record case, which is a reason to
+/// say so, not to claim a step behind.
+#[derive(PartialEq, Eq)]
+enum DeltaVerdict {
+    Current,
+    Behind,
+    Unknown,
+}
+
+fn delta_verdict(lock_release: Option<&lock::Release>, tag_digest: &str) -> DeltaVerdict {
+    match lock_release {
+        Some(release) if release.digest == tag_digest => DeltaVerdict::Current,
+        Some(_) => DeltaVerdict::Behind,
+        None => DeltaVerdict::Unknown,
+    }
+}
+
 fn upgrade_check(
+    config_path: &Path,
     deps: &deployment::Deployments,
     origin: &str,
     fetch: bool,
@@ -1974,13 +2033,35 @@ fn upgrade_check(
         .pointer("/Labels/org.opencontainers.image.version")
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    let running = deps.booted.digest.as_deref() == Some(digest.as_str());
+    // The comparison is the lane's, because the lanes boot different
+    // images. The fetch lane stages the release itself, so the booted
+    // digest is the honest comparison. The delta lane compiles this
+    // machine's OWN image onto the release — the booted digest is that
+    // build's and can never equal the release's, so a booted-digest
+    // compare reported every delta machine a step behind forever (#67).
+    // What the last upgrade compiled against is the lock's release
+    // story, and that is what the tag's digest meets here; a machine
+    // with no record cannot be judged, and `Behind` is claimed only
+    // when a comparison actually happened.
+    let lock_release =
+        if fetch { None } else { lock::for_config(config_path).and_then(|l| l.release) };
+    let verdict = if fetch {
+        if deps.booted.digest.as_deref() == Some(digest.as_str()) {
+            DeltaVerdict::Current
+        } else {
+            DeltaVerdict::Behind
+        }
+    } else {
+        delta_verdict(lock_release.as_ref(), &digest)
+    };
+    let running = verdict == DeltaVerdict::Current;
     // "Same release, new image": the tag was republished within the
     // version (a fixed compose, a re-signed one). The digest is what
     // the machine shares with the fleet, so the digest is what moves —
     // the prose says the version did not.
-    let same_release =
-        !running && deps.booted.version.is_some() && deps.booted.version == release_version;
+    let same_release = verdict == DeltaVerdict::Behind
+        && deps.booted.version.is_some()
+        && deps.booted.version == release_version;
     let actions = if running {
         Vec::new()
     } else {
@@ -2010,12 +2091,20 @@ fn upgrade_check(
     let running_version =
         deps.booted.version.clone().unwrap_or_else(|| "an unlabeled image".to_string());
     if running {
-        println!("Your machine is on the release tag's image ({origin}).");
+        println!("Your machine is current with what {origin} serves.");
+    } else if verdict == DeltaVerdict::Unknown {
+        println!(
+            "Whether this machine is current with {origin} cannot be told from here: it \
+             carries no upgrade record (the lock's release story), and the delta lane \
+             compiles this machine's own image, whose digest never equals the release's. \
+             Running `kuma upgrade --yes` is safe anyway — a rebuild that reproduces what \
+             the machine runs stages nothing and reports you current."
+        );
     } else if same_release {
         println!(
-            "A newer build of {running_version} is on the release tag (same version, new image). \
-             Your machine is a step behind; fetching it is a normal upgrade, and it applies on \
-             reboot."
+            "A newer build of {running_version} is on the release tag (same version, new \
+             image). Your machine is a step behind; re-running `kuma upgrade --yes` is a \
+             normal upgrade, and it applies on reboot."
         );
     } else {
         println!(
@@ -2298,7 +2387,50 @@ fn upgrade_delta_apply(
 
     note("Staging the upgrade image...");
     if !stage(DEFAULT_TAG)? {
-        bail!("nothing staged; the system already runs this image");
+        // Nothing staged: bootc resolved the origin in root's storage
+        // and found the tag serving the booted deployment. For a
+        // rebuild that reproduced the machine's own image — same
+        // declaration, same release, podman's layer cache handing back
+        // every layer — that is success, and it reported as an error
+        // before (#68): every no-op upgrade on an already-current
+        // machine exited non-zero with "nothing staged". Confirm the
+        // no-op with the digest bootc itself compares, read out of
+        // ROOT's store — the user's store answers a different manifest
+        // digest for the same image (the save/load that syncs
+        // user->root re-serializes the manifest; measured: one build,
+        // created to the nanosecond, two digests), and bootc's
+        // imageDigest is root's reading.
+        let built = host_output(&[
+            "sudo",
+            "podman",
+            "image",
+            "inspect",
+            "--format",
+            "{{.Digest}}",
+            DEFAULT_TAG,
+        ])
+        .context("cannot read the built image's digest out of root's storage")?;
+        if booted_digest == Some(built.trim()) {
+            let prose = "Already current: the rebuild reproduced the image your machine \
+                 runs — nothing to stage.\n"
+                .to_string();
+            upgrade_current_response(inferred).print(json, &prose);
+            return Ok(());
+        }
+        bail!(
+            "bootc staged nothing, but root's storage does not match the booted \
+             deployment; refusing to call that an upgrade"
+        );
+    }
+    // The full compile FROM'd the release image, so the lock's base
+    // story is the release now: without the rebase, the base half keeps
+    // the last FULL build's story — a 44-era content tag on a machine
+    // that boots 45 — and the next `kuma update` reads Fedora 44 off it
+    // and announces a release move that already happened (#69).
+    // record() resets the release slot; record_release restores it, so
+    // the pair lands as one base story and one release story.
+    if full_compile.is_some() {
+        lock::record(config_path, &pinned, digest.clone(), DEFAULT_TAG);
     }
     lock::record_release(
         config_path,
@@ -5258,6 +5390,61 @@ mod tests {
             .document(),
             &["ok", "dry_run", "swapfile", "fstab_lines", "kargs", "lid", "actions"],
         );
+    }
+
+    #[test]
+    fn the_upgrade_check_document_keeps_its_shape() {
+        let action = Action::new(
+            "upgrade",
+            "kuma upgrade --yes",
+            "delta-build this declaration onto the release and stage it (applies on reboot)",
+        );
+        let doc = upgrade_check_response(
+            "ghcr.io/letdown2491/kuma:niri",
+            false,
+            Some("45.0.1".to_string()),
+            Some("sha256:aaa".to_string()),
+            Some("45.0.1".to_string()),
+            Some("sha256:bbb".to_string()),
+            &[action],
+        )
+        .document();
+        shape(&doc, &["ok", "check", "lane", "origin", "running", "release", "current", "actions"]);
+        assert_eq!(doc.get("current"), Some(&serde_json::Value::Bool(false)));
+    }
+
+    /// #67: the delta lane's verdict comes from the record the lane
+    /// writes, not from the booted digest — a delta machine boots its
+    /// own build, whose digest can never equal the release's, and the
+    /// old compare reported it a step behind forever. `Unknown` is the
+    /// no-record case: a reason to say so, not to claim a step behind.
+    #[test]
+    fn the_delta_verdict_needs_a_record_to_say_current() {
+        let record = lock::Release {
+            reference: "ghcr.io/letdown2491/kuma:niri".to_string(),
+            digest: "sha256:aaa".to_string(),
+            version: Some("45.0.1".to_string()),
+        };
+        assert!(matches!(delta_verdict(Some(&record), "sha256:aaa"), DeltaVerdict::Current));
+        assert!(matches!(delta_verdict(Some(&record), "sha256:bbb"), DeltaVerdict::Behind));
+        assert!(matches!(delta_verdict(None, "sha256:aaa"), DeltaVerdict::Unknown));
+    }
+
+    /// #69: the running system's VERSION_ID, quotes and whitespace off.
+    #[test]
+    fn the_systems_version_id_survives_quoting() {
+        let text = "NAME=\"Fedora Linux\"\nVERSION=\"45 (Container Image)\"\nVERSION_ID=\"45\"\nID=fedora\n";
+        assert_eq!(version_id_of(Some(text)).as_deref(), Some("45"));
+        assert_eq!(version_id_of(Some(text.trim_end())).as_deref(), Some("45"));
+    }
+
+    /// A host that does not say stays quiet — the same courtesy
+    /// fedora_release_of extends an unreadable image.
+    #[test]
+    fn a_host_without_a_version_id_stays_quiet() {
+        assert_eq!(version_id_of(Some("NAME=\"Fedora Linux\"\nID=fedora\n")), None);
+        assert_eq!(version_id_of(Some("VERSION_ID=\"\"\n")), None);
+        assert_eq!(version_id_of(None), None);
     }
 
     /// The one preview marker, on the paths that are previews and
