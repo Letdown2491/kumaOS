@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## v44.15.2 (2026-11-06)
+
+- **The fallback's full compiler survives its own output.** The staged
+  44.15.1 binary generated a Containerfile whose niri-session patch
+  asserted the unpatched line before sed'ing — and the release image
+  the fallback compiles FROM was built by that very compiler, so the
+  assertion failed and every upgrade that could not ride the delta
+  lane (the 44→45 crossing, any full-rebuild move) died at the build
+  (#70). The patch step is idempotent now (d80a9f2's fix, rebased onto
+  this branch): the sed runs unconditionally and asserts the patched
+  line, which holds on a virgin base and on a release image alike.
+
 ## v44.15.1 (2026-11-05)
 
 - **`kuma upgrade` no longer refuses a moved declaration — the delta
