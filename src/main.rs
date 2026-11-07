@@ -18,13 +18,14 @@ mod lock;
 mod overrides;
 mod partition;
 mod response;
+mod sandbox;
 mod seam;
 mod snapshot;
 mod state;
 mod updates;
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use config::Config;
 use host::{host_output, host_output_any, note, run_host};
 use serde_json::Value;
@@ -331,6 +332,22 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Run a command inside a bubblewrap sandbox: an empty home, a
+    /// read-only system, and the working directory as the one writable
+    /// path — for the scripts npm and pip run behind your back
+    // Not a mutating verb and not a JSON verb: the child's output is
+    // the product and its exit code is the verb's. A sandbox is
+    // per-invocation state, so there is no declaration key and nothing
+    // for the state map to offer.
+    Run {
+        /// How much the child can reach: `no-home` (empty home, network
+        /// up) or `airlock` (empty home, no network)
+        #[arg(value_enum)]
+        mode: RunMode,
+        /// The command and its arguments, after a `--`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
     /// Open kuma.toml in your editor ($EDITOR, else nano/vim/vi)
     // Not an editor kuma wrote: it resolves which declaration this
     // machine is actually using and hands that path to the person's own
@@ -528,6 +545,16 @@ enum Cmd {
 /// The keymap verb's two halves: the write (`apply`, root's job, three
 /// layers plus an honest line about the fourth) and the read (`status`,
 /// every layer including the image's baked one).
+/// The two sandboxes `kuma run` can build. Kebab-cased by clap into
+/// the CLI values: `no-home` and `airlock`.
+#[derive(Clone, Copy, ValueEnum)]
+enum RunMode {
+    /// Empty home, network up
+    NoHome,
+    /// Empty home, and the network is loopback only
+    Airlock,
+}
+
 #[derive(Debug, Subcommand)]
 enum KeymapCmd {
     /// Write the layout into the session, the greeter and /etc/vconsole.conf
@@ -747,6 +774,21 @@ fn run(
             // deserves a full clean.
             let path = read_config_path(config_path, explicit, false);
             clean(&path, json)
+        }
+        Cmd::Run { mode, command } => {
+            // A stream verb: the child's output is the product, its
+            // exit code the verb's, and --json has no document to add
+            // (docs/agents.md's exceptions list names run). Refusing
+            // beats emitting a fake document around a stream nobody
+            // asked to wrap.
+            if root_json {
+                bail!("run streams the child's output; there is no --json document");
+            }
+            let mode = match mode {
+                RunMode::NoHome => sandbox::Mode::NoHome,
+                RunMode::Airlock => sandbox::Mode::Airlock,
+            };
+            sandbox::run(mode, &command)
         }
         Cmd::Add { names, rpm, flatpak, brew, json: _ } => {
             // The ArgGroup on Cmd::Add makes clap reject "none" and "more

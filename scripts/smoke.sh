@@ -4378,6 +4378,19 @@ smoke_boot() {
         || bad "i2c-dev did not load; /dev/i2c-* cannot exist"
     ok "the DDC plumbing rides the image (binary, rules, module)"
 
+    # The sandbox verb is runtime surface, and the guest is the only
+    # runtime the battery owns. bwrap is unprivileged, so this runs as
+    # the smoke account — from a fresh temp dir, because the verb
+    # refuses the home directory itself, which the second half asserts:
+    # the empty home is the sandbox's whole point, so the refusal is
+    # not a bug to catch but the contract to keep.
+    guest 'd=$(mktemp -d); cd "$d" && kuma run no-home -- /bin/true && kuma run airlock -- /bin/true' \
+        || bad "the sandbox verb could not exec true(1) in one of its modes"
+    if guest 'cd && kuma run no-home -- /bin/true'; then
+        bad "kuma run from the home directory did not refuse; the empty home is not guaranteed"
+    fi
+    ok "the sandbox verb runs (both modes) and refuses the home"
+
     # Everything above this line ran as the wrong account. `kuma vm` writes
     # a bib blueprint with a hardcoded `kuma` user (main.rs, vm_config), so
     # the account this stage logs in as is the disk builder's, created at

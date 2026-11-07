@@ -62,7 +62,7 @@ fn canonical<S: AsRef<str>>(args: &[S]) -> String {
     out.join(" ")
 }
 
-fn trace<S: AsRef<str>>(args: &[S], started: std::time::Instant) {
+pub(crate) fn trace<S: AsRef<str>>(args: &[S], started: std::time::Instant) {
     if std::env::var_os("KUMA_TRACE").is_none() {
         return;
     }

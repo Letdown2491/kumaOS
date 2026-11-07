@@ -376,6 +376,44 @@ are never touched this way, only the shared platforms underneath them,
 and reinstalling one is a download rather than a decision.
 [What a desktop contains](desktops.md) lists both desktops in full.
 
+## The sandbox a build tool's scripts run in
+
+`npm install` runs lifecycle scripts on every package it touches, and
+pip's own documentation answers "running arbitrary code from
+distributions" when it explains what an install does. The project
+directory is yours to give those scripts. Your home directory is not
+necessarily.
+
+```
+$ kuma run no-home -- npm install
+$ kuma run airlock -- pip install -r requirements.txt
+```
+
+The child sees a read-only system, a fresh `/dev` and `/proc`, a `/tmp`
+that vanishes when it exits, and — the point — an **empty home**: a
+tmpfs mounted where your home directory is, gone when the command
+finishes. The caches, tokens and profile files a script might reach
+for are not in the sandbox to find. The working directory is bound
+read-write *after* the home tmpfs, so a project under your home is the
+one real, writable thing the child sees. `SSH_AUTH_SOCK` and
+`GPG_AGENT_INFO` are unset: a script that cannot see your home has no
+business holding your keys.
+
+Two modes. `no-home` leaves the network up, because an install needs
+its registry. `airlock` also takes the network away — loopback only,
+nothing resolves, nothing phones home — for the scripts you would
+rather not let talk to anyone while they run. Either way the child's
+output is yours and its exit code is the command's: `run` is a wall
+around the file system and the network, not around the output.
+
+The verb is unprivileged — bubblewrap needs no root and holds none —
+and it refuses the two spellings that would defeat it: running from
+your home directory or from any directory that contains it, because
+the working-directory bind would put the real home back into the
+sandbox whose point was that the home is empty. cd into the project
+and run it there. There is no declaration key for any of this: a
+sandbox is a choice per invocation, not a fact about the machine.
+
 ## kuma in your launcher
 
 Every desktop kuma builds puts kuma's own verbs in the launcher. Type

@@ -66,11 +66,15 @@ between runs, and nothing promises they will not gain detail.
   agent polling machine health never blocks on a repository being reachable.
   `backup --list` is the one that asks the far end.
 - **What does not speak JSON, and why.** `init`, `generate`, `vm`, `iso`,
-  `edit`, `schema`, `passwd` and `completions` each produce a file, a stream,
+  `edit`, `schema`, `passwd`, `completions` and `run` each produce a file, a
+  stream,
   or an editor rather than a report, so there is no document for them to emit
   and no next command for them to name. `edit --print` answers the one
-  question an agent would ask of it: which declaration this machine resolves. `schema` already emits JSON, of a
-  different kind: the declaration's schema rather than a response.
+  question an agent would ask of it: which declaration this machine resolves.
+  `schema` already emits JSON, of a different kind: the declaration's schema
+  rather than a response. `run` is the odd one in the list — it runs YOUR
+  command in a sandbox and passes the child's output and exit code through,
+  so a document would be a wrapper around a stream nobody asked to wrap.
 - **A Fedora release change is a separate field, not a big diff.** `update`
   and `update --check` carry `fedora_release` with `current`, `changed`,
   `from` and `to`. Read that rather than inferring a distro upgrade from the
