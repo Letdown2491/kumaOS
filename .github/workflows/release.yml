@@ -182,8 +182,26 @@ jobs:
       - name: sign
         run: |
           set -euo pipefail
+          # The sign steps are where a third-party service sits in the
+          # road: Rekor's log took two v45.0.1 road runs on 2026-11-07
+          # (a 409 createLogEntryConflict, then a connection refused,
+          # then the maintenance window the status page named). The
+          # retry absorbs the transient class — conflicts and refusals
+          # clear in seconds to minutes. A maintenance window does not
+          # clear into two minutes of backoff; that failure is a
+          # wait-and-re-run, and the playbook (check
+          # status.sigstore.dev before reading a single cosign log
+          # line) is how to tell the two apart.
+          retry() {
+            local a
+            for a in 1 2 3; do
+              "$@" && return 0
+              [ "$a" = 3 ] || sleep 60
+            done
+            return 1
+          }
           for bin in $BINARIES; do
-            cosign sign-blob --yes --bundle "${bin}-${TARGET}.bundle" "${bin}-${TARGET}"
+            retry cosign sign-blob --yes --bundle "${bin}-${TARGET}.bundle" "${bin}-${TARGET}"
           done
 
       # A build from main is not a release, so it does not get one. It is
@@ -484,7 +502,17 @@ jobs:
         if: env.ATTACH_ISO == 'true' && steps.what.outputs.publish == 'true'
         run: |
           set -euo pipefail
-          cosign sign-blob --yes \
+          # Same retry as the binary sign step: Rekor's transient
+          # failures clear in minutes; the status page names the rest.
+          retry() {
+            local a
+            for a in 1 2 3; do
+              "$@" && return 0
+              [ "$a" = 3 ] || sleep 60
+            done
+            return 1
+          }
+          retry cosign sign-blob --yes \
             --bundle '${{ steps.iso.outputs.name }}.bundle' \
             '${{ steps.iso.outputs.name }}'
 

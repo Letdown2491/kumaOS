@@ -308,10 +308,22 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           set -euo pipefail
+          # Same retry as release.yml's sign steps: Rekor's transient
+          # failures (the 409 conflict, the connection refused) clear
+          # in minutes; a maintenance window is a wait-and-re-run, and
+          # status.sigstore.dev is how to tell them apart.
+          retry() {
+            local a
+            for a in 1 2 3; do
+              "$@" && return 0
+              [ "$a" = 3 ] || sleep 60
+            done
+            return 1
+          }
           # By digest, not by tag: a tag can move between the push and the
           # signature, and a signature on a tag says nothing about which
           # bytes were signed. The digest comes from the push itself.
-          cosign sign --key env://COSIGN_KEY --yes \
+          retry cosign sign --key env://COSIGN_KEY --yes \
             "${{ steps.ref.outputs.staging }}@${{ steps.push.outputs.digest }}"
 
       # By TAG, with the committed public key: exactly the command

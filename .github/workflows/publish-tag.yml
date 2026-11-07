@@ -101,6 +101,30 @@ jobs:
         run: |
           set -euo pipefail
           sha=$(git rev-parse HEAD)
+          # The idempotence guard, paid for by the promote-day re-run:
+          # re-firing this watcher after a successful promote used to
+          # dispatch a fresh ~2.5-hour publish leg for bytes the
+          # registry already served (2026-11-07's re-run did exactly
+          # that — run 42392871958 validated, again, a promote that had
+          # landed hours before the watch began). The registry is the
+          # ground here: when the pinned tag exists AND the moving tag
+          # serves its digest, the leg's whole purpose is already
+          # fulfilled — the promote IS the moving tag pointing at the
+          # pinned image — and this release's road is over. Every
+          # other answer dispatches the leg: a missing tag or a
+          # digest disagreement is the partial state the leg exists
+          # to finish, and a failed read must never stand for a
+          # promoted registry.
+          version=${TAG#v}
+          pin=$(skopeo inspect "docker://ghcr.io/${GITHUB_REPOSITORY_OWNER}/kuma:niri-${version}" \
+              --format '{{.Digest}}' 2>/dev/null || true)
+          move=$(skopeo inspect "docker://ghcr.io/${GITHUB_REPOSITORY_OWNER}/kuma:niri" \
+              --format '{{.Digest}}' 2>/dev/null || true)
+          if [ -n "$pin" ] && [ -n "$move" ] && [ "$pin" = "$move" ]; then
+              echo "the registry already serves ${TAG}: niri and niri-${version} are both ${pin}"
+              echo "- \`niri\`: already promoted (\`${pin}\`) — no leg dispatched" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+          fi
           # The deadline names the failure before the 6-hour job
           # ceiling turns it into a mystery — and it must be sized to
           # the leg's REAL worst case, not the good day. v45.0.1's
