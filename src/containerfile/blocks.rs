@@ -496,7 +496,17 @@ RUN find /run /tmp -mindepth 1 -delete; \
 /// image's own enumeration (45.0.1's /usr, 2026-11-07): the shadow
 /// suite, mount, fusermount, pkexec, sudo, grub2-set-bootflag and the
 /// dbus launch helper — the standard Fedora set, nothing that arrived
-/// by surprise. The file ships at /usr/lib/kuma/suid.golden beside the
+/// by surprise. Beyond the floor, deliberate additions: polkit's
+/// agent helper (/usr/lib/polkit-1/polkit-agent-helper-1), the first
+/// path the gate caught in the wild — the cosmic preset's tree pulls
+/// polkit, whose agent helper ships setuid-root, the standard shim
+/// between a desktop's auth agent and the polkit daemon that every
+/// graphical admin prompt rides; the bit is the package's, not ours
+/// to drop. Presets whose trees never pull polkit simply don't carry
+/// the file — the assertion is one-directional, and their
+/// enumerations stay a subset of this list.
+///
+/// The file ships at /usr/lib/kuma/suid.golden beside the
 /// declared flatpak list, so the image carries its own inventory; a
 /// future doctor check reads it from the running machine.
 ///
@@ -522,6 +532,7 @@ pub(crate) const SUID_GOLDEN: &str = r#"/usr/bin/chage
 /usr/bin/sudo
 /usr/bin/umount
 /usr/bin/unix_chkpwd
+/usr/lib/polkit-1/polkit-agent-helper-1
 /usr/libexec/dbus-1/dbus-daemon-launch-helper
 "#;
 
