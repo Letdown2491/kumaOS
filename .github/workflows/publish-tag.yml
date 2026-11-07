@@ -101,10 +101,26 @@ jobs:
         run: |
           set -euo pipefail
           sha=$(git rev-parse HEAD)
-          # ~40 minutes of build+compose+validate per leg on a good day;
-          # the deadline names the failure before the 6-hour job
-          # ceiling turns it into a mystery.
-          leg_deadline=5400
+          # The deadline names the failure before the 6-hour job
+          # ceiling turns it into a mystery — and it must be sized to
+          # the leg's REAL worst case, not the good day. v45.0.1's
+          # road proved the difference (2026-11-07): this watcher ran
+          # leg_deadline=5400, its 90-minute watch timed out on a
+          # healthy leg, the re-read poll below burned its own 90
+          # minutes, and at the 3-hour mark it declared run
+          # 42392871958 failed while that leg was mid-delta-lane and
+          # 2h37m in — the same sizing-bug class e711638 fixed on the
+          # delta-lane job's ceiling, hiding in the file that watches
+          # that job. The leg's real shape: publish ~26 minutes
+          # measured (build+compose+sign), then the validate jobs in
+          # parallel where delta-lane legitimately holds a 240-minute
+          # budget — a green-but-slow leg runs ~4.5 hours. Five hours
+          # covers that; a leg still running past it is past its own
+          # jobs' ceilings, so the re-read poll below gets a terminal
+          # verdict within minutes and the error fires with the story
+          # while the job ceiling (360 default) still leaves room to
+          # print it.
+          leg_deadline=18000
 
           wait_green() {
             local example=$1 started=$2
