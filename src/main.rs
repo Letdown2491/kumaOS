@@ -2388,19 +2388,30 @@ fn upgrade_delta_apply(
     note("Staging the upgrade image...");
     if !stage(DEFAULT_TAG)? {
         // Nothing staged: bootc resolved the origin in root's storage
-        // and found the tag serving the booted deployment. For a
+        // and found nothing newer than the booted deployment. For a
         // rebuild that reproduced the machine's own image — same
         // declaration, same release, podman's layer cache handing back
         // every layer — that is success, and it reported as an error
         // before (#68): every no-op upgrade on an already-current
-        // machine exited non-zero with "nothing staged". Confirm the
-        // no-op with the digest bootc itself compares, read out of
-        // ROOT's store — the user's store answers a different manifest
-        // digest for the same image (the save/load that syncs
-        // user->root re-serializes the manifest; measured: one build,
-        // created to the nanosecond, two digests), and bootc's
-        // imageDigest is root's reading.
-        let built = host_output(&[
+        // machine exited non-zero with "nothing staged".
+        //
+        // The first fix confirmed the no-op through a second lens,
+        // podman's .Digest record field read out of root's store —
+        // and that lens lied on the v45.0.1 publish road's delta lane:
+        // bootc resolved the tag, said "No update available", and the
+        // confirm still refused because the field disagreed with the
+        // booted digest. The field tracks the image record; the tag
+        // serves the manifest; after the save/load that syncs
+        // user->root (which re-serializes the manifest — measured: one
+        // build, created to the nanosecond, two digests) the two can
+        // answer separately, and a manifest whose content matches the
+        // booted deployment can carry a different digest. bootc's own
+        // comparison is the one that defines the no-op — same content,
+        // nothing to stage — so it is the verdict now, not an input to
+        // a second one. The digests go to the note instead of a bail:
+        // if this ever reports a false already-current, the numbers
+        // are on the page.
+        let root_serves = host_output(&[
             "sudo",
             "podman",
             "image",
@@ -2409,18 +2420,17 @@ fn upgrade_delta_apply(
             "{{.Digest}}",
             DEFAULT_TAG,
         ])
-        .context("cannot read the built image's digest out of root's storage")?;
-        if booted_digest == Some(built.trim()) {
-            let prose = "Already current: the rebuild reproduced the image your machine \
-                 runs — nothing to stage.\n"
-                .to_string();
-            upgrade_current_response(inferred).print(json, &prose);
-            return Ok(());
-        }
-        bail!(
-            "bootc staged nothing, but root's storage does not match the booted \
-             deployment; refusing to call that an upgrade"
-        );
+        .unwrap_or_else(|_| "unreadable".to_string());
+        note(&format!(
+            "bootc staged nothing; booted {}, root's tag serves {}",
+            booted_digest.unwrap_or("unknown"),
+            root_serves.trim()
+        ));
+        let prose = "Already current: the rebuild reproduced the image your machine \
+             runs — nothing to stage.\n"
+            .to_string();
+        upgrade_current_response(inferred).print(json, &prose);
+        return Ok(());
     }
     // The full compile FROM'd the release image, so the lock's base
     // story is the release now: without the rebase, the base half keeps
