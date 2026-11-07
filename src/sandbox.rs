@@ -149,7 +149,7 @@ pub fn run(mode: Mode, command: &[String]) -> Result<()> {
     };
     // Resolved to the physical path before anything compares or mounts
     // it: current_dir() is already physical, and a symlinked HOME —
-    // /home/u over /var/home/u, the layout this OS installs — would
+    // /home/x over /var/home/x, the layout this OS installs — would
     // compare unequal to the very directory it names and slip past the
     // refusal, after which the cwd bind would re-mount the real home
     // over the tmpfs. A HOME that names nothing cannot be swapped for
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn the_sandbox_swaps_the_home_and_keeps_the_cwd() {
-        let args = argv_of(Mode::NoHome, "/var/home/u/project", "/var/home/u", &["npm", "install"]);
+        let args = argv_of(Mode::NoHome, "/var/home/x/project", "/var/home/x", &["npm", "install"]);
         // The program name is argv[0] — the shape review's HIGH: the
         // flags built alone exec a program named "--ro-bind".
         assert_eq!(args[0], "bwrap", "{args:?}");
@@ -209,13 +209,13 @@ mod tests {
             args.iter().enumerate().filter(|(_, a)| *a == "--tmpfs").map(|(i, _)| i).collect();
         assert_eq!(tmpfses.len(), 2, "tmp and the home are the two tmpfs mounts: {args:?}");
         assert_eq!(args[tmpfses[0] + 1], "/tmp");
-        assert_eq!(args[tmpfses[1] + 1], "/var/home/u");
+        assert_eq!(args[tmpfses[1] + 1], "/var/home/x");
         let bind_at = args.iter().position(|a| a == "--bind").unwrap();
         // Later mounts win: the cwd bind must come after the tmpfs
         // home, or the project directory would be empty too.
         assert!(tmpfses[1] < bind_at, "{args:?}");
-        assert_eq!(&args[bind_at + 1], "/var/home/u/project");
-        assert_eq!(&args[bind_at + 2], "/var/home/u/project");
+        assert_eq!(&args[bind_at + 1], "/var/home/x/project");
+        assert_eq!(&args[bind_at + 2], "/var/home/x/project");
         assert!(
             args.ends_with(["--", "npm", "install"].map(|s| s.to_string()).as_slice()),
             "the command rides after the separator: {args:?}"
@@ -224,8 +224,8 @@ mod tests {
 
     #[test]
     fn the_port_additions_are_in_every_mode_and_the_airlock_is_the_only_difference() {
-        let no_home = argv_of(Mode::NoHome, "/tmp/p", "/var/home/u", &["true"]);
-        let airlock = argv_of(Mode::Airlock, "/tmp/p", "/var/home/u", &["true"]);
+        let no_home = argv_of(Mode::NoHome, "/tmp/p", "/var/home/x", &["true"]);
+        let airlock = argv_of(Mode::Airlock, "/tmp/p", "/var/home/x", &["true"]);
         for args in [&no_home, &airlock] {
             assert!(args.contains(&"--new-session".to_string()), "TIOCSTI: {args:?}");
             assert!(args.contains(&"--die-with-parent".to_string()), "no orphans: {args:?}");
@@ -238,7 +238,7 @@ mod tests {
             assert_eq!(args[path_at - 1], "--setenv", "PATH is allowed, not inherited: {args:?}");
             let home_at = args.iter().position(|a| a == "HOME").unwrap();
             assert_eq!(args[home_at - 1], "--setenv", "HOME is set to the swapped path: {args:?}");
-            assert_eq!(args[home_at + 1], "/var/home/u");
+            assert_eq!(args[home_at + 1], "/var/home/x");
         }
         assert!(!no_home.contains(&"--unshare-net".to_string()));
         // Airlock is no-home with exactly one flag inserted, before the
@@ -254,14 +254,14 @@ mod tests {
     fn the_cwd_refusal_is_the_home_and_its_ancestors_only() {
         // The home itself, and anything that contains it: both put the
         // real home back in the sandbox.
-        assert!(defeats_empty_home(Path::new("/var/home/u"), "/var/home/u"));
-        assert!(defeats_empty_home(Path::new("/var"), "/var/home/u"));
-        assert!(defeats_empty_home(Path::new("/"), "/var/home/u"));
+        assert!(defeats_empty_home(Path::new("/var/home/x"), "/var/home/x"));
+        assert!(defeats_empty_home(Path::new("/var"), "/var/home/x"));
+        assert!(defeats_empty_home(Path::new("/"), "/var/home/x"));
         // A project under the home is the deal: never refused.
-        assert!(!defeats_empty_home(Path::new("/var/home/u/project"), "/var/home/u"));
+        assert!(!defeats_empty_home(Path::new("/var/home/x/project"), "/var/home/x"));
         // A sibling that merely shares a prefix is fine — starts_with
         // is component-wise, so this is not a string comparison.
-        assert!(!defeats_empty_home(Path::new("/var/home/other"), "/var/home/u"));
-        assert!(!defeats_empty_home(Path::new("/usr/src"), "/var/home/u"));
+        assert!(!defeats_empty_home(Path::new("/var/home/other"), "/var/home/x"));
+        assert!(!defeats_empty_home(Path::new("/usr/src"), "/var/home/x"));
     }
 }

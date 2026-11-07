@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender};
+use std::sync::mpsc::{channel, Receiver, Sender, SyncSender};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -536,6 +536,7 @@ mod tests {
     use super::*;
     use crate::nostr::test_relay::{wait_for, StubRelay};
     use std::sync::atomic::AtomicUsize;
+    use std::sync::mpsc::sync_channel;
 
     #[test]
     fn drop_app_returns_the_urls_nobody_serves_anymore() {

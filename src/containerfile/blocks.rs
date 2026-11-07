@@ -497,14 +497,18 @@ RUN find /run /tmp -mindepth 1 -delete; \
 /// suite, mount, fusermount, pkexec, sudo, grub2-set-bootflag and the
 /// dbus launch helper — the standard Fedora set, nothing that arrived
 /// by surprise. Beyond the floor, deliberate additions: polkit's
-/// agent helper (/usr/lib/polkit-1/polkit-agent-helper-1), the first
-/// path the gate caught in the wild — the cosmic preset's tree pulls
-/// polkit, whose agent helper ships setuid-root, the standard shim
-/// between a desktop's auth agent and the polkit daemon that every
-/// graphical admin prompt rides; the bit is the package's, not ours
-/// to drop. Presets whose trees never pull polkit simply don't carry
-/// the file — the assertion is one-directional, and their
-/// enumerations stay a subset of this list.
+/// agent helper (/usr/lib/polkit-1/polkit-agent-helper-1) — the first
+/// path the gate caught in the wild, pulled by the cosmic preset's
+/// tree, the standard shim between a desktop's auth agent and the
+/// polkit daemon that every graphical admin prompt rides — and nfs
+/// mount's helper (/usr/bin/mount.nfs), the second catch, nfs-utils'
+/// own bit in the minimal preset's tree. Both are the packages' bits,
+/// not ours to drop: /usr/bin/mount is pinned for the same user-mount
+/// class, and chmod-fighting a package inside the compose is brittle —
+/// the next dnf update restores the bit and re-reds the gate on a
+/// routine update. Presets whose trees never pull a pinned package
+/// simply don't carry the file — the assertion is one-directional,
+/// and their enumerations stay a subset of this list.
 ///
 /// The file ships at /usr/lib/kuma/suid.golden beside the
 /// declared flatpak list, so the image carries its own inventory; a
@@ -524,6 +528,7 @@ pub(crate) const SUID_GOLDEN: &str = r#"/usr/bin/chage
 /usr/bin/gpasswd
 /usr/bin/grub2-set-bootflag
 /usr/bin/mount
+/usr/bin/mount.nfs
 /usr/bin/newgrp
 /usr/bin/pam_timestamp_check
 /usr/bin/passwd
