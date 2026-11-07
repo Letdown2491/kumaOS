@@ -4384,6 +4384,11 @@ smoke_boot() {
     # refuses the home directory itself, which the second half asserts:
     # the empty home is the sandbox's whole point, so the refusal is
     # not a bug to catch but the contract to keep.
+    # The single quotes are the contract, not the bug SC2016 assumes:
+    # the guest helper ships the script verbatim to the VM, which
+    # expands $d there — expansion on this side would read the runner's
+    # /tmp, a directory the guest has never seen.
+    # shellcheck disable=SC2016
     guest 'd=$(mktemp -d); cd "$d" && kuma run no-home -- /bin/true && kuma run airlock -- /bin/true' \
         || bad "the sandbox verb could not exec true(1) in one of its modes"
     if refusal=$(guest 'cd && kuma run no-home -- /bin/true' 2>&1); then
