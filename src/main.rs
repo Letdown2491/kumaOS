@@ -1387,8 +1387,7 @@ fn stage(tag: &str) -> Result<bool> {
     // bootc runs as root and resolves containers-storage against ROOT's
     // storage; without this sync it would deploy whatever stale copy the
     // last `kuma vm` left there — silently.
-    let scratch = tempfile::tempdir().context("cannot create scratch directory")?;
-    let local_id = sync_image_to_root(tag, scratch.path())?;
+    let local_id = sync_image_to_root(tag)?;
     run_host(&["sudo", "bootc", "switch", "--transport", "containers-storage", tag])?;
     // switch is a no-op when the origin spec is unchanged (every switch
     // after the first!) — bootc upgrade is what re-pulls the origin and
@@ -1401,6 +1400,10 @@ fn stage(tag: &str) -> Result<bool> {
     // passwordless bare-`kuma` probe can spot a future build outrunning
     // it. Best-effort: a missing stamp just skips that check, and doctor
     // rewrites it from the truth.
+    // The scratch dir exists for this handoff and nothing else: the
+    // file is written here first because /var/lib/kuma is root's, and
+    // `install -D` is what places it with its mode.
+    let scratch = tempfile::tempdir().context("cannot create stamp scratch")?;
     let stamp = scratch.path().join("deployed-image-id");
     if std::fs::write(&stamp, format!("{local_id}\n")).is_ok() {
         if let Ok(stamp) = path_str(&stamp) {
@@ -3226,7 +3229,7 @@ fn vm(tag: &str, output: &Path, no_run: bool, rebuild: bool, apply: bool) -> Res
 }
 
 fn build_disk(tag: &str, output: &Path) -> Result<()> {
-    let local_id = sync_image_to_root(tag, output)?;
+    let local_id = sync_image_to_root(tag)?;
     // One read of the baked declaration answers both questions it is
     // asked here: the hash the provenance record carries, and the shell
     // the convenience account gets. Two `podman run`s over a multi-GB
@@ -3420,7 +3423,7 @@ fn iso(config_path: &Path, tag: &str, output: &Path) -> Result<()> {
     std::fs::create_dir_all(output)
         .with_context(|| format!("cannot create {}", output.display()))?;
     let output = std::fs::canonicalize(output)?;
-    let local_id = sync_image_to_root(tag, &output)?;
+    let local_id = sync_image_to_root(tag)?;
     let bib_config = output.join("iso-config.toml");
     std::fs::write(&bib_config, iso_config_toml(&config))?;
 
@@ -4506,8 +4509,7 @@ fn install(disk: Option<&Path>, request: install::Request) -> Result<()> {
         // existed it got installed *instead* of the image just built,
         // and where it did not the build fell through to
         // `docker://localhost/...` and a refused connection.
-        let scratch = tempfile::tempdir().context("cannot create scratch directory")?;
-        sync_image_to_root(image, scratch.path())?;
+        sync_image_to_root(image)?;
     }
 
     // Read before, compared after. Installing to a file leaves a boot
@@ -4696,7 +4698,7 @@ fn live_iso(config_path: &Path, tag: &str, output: &Path) -> Result<()> {
 /// bootc-image-builder runs as root and reads root's containers-storage.
 /// Sync by image ID, not tag existence: the root-side copy goes stale
 /// every time the rootless image is rebuilt. Returns the image ID.
-fn sync_image_to_root(tag: &str, scratch: &Path) -> Result<String> {
+fn sync_image_to_root(tag: &str) -> Result<String> {
     let local_id =
         image_id(tag).with_context(|| format!("{tag} not found; run `kuma build` first"))?;
     let root_id = host_output(&["sudo", "podman", "image", "inspect", "--format", "{{.Id}}", tag])
@@ -4751,7 +4753,6 @@ fn sync_image_to_root(tag: &str, scratch: &Path) -> Result<String> {
         if !root_id.is_empty() {
             let _ = run_host(&["sudo", "podman", "image", "rm", "-f", root_id.trim()]);
         }
-        let _ = scratch;
     }
     Ok(local_id)
 }

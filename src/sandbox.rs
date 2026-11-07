@@ -20,9 +20,14 @@
 //!   under the home directory is the one real, writable thing the
 //!   child sees. The cwd is the deal: `run` exists so `npm install`
 //!   can build the thing you are in.
-//! - The agent sockets the environment names (`SSH_AUTH_SOCK`,
-//!   `GPG_AGENT_INFO`) are unset: a script that cannot see your home
-//!   has no business holding your keys either.
+//! - The environment is cleared and re-allowed, not filtered: the
+//!   child gets PATH, HOME, TERM, LANG and the proxy variables, and
+//!   nothing else. The session's other sockets arrive by environment
+//!   variable — the bus, the Wayland and X surfaces, XDG_RUNTIME_DIR
+//!   (where the nostr signer's socket lives), the agent sockets — and
+//!   each is a contact surface, not a convenience. A script that
+//!   cannot see your home has no business holding your keys, and no
+//!   business talking to your session either.
 //!
 //! Two modes. `no-home` is the shape above with the network up — an
 //! install needs its registry. `airlock` adds `--unshare-net`: loopback
@@ -66,27 +71,61 @@ fn defeats_empty_home(cwd: &Path, home: &str) -> bool {
 
 /// The bwrap argv for `mode` running `command` from `cwd` with `home`
 /// swapped for the empty one. Pure so the tests can pin the shape:
-/// the tmpfs home before the cwd bind, the agent sockets unset,
-/// `--new-session` and `--die-with-parent` in every mode,
-/// `--unshare-net` in airlock alone.
+/// the program name first, the tmpfs home before the cwd bind, the
+/// environment cleared to the allowlist, `--new-session` and
+/// `--die-with-parent` in every mode, `--unshare-net` in airlock
+/// alone.
 pub(crate) fn bwrap_argv(mode: Mode, cwd: &Path, home: &str, command: &[String]) -> Vec<String> {
     let cwd = cwd.display().to_string();
     let mut args: Vec<String> = [
-        "--ro-bind", "/", "/",
-        "--dev", "/dev",
-        "--proc", "/proc",
-        "--tmpfs", "/tmp",
-        "--tmpfs", home,
-        "--bind", &cwd, &cwd,
-        "--setenv", "HOME", home,
-        "--unsetenv", "SSH_AUTH_SOCK",
-        "--unsetenv", "GPG_AGENT_INFO",
+        "bwrap",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--tmpfs",
+        home,
+        "--bind",
+        &cwd,
+        &cwd,
         "--new-session",
         "--die-with-parent",
     ]
     .iter()
     .map(|s| s.to_string())
     .collect();
+    // The environment is cleared, not filtered: the session's other
+    // sockets arrive by environment variable — the bus, the Wayland
+    // and X surfaces, and XDG_RUNTIME_DIR, where the nostr signer's
+    // socket lives — and each is a contact surface, not a
+    // convenience. The allowlist is what a build actually uses: where
+    // binaries live, the terminal and locale for their output, and
+    // the proxy pair an install may need to reach its registry.
+    args.push("--clearenv".to_string());
+    let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
+    args.extend(["--setenv".to_string(), "PATH".to_string(), path]);
+    args.extend(["--setenv".to_string(), "HOME".to_string(), home.to_string()]);
+    for name in [
+        "TERM",
+        "LANG",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "all_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "ALL_PROXY",
+    ] {
+        if let Ok(value) = std::env::var(name) {
+            args.extend(["--setenv".to_string(), name.to_string(), value]);
+        }
+    }
     if mode == Mode::Airlock {
         args.push("--unshare-net".to_string());
     }
@@ -108,6 +147,17 @@ pub fn run(mode: Mode, command: &[String]) -> Result<()> {
         Ok(h) if !h.is_empty() => h,
         _ => bail!("run needs a HOME to swap for the empty one"),
     };
+    // Resolved to the physical path before anything compares or mounts
+    // it: current_dir() is already physical, and a symlinked HOME —
+    // /home/u over /var/home/u, the layout this OS installs — would
+    // compare unequal to the very directory it names and slip past the
+    // refusal, after which the cwd bind would re-mount the real home
+    // over the tmpfs. A HOME that names nothing cannot be swapped for
+    // an empty one honestly, so resolving is allowed to fail.
+    let home = std::fs::canonicalize(&home)
+        .with_context(|| format!("cannot resolve HOME {home} — is it a real directory?"))?
+        .display()
+        .to_string();
     let cwd = std::env::current_dir().context("run needs a working directory")?;
     if defeats_empty_home(&cwd, &home) {
         bail!(
@@ -119,16 +169,13 @@ pub fn run(mode: Mode, command: &[String]) -> Result<()> {
     }
     let argv = bwrap_argv(mode, &cwd, &home, command);
     let started = std::time::Instant::now();
-    let status = Command::new(&argv[0])
-        .args(&argv[1..])
-        .status()
-        .with_context(|| {
-            format!(
-                "cannot start {} — every kuma image carries bubblewrap, so this is \
+    let status = Command::new(&argv[0]).args(&argv[1..]).status().with_context(|| {
+        format!(
+            "cannot start {} — every kuma image carries bubblewrap, so this is \
                  neither a machine nor a kuma vm guest",
-                argv[0]
-            )
-        })?;
+            argv[0]
+        )
+    })?;
     crate::host::trace(&argv, started);
     match status.code() {
         Some(code) => std::process::exit(code),
@@ -155,12 +202,11 @@ mod tests {
     #[test]
     fn the_sandbox_swaps_the_home_and_keeps_the_cwd() {
         let args = argv_of(Mode::NoHome, "/var/home/u/project", "/var/home/u", &["npm", "install"]);
-        let tmpfses: Vec<usize> = args
-            .iter()
-            .enumerate()
-            .filter(|(_, a)| *a == "--tmpfs")
-            .map(|(i, _)| i)
-            .collect();
+        // The program name is argv[0] — the shape review's HIGH: the
+        // flags built alone exec a program named "--ro-bind".
+        assert_eq!(args[0], "bwrap", "{args:?}");
+        let tmpfses: Vec<usize> =
+            args.iter().enumerate().filter(|(_, a)| *a == "--tmpfs").map(|(i, _)| i).collect();
         assert_eq!(tmpfses.len(), 2, "tmp and the home are the two tmpfs mounts: {args:?}");
         assert_eq!(args[tmpfses[0] + 1], "/tmp");
         assert_eq!(args[tmpfses[1] + 1], "/var/home/u");
@@ -183,7 +229,16 @@ mod tests {
         for args in [&no_home, &airlock] {
             assert!(args.contains(&"--new-session".to_string()), "TIOCSTI: {args:?}");
             assert!(args.contains(&"--die-with-parent".to_string()), "no orphans: {args:?}");
-            assert!(args.contains(&"--unsetenv".to_string()), "the agent sockets: {args:?}");
+            // The environment is cleared and then allowed, not
+            // filtered: the session's sockets (the bus, Wayland and X,
+            // XDG_RUNTIME_DIR's signer socket) ride env vars, and a
+            // removed var is not the only kind left behind.
+            assert!(args.contains(&"--clearenv".to_string()), "the env: {args:?}");
+            let path_at = args.iter().position(|a| a == "PATH").unwrap();
+            assert_eq!(args[path_at - 1], "--setenv", "PATH is allowed, not inherited: {args:?}");
+            let home_at = args.iter().position(|a| a == "HOME").unwrap();
+            assert_eq!(args[home_at - 1], "--setenv", "HOME is set to the swapped path: {args:?}");
+            assert_eq!(args[home_at + 1], "/var/home/u");
         }
         assert!(!no_home.contains(&"--unshare-net".to_string()));
         // Airlock is no-home with exactly one flag inserted, before the

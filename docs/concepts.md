@@ -395,9 +395,17 @@ tmpfs mounted where your home directory is, gone when the command
 finishes. The caches, tokens and profile files a script might reach
 for are not in the sandbox to find. The working directory is bound
 read-write *after* the home tmpfs, so a project under your home is the
-one real, writable thing the child sees. `SSH_AUTH_SOCK` and
-`GPG_AGENT_INFO` are unset: a script that cannot see your home has no
-business holding your keys.
+one real, writable thing the child sees.
+
+The environment is cleared and re-allowed rather than filtered: the
+child gets `PATH`, `HOME`, `TERM`, `LANG` and the proxy variables, and
+nothing else. The session's other sockets arrive by environment
+variable — the D-Bus session bus, the Wayland and X surfaces, and
+`XDG_RUNTIME_DIR`, where the nostr signer's socket lives — and a
+filter that removed only the agent sockets would leave every one of
+those in the child's reach. A script that cannot see your home has no
+business holding your keys, and no business talking to your session
+either.
 
 Two modes. `no-home` leaves the network up, because an install needs
 its registry. `airlock` also takes the network away — loopback only,

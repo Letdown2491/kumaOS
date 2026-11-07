@@ -5,7 +5,9 @@
 //! collection is the wall — it is already
 //! PAM-unlocked at greetd, so a fresh machine needs no second secret and
 //! no new passphrase UX — and the vault is honest about that being a
-//! gate: `lock` drops the key from memory and refuses to sign, `unlock`
+//! gate: `lock` releases the key from use and refuses to sign (an
+//! ownership drop, not a scrub — the bytes are not zeroized and can
+//! linger in freed heap until the allocator reuses them), `unlock`
 //! re-reads it, and neither pretends to survive an attacker who is
 //! already running as the user with the session unlocked. The upgrade to
 //! an independent-passphrase vault later is a change of what fills the
@@ -213,6 +215,14 @@ pub struct Vault<S: SecretStore> {
     /// changes only when this vault itself writes or destroys. The
     /// store's own mutating paths keep it honest.
     stored_cache: std::sync::Mutex<Option<bool>>,
+    /// The cached stored pubkey, beside `stored_cache` for the same
+    /// reason: `stored_pubkey` is what every locked `status` poll
+    /// reads, and its answer used to cost the full blob — wrap
+    /// passphrase and all — materialized from the store under the
+    /// daemon mutex, per poll, for a fact that is not even secret. It
+    /// changes only when this vault writes or destroys, so the same
+    /// write door retires it.
+    pubkey_cache: std::sync::Mutex<Option<Option<PublicKey>>>,
 }
 
 impl<S: SecretStore> Vault<S> {
@@ -223,6 +233,7 @@ impl<S: SecretStore> Vault<S> {
             secrets: Vec::new(),
             labels: std::collections::HashMap::new(),
             stored_cache: std::sync::Mutex::new(None),
+            pubkey_cache: std::sync::Mutex::new(None),
         }
     }
 
@@ -230,6 +241,7 @@ impl<S: SecretStore> Vault<S> {
     /// true, and `stored`'s polls believe it until the next one.
     fn note_stored(&self, exists: bool) {
         *self.stored_cache.lock().expect("the vault cache") = Some(exists);
+        *self.pubkey_cache.lock().expect("the vault pubkey cache") = None;
     }
 
     pub fn is_unlocked(&self) -> bool {
@@ -285,17 +297,25 @@ impl<S: SecretStore> Vault<S> {
     /// The bunker's public identity, read from the blob without
     /// unlocking: what `status` names while locked and what the doctor
     /// grades without asking the gate to open. `None` when no vault
-    /// exists.
+    /// exists. Cached like `stored` — the polls arrive at the panel's
+    /// cadence, and the blob (wrap passphrase and all) is not
+    /// re-materialized per poll for a pubkey that is not secret.
     pub async fn stored_pubkey(&self) -> Result<Option<PublicKey>> {
-        match self.store.load().await? {
+        if let Some(cached) = *self.pubkey_cache.lock().expect("the vault pubkey cache") {
+            return Ok(cached);
+        }
+        let pubkey = match self.store.load().await? {
             Some(bytes) => {
                 let blob = VaultBlob::decode(&bytes)?;
-                let pubkey = PublicKey::parse(&blob.pubkey)
-                    .map_err(|e| anyhow!("the stored pubkey is broken: {e}"))?;
-                Ok(Some(pubkey))
+                Some(
+                    PublicKey::parse(&blob.pubkey)
+                        .map_err(|e| anyhow!("the stored pubkey is broken: {e}"))?,
+                )
             }
-            None => Ok(None),
-        }
+            None => None,
+        };
+        *self.pubkey_cache.lock().expect("the vault pubkey cache") = Some(pubkey);
+        Ok(pubkey)
     }
 
     /// The key, borrowed only while unlocked. A locked vault answers
@@ -506,6 +526,32 @@ impl SecretStore for KeyringStore {
 mod tests {
     use super::*;
 
+    /// A store that counts its loads: the pubkey cache's proof is that
+    /// the second locked poll performs no second load, and that a
+    /// mutation's write door is what retires the answer.
+    #[derive(Default)]
+    struct CountingStore {
+        blob: std::sync::Mutex<Option<Vec<u8>>>,
+        loads: std::sync::atomic::AtomicUsize,
+    }
+
+    impl SecretStore for CountingStore {
+        async fn load(&self) -> Result<Option<Vec<u8>>> {
+            self.loads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(self.blob.lock().expect("counting store lock").clone())
+        }
+
+        async fn save(&self, payload: &[u8]) -> Result<()> {
+            *self.blob.lock().expect("counting store lock") = Some(payload.to_vec());
+            Ok(())
+        }
+
+        async fn remove(&self) -> Result<()> {
+            *self.blob.lock().expect("counting store lock") = None;
+            Ok(())
+        }
+    }
+
     async fn unlocked_vault(key: &SecretKey) -> Vault<MemoryStore> {
         let mut vault = Vault::new(MemoryStore::default());
         vault.setup(key).await.expect("setup on an empty store");
@@ -525,6 +571,37 @@ mod tests {
 
         vault.unlock().await.unwrap();
         assert_eq!(vault.key(), Some(&key), "unlock re-reads the same identity");
+    }
+
+    #[tokio::test]
+    async fn a_locked_status_poll_does_not_re_read_the_blob() {
+        let key = SecretKey::generate();
+        let mut vault = Vault::new(CountingStore::default());
+        vault.setup(&key).await.unwrap();
+        vault.lock();
+        assert!(!vault.is_unlocked());
+
+        let loads =
+            |v: &Vault<CountingStore>| v.store.loads.load(std::sync::atomic::Ordering::Relaxed);
+        let after_setup = loads(&vault); // setup's own emptiness check
+        let first = vault.stored_pubkey().await.unwrap();
+        assert!(first.is_some(), "a minted vault stores a pubkey");
+        assert_eq!(loads(&vault), after_setup + 1, "the first poll reads the store");
+
+        for _ in 0..3 {
+            assert_eq!(vault.stored_pubkey().await.unwrap(), first);
+        }
+        assert_eq!(
+            loads(&vault),
+            after_setup + 1,
+            "the polls in between are the cache — the blob, wrap passphrase and all, is not re-materialized for a pubkey that is not secret"
+        );
+
+        // The write door retires it: the next poll reads the store once
+        // and reports what the mutation made true.
+        vault.destroy().await.unwrap();
+        assert_eq!(vault.stored_pubkey().await.unwrap(), None);
+        assert_eq!(loads(&vault), after_setup + 2);
     }
 
     #[tokio::test]

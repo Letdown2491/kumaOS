@@ -263,7 +263,13 @@ pub fn compose(config: &Config, tag: &str) -> Result<()> {
         }
     }
 
-    let dir = tempfile::tempdir().context("cannot create compose directory")?;
+    // /var/tmp, not the tempdir default: the OCI export lands 1-2 GB,
+    // and the default tempdir is /tmp — tmpfs, i.e. RAM, and on live
+    // media the RAM overlay. The sync path learned this the same way
+    // (the save/load pipe comment in main.rs); compose cannot stream —
+    // rpm-ostree needs a real directory — so it writes to the
+    // disk-backed sibling instead.
+    let dir = tempfile::tempdir_in("/var/tmp").context("cannot create compose directory")?;
     let work = dir.path();
     std::fs::write(work.join("kuma-base.yaml"), manifest(config))
         .context("cannot write base manifest")?;

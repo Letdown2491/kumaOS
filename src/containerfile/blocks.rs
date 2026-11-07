@@ -916,13 +916,30 @@ StartLimitBurst=6
 
 [Service]
 Type=oneshot
-RuntimeDirectory=kuma-converge-gate
-ExecStartPre=/usr/libexec/kuma-converge-gate
-ExecStart=/usr/libexec/kuma-flatpak-sync full
+# Each daily unit owns its marker directory: one shared path meant a
+# gate's first act (rm -f) could erase the OTHER unit's skip decision
+# mid-run — flatpak proceeding because brew's pre erased the marker
+# brew's ExecStart was about to honor, and the reverse. The marker is
+# passed explicitly on both sides (gate $3, sync $2) so the pair can
+# never drift.
+RuntimeDirectory=kuma-converge-gate-flatpak
+ExecStartPre=/usr/libexec/kuma-converge-gate /sys/class/power_supply /var/lib/kuma/convergence-skipped /run/kuma-converge-gate-flatpak/skip
+ExecStart=/usr/libexec/kuma-flatpak-sync full /run/kuma-converge-gate-flatpak/skip
 Restart=on-failure
 RestartSec=2min
 CPUWeight=25
 IOWeight=25
+# The converger's write surface is the flatpak system repo, its own
+# state file, and the gate's marker directory; strict holds the rest
+# of the tree while root runs a vendor's client against it. The same
+# set as the boot unit's — the daily run's extra work (the --unused
+# uninstall) writes inside the same two trees — with the marker dir
+# named explicitly so the gate's write cannot depend on how
+# RuntimeDirectory and ProtectSystem compose.
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ReadWritePaths=/var/lib/flatpak /var/lib/kuma /run/kuma-converge-gate-flatpak
 "#;
 
 /// Read-only btrfs snapshots of the declared subvolume, pruned to the
@@ -1461,8 +1478,11 @@ set -euo pipefail
 # done nothing. The boot unit and `kuma sync` never run the gate, and
 # the marker lives in a runtime directory systemd removes when the daily
 # unit deactivates, so for every other caller it does not exist: the
-# gate is the timer's, never the verb's.
-if [ -e /run/kuma-converge-gate/skip ]; then
+# gate is the timer's, never the verb's. The marker is $2 because it is
+# per-unit — flatpak and brew each have a daily timer, and one shared
+# rm -f could erase the other's skip decision mid-run.
+marker=${2:-/run/kuma-converge-gate/skip}
+if [ -e "$marker" ]; then
     exit 0
 fi
 declared=/usr/lib/kuma/flatpaks
@@ -3206,8 +3226,10 @@ WantedBy=multi-user.target
 pub(crate) const BREW_SYNC_SCRIPT: &str = r#"#!/usr/bin/bash
 set -euo pipefail
 # The flatpak sync's marker check, word for word: the gate is the
-# timer's, never the verb's. See CONVERGE_GATE_SCRIPT.
-if [ -e /run/kuma-converge-gate/skip ]; then
+# timer's, never the verb's. The marker is $2 because it is per-unit —
+# see FLATPAK_SYNC_SCRIPT. See CONVERGE_GATE_SCRIPT.
+marker=${2:-/run/kuma-converge-gate/skip}
+if [ -e "$marker" ]; then
     exit 0
 fi
 brew=/home/linuxbrew/.linuxbrew/bin/brew
@@ -3293,9 +3315,13 @@ StartLimitBurst=6
 Type=oneshot
 User=1000
 Environment=HOME=/home/linuxbrew
-RuntimeDirectory=kuma-converge-gate
-ExecStartPre=+/usr/libexec/kuma-converge-gate
-ExecStart=/usr/libexec/kuma-brew-sync full
+# Each daily unit owns its marker directory — see the flatpak daily's
+# note: one shared rm -f could erase the other unit's skip decision
+# mid-run. The gate runs as root (the + prefix) and passes the brew
+# marker explicitly; the sync, as the brew uid, reads it back.
+RuntimeDirectory=kuma-converge-gate-brew
+ExecStartPre=+/usr/libexec/kuma-converge-gate /sys/class/power_supply /var/lib/kuma/convergence-skipped /run/kuma-converge-gate-brew/skip
+ExecStart=/usr/libexec/kuma-brew-sync full /run/kuma-converge-gate-brew/skip
 Restart=on-failure
 RestartSec=2min
 CPUWeight=25

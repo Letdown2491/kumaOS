@@ -116,9 +116,16 @@ jobs:
           # to finish, and a failed read must never stand for a
           # promoted registry.
           version=${TAG#v}
-          pin=$(skopeo inspect "docker://ghcr.io/${GITHUB_REPOSITORY_OWNER}/kuma:niri-${version}" \
+          # Lowercased because ghcr rejects an uppercase repository
+          # path — the same tr its sibling workflows run, and the
+          # reason this guard would otherwise be dead code on this
+          # repo (the owner is Letdown2491): both inspects would fail
+          # client-side, both reads would be empty, and every re-run
+          # would dispatch.
+          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          pin=$(skopeo inspect "docker://ghcr.io/${owner}/kuma:niri-${version}" \
               --format '{{.Digest}}' 2>/dev/null || true)
-          move=$(skopeo inspect "docker://ghcr.io/${GITHUB_REPOSITORY_OWNER}/kuma:niri" \
+          move=$(skopeo inspect "docker://ghcr.io/${owner}/kuma:niri" \
               --format '{{.Digest}}' 2>/dev/null || true)
           if [ -n "$pin" ] && [ -n "$move" ] && [ "$pin" = "$move" ]; then
               echo "the registry already serves ${TAG}: niri and niri-${version} are both ${pin}"

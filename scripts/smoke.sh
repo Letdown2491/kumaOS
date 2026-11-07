@@ -4386,8 +4386,14 @@ smoke_boot() {
     # not a bug to catch but the contract to keep.
     guest 'd=$(mktemp -d); cd "$d" && kuma run no-home -- /bin/true && kuma run airlock -- /bin/true' \
         || bad "the sandbox verb could not exec true(1) in one of its modes"
-    if guest 'cd && kuma run no-home -- /bin/true'; then
-        bad "kuma run from the home directory did not refuse; the empty home is not guaranteed"
+    if refusal=$(guest 'cd && kuma run no-home -- /bin/true' 2>&1); then
+        bad "kuma run from the home directory succeeded; the empty home is not guaranteed"
+    elif ! printf '%s' "$refusal" | grep -q "refuses to sandbox"; then
+        # A failure that is not the refusal — "cannot start", a shell
+        # error — must not stand for the contract. (A verb that cannot
+        # exec at all fails the first assertion above, but it fails
+        # THIS one first if the refusal text is missing.)
+        bad "kuma run from the home directory failed for a reason other than the refusal: $refusal"
     fi
     ok "the sandbox verb runs (both modes) and refuses the home"
 
