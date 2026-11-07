@@ -113,6 +113,16 @@ COPY kuma.toml /usr/lib/kuma/kuma.toml
 LABEL io.kuma.image="1"
 LABEL io.kuma.builder=<version-and-commit>
 LABEL org.opencontainers.image.version="45.0.1"
+COPY suid-golden /usr/lib/kuma/suid.golden
+
+RUN found=$(find /usr -xdev -type f -perm /6000 | LC_ALL=C sort); \
+    unexpected=$(printf '%s\n' "$found" | comm -13 /usr/lib/kuma/suid.golden -); \
+    if [ -n "$unexpected" ]; then \
+        printf '%s\n' "$unexpected" | sed 's/^/suid-golden: not pinned: /' >&2; \
+        echo "suid-golden: a setuid/setgid path above is absent from the golden; pin it in blocks.rs (SUID_GOLDEN) deliberately or drop the bit" >&2; \
+        exit 1; \
+    fi; \
+    printf 'suid-golden: every setuid/setgid file under /usr is pinned (%s paths)\n' "$(printf '%s' "$found" | grep -c .)"
 
 RUN find /run /tmp -mindepth 1 -delete; \
     find /var/log -type f -delete; \

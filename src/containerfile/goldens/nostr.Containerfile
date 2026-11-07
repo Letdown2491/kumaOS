@@ -2,7 +2,7 @@
 FROM localhost/kuma-base:me1b4633c50be
 
 RUN --mount=type=cache,target=/var/cache/libdnf5 \
-    dnf -y install --setopt=keepcache=1 --exclude=alacritty --exclude=waybar --exclude=swaylock --exclude=fuzzel flatpak niri xwayland-satellite greetd tuigreet pipewire pipewire-pulseaudio wireplumber xdg-desktop-portal-gtk xdg-desktop-portal-gnome dconf gnome-keyring gnome-keyring-pam polkit mesa-dri-drivers mesa-vulkan-drivers vulkan-loader default-fonts-core-sans default-fonts-core-mono fontawesome-fonts-all glibc-langpack-en NetworkManager-wifi adwaita-icon-theme adw-gtk3-theme desktop-file-utils NetworkManager-tui wpa_supplicant brightnessctl power-profiles-daemon pavucontrol nm-connection-editor bluez blueman file-roller poppler-utils gvfs gvfs-mtp gvfs-fuse gvfs-smb wf-recorder zram-generator-defaults avahi nss-mdns libnotify cups system-config-printer wl-clipboard xsettingsd spice-vdagent xdg-user-dirs default-fonts-core-emoji mate-polkit firewalld grim slurp swappy playerctl udiskie 7zip unar google-noto-sans-cjk-vf-fonts fastfetch libatomic
+    dnf -y install --setopt=keepcache=1 --exclude=alacritty --exclude=waybar --exclude=swaylock --exclude=fuzzel flatpak niri xwayland-satellite greetd tuigreet pipewire pipewire-pulseaudio wireplumber xdg-desktop-portal-gtk xdg-desktop-portal-gnome dconf gnome-keyring gnome-keyring-pam polkit mesa-dri-drivers mesa-vulkan-drivers vulkan-loader default-fonts-core-sans default-fonts-core-mono fontawesome-fonts-all glibc-langpack-en NetworkManager-wifi adwaita-icon-theme adw-gtk3-theme desktop-file-utils NetworkManager-tui wpa_supplicant brightnessctl ddcutil power-profiles-daemon pavucontrol nm-connection-editor bluez blueman file-roller poppler-utils gvfs gvfs-mtp gvfs-fuse gvfs-smb wf-recorder zram-generator-defaults avahi nss-mdns libnotify cups system-config-printer wl-clipboard xsettingsd spice-vdagent xdg-user-dirs default-fonts-core-emoji mate-polkit firewalld grim slurp swappy playerctl udiskie 7zip unar google-noto-sans-cjk-vf-fonts fastfetch libatomic
 RUN --mount=type=cache,target=/var/cache/libdnf5 \
     rm -rf /var/cache/libdnf5/@commandline-* \
     && dnf -y install --setopt=keepcache=1 "https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
@@ -239,6 +239,16 @@ COPY kuma.toml /usr/lib/kuma/kuma.toml
 LABEL io.kuma.image="1"
 LABEL io.kuma.builder=<version-and-commit>
 LABEL org.opencontainers.image.version="45.0.1"
+COPY suid-golden /usr/lib/kuma/suid.golden
+
+RUN found=$(find /usr -xdev -type f -perm /6000 | LC_ALL=C sort); \
+    unexpected=$(printf '%s\n' "$found" | comm -13 /usr/lib/kuma/suid.golden -); \
+    if [ -n "$unexpected" ]; then \
+        printf '%s\n' "$unexpected" | sed 's/^/suid-golden: not pinned: /' >&2; \
+        echo "suid-golden: a setuid/setgid path above is absent from the golden; pin it in blocks.rs (SUID_GOLDEN) deliberately or drop the bit" >&2; \
+        exit 1; \
+    fi; \
+    printf 'suid-golden: every setuid/setgid file under /usr is pinned (%s paths)\n' "$(printf '%s' "$found" | grep -c .)"
 
 RUN find /run /tmp -mindepth 1 -delete; \
     find /var/log -type f -delete; \

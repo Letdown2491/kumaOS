@@ -4363,6 +4363,21 @@ smoke_boot() {
     done
     ok "the baked binaries resolve every library"
 
+    # The shell's external-panel brightness rides the image as plumbing
+    # (kumaUI #104): the ddcutil binary, its udev rules (uaccess hands
+    # the active seat user the i2c nodes — no group of ours to
+    # provision), and the i2c-dev module its modules-load.d conf loads.
+    # The guest has no external panel, so presence is all a VM can
+    # assert here — function is a physical monitor's testimony, and the
+    # first real machine is the test bed.
+    guest 'command -v ddcutil >/dev/null' \
+        || bad "ddcutil is not in the image; external-panel brightness has no backend"
+    guest 'test -f /usr/lib/udev/rules.d/60-ddcutil-i2c.rules' \
+        || bad "ddcutil's udev rules are missing; the session user cannot reach the i2c nodes"
+    guest 'test -d /sys/module/i2c_dev' \
+        || bad "i2c-dev did not load; /dev/i2c-* cannot exist"
+    ok "the DDC plumbing rides the image (binary, rules, module)"
+
     # Everything above this line ran as the wrong account. `kuma vm` writes
     # a bib blueprint with a hardcoded `kuma` user (main.rs, vm_config), so
     # the account this stage logs in as is the disk builder's, created at

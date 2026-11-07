@@ -82,6 +82,16 @@ pub(crate) const NIRI_PACKAGES: &[&str] = &[
     "NetworkManager-tui",
     "wpa_supplicant",
     "brightnessctl",
+    // DDC/CI for external panels: the brightness backend the backlight
+    // class cannot see (kumaUI #104). The package carries the whole
+    // access story, which is why it is here rather than assembled from
+    // parts: its udev rules tag the DRM i2c adapters for uaccess, so
+    // logind hands the active seat user the ACL — no group of ours to
+    // provision — and its modules-load.d conf loads i2c-dev so the
+    // nodes exist without renting fwupd's drop-in. A monitor that does
+    // not answer DDC simply does not appear in the shell; the honest
+    // failure is the feature's own contract, not the image's problem.
+    "ddcutil",
     "power-profiles-daemon",
     // device-level settings: the config file covers system definition,
     // but wifi picking, pairing, mixers, and mounts are machine state
@@ -482,6 +492,50 @@ RUN find /run /tmp -mindepth 1 -delete; \
     ! find /var/log -type f | grep -q .
 "#;
 
+/// The setuid/setgid inventory, pinned. The floor is the published
+/// image's own enumeration (45.0.1's /usr, 2026-11-07): the shadow
+/// suite, mount, fusermount, pkexec, sudo, grub2-set-bootflag and the
+/// dbus launch helper — the standard Fedora set, nothing that arrived
+/// by surprise. The file ships at /usr/lib/kuma/suid.golden beside the
+/// declared flatpak list, so the image carries its own inventory; a
+/// future doctor check reads it from the running machine.
+///
+/// The assertion is one-directional on purpose: a path in the image
+/// that the golden does not name fails the compose (a package gained
+/// the setuid bit — pin it deliberately or drop the bit), but a golden
+/// path a preset's smaller package set does not carry is fine. Sorted
+/// LC_ALL=C on both sides — comm's contract, and the check re-sorts
+/// with the same locale rather than trusting the build's.
+pub(crate) const SUID_GOLDEN: &str = r#"/usr/bin/chage
+/usr/bin/chfn
+/usr/bin/chsh
+/usr/bin/fusermount
+/usr/bin/fusermount3
+/usr/bin/gpasswd
+/usr/bin/grub2-set-bootflag
+/usr/bin/mount
+/usr/bin/newgrp
+/usr/bin/pam_timestamp_check
+/usr/bin/passwd
+/usr/bin/pkexec
+/usr/bin/su
+/usr/bin/sudo
+/usr/bin/umount
+/usr/bin/unix_chkpwd
+/usr/libexec/dbus-1/dbus-daemon-launch-helper
+"#;
+
+pub(crate) const SUID_CHECK: &str = r#"
+RUN found=$(find /usr -xdev -type f -perm /6000 | LC_ALL=C sort); \
+    unexpected=$(printf '%s\n' "$found" | comm -13 /usr/lib/kuma/suid.golden -); \
+    if [ -n "$unexpected" ]; then \
+        printf '%s\n' "$unexpected" | sed 's/^/suid-golden: not pinned: /' >&2; \
+        echo "suid-golden: a setuid/setgid path above is absent from the golden; pin it in blocks.rs (SUID_GOLDEN) deliberately or drop the bit" >&2; \
+        exit 1; \
+    fi; \
+    printf 'suid-golden: every setuid/setgid file under /usr is pinned (%s paths)\n' "$(printf '%s' "$found" | grep -c .)"
+"#;
+
 /// bootc's own build-time check that the image is a valid bootable
 /// container. It runs last, and its verdict is the build's verdict.
 ///
@@ -813,6 +867,13 @@ Restart=on-failure
 RestartSec=2min
 CPUWeight=25
 IOWeight=25
+# The converger's write surface is the flatpak system repo and its own
+# state file; strict holds the rest of the tree while root runs a
+# vendor's client against it.
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ReadWritePaths=/var/lib/flatpak /var/lib/kuma
 
 [Install]
 WantedBy=multi-user.target
@@ -1095,6 +1156,13 @@ pub(crate) const CURATED_EXCLUDES: &[&str] =
 /// limit is what keeps that from becoming an infinite retry against a
 /// repository that is simply gone: six tries an hour, then stop and let
 /// doctor's freshness line be the thing that says so.
+///
+/// The sandbox is sized to the script's settled write surface, nothing
+/// wider: restic's cache (`RESTIC_CACHE_DIR=/var/cache/restic`, which
+/// the script installs itself) and kuma's state dir (the freshness and
+/// prune stamps). The reads the job exists for — /var/home, /etc, the
+/// network — stay open, which is the honest limit of what sandboxing
+/// buys a backup.
 pub(crate) fn backup_service(config: &Config) -> String {
     format!(
         "[Unit]\nDescription=Copy the newest snapshot to the declared repository\n\
@@ -1104,6 +1172,8 @@ pub(crate) fn backup_service(config: &Config) -> String {
          [Service]\nType=oneshot\nExecStart=/usr/libexec/kuma-backup\n\
          EnvironmentFile=-/var/lib/kuma/secrets/{secret}.env\n\
          PrivateMounts=yes\n\
+         NoNewPrivileges=yes\nProtectSystem=strict\nPrivateTmp=yes\n\
+         ReadWritePaths=/var/lib/kuma /var/cache/restic\n\
          Restart=on-failure\nRestartSec=2min\nCPUWeight=25\nIOWeight=25\n\n\
          [Install]\nWantedBy=multi-user.target\n",
         secret = config.backup.secret,
@@ -1260,6 +1330,15 @@ Type=oneshot
 EnvironmentFile=-/var/lib/kuma/secrets/restore.env
 ExecStart=/usr/libexec/kuma-restore
 TimeoutStartSec=infinity
+# The sandbox tightens to exactly the paths the script writes — the
+# cache restic demands, the home it restores, the NetworkManager
+# connections the snapshot carries (the converger backs them up for
+# this moment), and the request file it clears when the restore held.
+# Everything else on the machine stays read-only while root runs it.
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ReadWritePaths=/var/lib/kuma /var/home /var/cache/restic /etc/NetworkManager/system-connections
 
 [Install]
 WantedBy=multi-user.target
@@ -3095,6 +3174,14 @@ Type=oneshot
 ExecStart=/usr/libexec/kuma-brew-setup
 CPUWeight=25
 IOWeight=25
+# The installer's whole write surface is the prefix it extracts and
+# chowns; strict holds the rest of the tree while root runs the
+# curl-tar ladder. The network stays open — fetching the tarball is
+# the job.
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ReadWritePaths=/home/linuxbrew
 
 [Install]
 WantedBy=multi-user.target
@@ -4705,6 +4792,15 @@ fn sweep_lint(e: &mut Emitter<'_>) {
     e.raw(LINT);
 }
 
+/// The SUID inventory ships, then the build asserts against it. Runs
+/// after every package block, before the sweep and bootc's lint: the
+/// enumeration must see the image's final package state.
+fn suid_golden(e: &mut Emitter<'_>) {
+    let golden = e.stage("suid-golden", SUID_GOLDEN);
+    e.copy(&golden, "/usr/lib/kuma/suid.golden");
+    e.raw(SUID_CHECK);
+}
+
 /// The units a live session on installer media must not run, derived
 /// from the same tables that enable them — the old shape was a
 /// hand-kept list in liveiso, and a unit that joined the image without
@@ -5292,6 +5388,7 @@ pub(super) static BLOCKS: &[Block] = &[
     Block { name: "kuma-binary", emit: kuma_binary, units: &[] },
     Block { name: "declaration", emit: declaration, units: &[] },
     Block { name: "labels", emit: labels, units: &[] },
+    Block { name: "suid-golden", emit: suid_golden, units: &[] },
     Block { name: "sweep-lint", emit: sweep_lint, units: &[] },
 ];
 

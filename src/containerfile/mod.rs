@@ -892,6 +892,61 @@ mod tests {
         assert!(unit.contains("WantedBy=graphical-session.target"));
     }
 
+    /// The convergence units' sandbox is the settled write surface,
+    /// asserted per unit: strict everywhere, writes opened only where
+    /// each script actually writes. The surfaces were settled against
+    /// the scripts themselves, which is where the restic cache and the
+    /// NetworkManager connections came from — the written proposal
+    /// missed both, and the scripts are the truth.
+    #[test]
+    fn the_convergence_units_carry_their_sandboxes() {
+        let dir = tempfile::tempdir().unwrap();
+        context(
+            "schema_version = 1\n[system]\ndesktop = \"niri\"\nbrew = true\n\
+             [snapshots]\nenable = true\ntarget = \"/var/home\"\n\
+             [backup]\nenable = true\nrepo = \"s3:https://minio.example:9000/kuma\"\n\
+             keep_daily = 3\nkeep_weekly = 2\nkeep_monthly = 1\n",
+            dir.path(),
+        );
+        for (unit, paths) in [
+            ("kuma-backup.service", "ReadWritePaths=/var/lib/kuma /var/cache/restic"),
+            (
+                "kuma-restore.service",
+                "ReadWritePaths=/var/lib/kuma /var/home /var/cache/restic /etc/NetworkManager/system-connections",
+            ),
+            ("kuma-flatpak-sync.service", "ReadWritePaths=/var/lib/flatpak /var/lib/kuma"),
+            ("kuma-brew-setup.service", "ReadWritePaths=/home/linuxbrew"),
+        ] {
+            let text = std::fs::read_to_string(dir.path().join(unit)).unwrap();
+            assert!(
+                text.contains("NoNewPrivileges=yes") && text.contains("ProtectSystem=strict"),
+                "the sandbox is the point: {unit}: {text}"
+            );
+            assert!(
+                text.contains(paths),
+                "{unit} writes exactly its settled surface ({paths}): {text}"
+            );
+        }
+    }
+
+    /// The SUID inventory ships beside the declared flatpak list, and
+    /// the build's assertion is one-directional: a path the golden
+    /// does not name fails the compose; a golden path a smaller
+    /// preset's packages do not carry is fine.
+    #[test]
+    fn the_suid_golden_block_ships_the_inventory_and_the_diff() {
+        let cfg = config("schema_version = 1\n[system]\ndesktop = \"niri\"\n");
+        let text = blocks::emitted(&cfg, "suid-golden");
+        assert!(
+            text.contains("COPY suid-golden /usr/lib/kuma/suid.golden"),
+            "the inventory ships where the running machine can read it: {text}"
+        );
+        assert!(
+            text.contains("comm -13 /usr/lib/kuma/suid.golden -"),
+            "the assertion is the golden diff, new paths only: {text}"
+        );
+    }
+
     /// The builder label carries `git describe`, so it moves with every
     /// commit — the one line of the Containerfile that is about the
     /// build rather than the declaration. Normalized on both sides, or
