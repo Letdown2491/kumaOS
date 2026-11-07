@@ -1,5 +1,60 @@
 # Changelog
 
+## v45.1.0 (2026-11-07)
+
+- **`kuma run no-home|airlock` — the sandbox a build tool's scripts
+  deserve.** `npm install` runs lifecycle scripts on every package it
+  touches, and pip's own documentation answers "running arbitrary code
+  from distributions" for what an install does. The verb runs the
+  command under bubblewrap — unprivileged, no setuid bit, already in
+  every image — with the system read-only, a fresh `/dev` and `/proc`,
+  a `/tmp` that vanishes when it exits, and the point: an **empty
+  home**, a tmpfs mounted where yours is and gone when the command
+  finishes, so the caches and tokens a postinstall reaches for are not
+  in the sandbox to find. The working directory binds read-write after
+  the home tmpfs (later mounts win), so the project is the one real,
+  writable thing the child sees; the agent sockets are unset; the
+  child cannot TIOCSTI keystrokes back into your terminal
+  (`--new-session`); nothing is left orphaned (`--die-with-parent`).
+  The child's output is yours and its exit code is the command's.
+  `airlock` adds the network removal — loopback only — for scripts
+  that should not phone home while they run. The verb refuses the two
+  spellings that would defeat it: running from the home directory or
+  any directory containing it.
+- **External monitors get brightness.** `ddcutil` rides the image —
+  tagged `uaccess`, so the sitting user's session can reach the i2c
+  bus with no group story, with `i2c-dev` loaded through the module
+  loader the package already ships — and the shell's brightness
+  control speaks DDC/CI through it. This is the machine half of the
+  kumaUI v0.8.0 ride (pin `e333d6e`: DDC/CI brightness, avif through
+  the video path's libav decode, the wallpaper-derived theme's flavor
+  picker in Settings). The smoke asserts the plumbing rides the image.
+- **A new SUID binary fails the compose.** The image bakes a golden
+  list of the seventeen setuid paths the base should have
+  (`/usr/lib/kuma/suid.golden`), and the compose's check runs it — a
+  package update that quietly adds a privileged binary fails the build
+  instead of shipping. One-directional by design: an added SUID bit is
+  the risk class (privilege surface arriving unseen); a removed one is
+  visible at first boot where it matters.
+- **The convergence units run sandboxed.** The four units that touch
+  the machine on a schedule — backup, restore, snapshot, and the daily
+  converge with its gate — run under `NoNewPrivileges` and
+  `ProtectSystem=strict` with their write surfaces settled against
+  what the scripts actually write: restic's cache in
+  `/var/cache/restic`, and NetworkManager's `system-connections` for
+  the restore path.
+- **The release road keeps its composure.** Every cosign invocation
+  retries three times a minute apart (Rekor's transient failures took
+  two road runs on release day — the conflict, the refused connection,
+  and the maintenance window the status page named); the tag watcher
+  checks the registry before dispatching, so re-firing it after a
+  finished promote dispatches no leg; and the save/load digest
+  experiment is run and recorded — the re-serialization is `podman
+  save`'s, so the two-digests-one-content comparison stays retired in
+  favor of trusting bootc's verdict (#68).
+
+## Unreleased
+
 ## v45.0.1 (2026-11-06)
 
 - **`kuma upgrade` no longer refuses a moved declaration — the delta
@@ -53,8 +108,6 @@
   contracts where they live: the post-upgrade check says current,
   the repeat upgrade stages the pure delta path, the no-op upgrade
   exits zero, and the fallback's full compile re-bases the lock.
-
-## Unreleased
 
 ## v45.0.0 (2026-11-05)
 
