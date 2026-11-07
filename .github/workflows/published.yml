@@ -258,7 +258,13 @@ jobs:
   delta-lane:
     if: inputs.delta_target != ''
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    # The unguarded shape: the delta half (three legs, ~36 measured)
+    # AND the fallback half (a full compile, ~115 measured on the
+    # battery's dedicated job) run in this one lap — 42361477223's
+    # lap passed the no-op at 36 minutes and died on the 90-minute
+    # ceiling 54 minutes into the fallback's compile. 240 holds both
+    # halves with headroom.
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
