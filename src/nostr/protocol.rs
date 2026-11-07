@@ -14,7 +14,7 @@
 //! only thing that knows a network exists.
 
 use std::collections::HashMap;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -258,7 +258,7 @@ pub struct Daemon<S: super::vault::SecretStore> {
     /// the bunker worker consumes; made once in [`Daemon::new`], so a
     /// lock-unlock cycle spawns a fresh pool onto a channel the worker
     /// is already reading.
-    inbound: Sender<Event>,
+    inbound: SyncSender<Event>,
     status_tx: Sender<RelayStatus>,
     status_rx: Receiver<RelayStatus>,
     /// The last thing each relay said, as the Status verb drains the
@@ -289,7 +289,15 @@ impl<S: super::vault::SecretStore> Daemon<S> {
         relays: Vec<String>,
         state_dir: Option<std::path::PathBuf>,
     ) -> (Self, Receiver<Event>) {
-        let (inbound, inbound_rx) = channel();
+        // The inbound side is bounded, the status side is not: relay
+        // threads may read frames off the wire faster than the worker
+        // plans them (each planned event costs a NIP-44 decrypt
+        // attempt), and a reconnecting relay's backlog replay is the
+        // legitimate case that looks like a flood. At the bound the
+        // shed is the pool's own (INBOUND shed at the producer), and
+        // the status channel needs no bound — one message per state
+        // change, backoff-capped.
+        let (inbound, inbound_rx) = sync_channel(crate::nostr::pool::INBOUND_CAP);
         let (status_tx, status_rx) = channel();
         let daemon = Self {
             vault,
@@ -493,7 +501,14 @@ impl<S: super::vault::SecretStore> Daemon<S> {
                         bunker.mark_revoked(&pubkey);
                         bunker.evict(&app);
                         if let Some(pool) = self.pool.as_mut() {
-                            pool.drop_app(&pubkey);
+                            // The roads' threads stop AND the state
+                            // map forgets the urls nobody serves
+                            // anymore — a status answered from a
+                            // stale Connected is a lie the next
+                            // report would take minutes to correct.
+                            for url in pool.drop_app(&pubkey) {
+                                self.relay_states.remove(&url);
+                            }
                         }
                     }
                 }
@@ -521,7 +536,12 @@ impl<S: super::vault::SecretStore> Daemon<S> {
                     {
                         bunker.evict(&app);
                         if let Some(pool) = self.pool.as_mut() {
-                            pool.drop_app(&pubkey);
+                            // Revoke's forget, word for word: the
+                            // record and the roads go together, and
+                            // the state map follows the roads.
+                            for url in pool.drop_app(&pubkey) {
+                                self.relay_states.remove(&url);
+                            }
                         }
                     }
                 }
@@ -770,6 +790,10 @@ impl<S: super::vault::SecretStore> Daemon<S> {
         if let Some(pool) = self.pool.take() {
             pool.shutdown();
         }
+        // No roads exist, so no road state is true: the map describes
+        // live connections, and the teardown ended them all. The next
+        // arm repopulates it from the new roads' own reports.
+        self.relay_states.clear();
     }
 
     /// Beat one of the bunker's answer: plan the event under the

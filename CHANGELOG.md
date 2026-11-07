@@ -43,6 +43,25 @@
   what the scripts actually write: restic's cache in
   `/var/cache/restic`, and NetworkManager's `system-connections` for
   the restore path.
+- **The daemon's residue is tightened.** The reviews' MINOR list came
+  forward rather than waiting for 45.2: the vault's `lock` now retires
+  the key with secp256k1's own `non_secure_erase` — the promise the
+  doc made is the code it runs, no new dependency, the crate had the
+  pass built in — and the same pass runs when the vault drops. The
+  inbound relay channel is bounded: a reconnecting relay's backlog
+  replay sheds at the cap instead of growing the daemon's RSS, and a
+  shed is the requester's own timeout — the same end a jammed queue
+  would have given it. The prompts queue caps at 100 and sheds its
+  oldest, by the activity log's own eviction rule. The socket reads a
+  request line under a 1 MiB cap, answers an over-long line with an
+  error before closing, and no longer keeps one connection's
+  secret-carrying buffer alive into the next. Revocation and deletion
+  forget the relay URLs nobody serves anymore, a teardown clears the
+  road-state map outright, and expired `remembered` grants are pruned
+  where they are consulted. Two stay deliberate: the blob's wrapped
+  secrets are ciphertext whose unwrap secret lives in memory by
+  design — zeroizing the dead copies buys nothing — and `clean`'s
+  per-tag `rmi` loop is per-tag tolerance, not an N+1 to fix.
 - **The release road keeps its composure.** Every cosign invocation
   retries three times a minute apart (Rekor's transient failures took
   two road runs on release day — the conflict, the refused connection,

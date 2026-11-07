@@ -5,11 +5,12 @@
 //! collection is the wall — it is already
 //! PAM-unlocked at greetd, so a fresh machine needs no second secret and
 //! no new passphrase UX — and the vault is honest about that being a
-//! gate: `lock` releases the key from use and refuses to sign (an
-//! ownership drop, not a scrub — the bytes are not zeroized and can
-//! linger in freed heap until the allocator reuses them), `unlock`
-//! re-reads it, and neither pretends to survive an attacker who is
-//! already running as the user with the session unlocked. The upgrade to
+//! gate: `lock` retires the key from memory — secp256k1's own
+//! `non_secure_erase`, a volatile pass over the 32 bytes; not a
+//! promise against a swap file, though the image's sysctl floor
+//! already refuses core dumps — and refuses to sign, `unlock` re-reads
+//! it, and neither pretends to survive an attacker who is already
+//! running as the user with the session unlocked. The upgrade to
 //! an independent-passphrase vault later is a change of what fills the
 //! same blob, not a schema change.
 //!
@@ -225,6 +226,24 @@ pub struct Vault<S: SecretStore> {
     pubkey_cache: std::sync::Mutex<Option<Option<PublicKey>>>,
 }
 
+/// Take the key out and erase the bytes as it goes — secp256k1's own
+/// `non_secure_erase`, the crate's opt-in volatile pass over the 32
+/// bytes. `lock`'s promise is that the key is gone from memory; this
+/// is what makes the promise true instead of an ownership drop the
+/// allocator may not have overwritten yet. The same pass runs when
+/// the vault itself drops.
+fn retire(key: &mut Option<SecretKey>) {
+    if let Some(mut taken) = key.take() {
+        taken.non_secure_erase();
+    }
+}
+
+impl<S: SecretStore> Drop for Vault<S> {
+    fn drop(&mut self) {
+        retire(&mut self.key);
+    }
+}
+
 impl<S: SecretStore> Vault<S> {
     pub fn new(store: S) -> Self {
         Self {
@@ -392,7 +411,7 @@ impl<S: SecretStore> Vault<S> {
     /// same identity back. The outstanding secrets stay too — a lock
     /// is momentary, and a URI that outlived the lock still pairs.
     pub fn lock(&mut self) {
-        self.key = None;
+        retire(&mut self.key);
     }
 
     /// Mint a fresh one-time pairing secret and persist it. The secret

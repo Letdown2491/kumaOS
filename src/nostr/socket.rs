@@ -9,7 +9,7 @@
 //! a same-uid process is inside the trust boundary already, and
 //! anything else is not getting past the kernel.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -19,6 +19,13 @@ use anyhow::{anyhow, Context, Result};
 
 use super::protocol::{self, Daemon};
 use super::vault::SecretStore;
+
+/// The request line's cap: a real request carries an event's params or
+/// an ncryptsec — kilobytes — and nothing honest arrives megabyte-
+/// sized on a 0600 socket whose peer is the same uid. The bound is
+/// what turns a runaway sender into a refused line instead of the
+/// daemon's RSS.
+const MAX_LINE: usize = 1024 * 1024;
 
 /// The socket path under the session's runtime directory. The same name
 /// the unit will own, the CLI will look for, and the doctor's socket
@@ -105,11 +112,25 @@ fn one_connection<S: SecretStore>(stream: UnixStream, daemon: Arc<Mutex<Daemon<S
         .context("building the connection runtime")?;
     let mut writer = stream.try_clone().context("cloning the socket for writing")?;
     let mut reader = BufReader::new(stream);
-    let mut line = String::new();
     loop {
-        line.clear();
-        let read = reader.read_line(&mut line)?;
+        // A fresh buffer per line, and a hard cap on the read. The
+        // line a request rides can carry a secret — import, export —
+        // and `clear()` keeps the allocation: the buffer would hold
+        // the last request's material until the connection's EOF.
+        // Fresh per line, and the cap keeps a runaway sender from
+        // growing the daemon's RSS to its own heart's content: over
+        // the cap the answer is the error and the door closes behind
+        // it, the tail of an over-long line being nobody's request.
+        let mut line = String::new();
+        let read = reader.by_ref().take(MAX_LINE as u64 + 1).read_line(&mut line)?;
         if read == 0 {
+            return Ok(());
+        }
+        if read > MAX_LINE {
+            let answer =
+                protocol::err_response(anyhow!("the request line exceeds the {MAX_LINE}-byte cap"));
+            writer.write_all(protocol::encode(&answer).as_bytes())?;
+            writer.flush()?;
             return Ok(());
         }
         let answer = match protocol::decode(line.trim_end()) {

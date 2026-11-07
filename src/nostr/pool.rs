@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -102,6 +102,7 @@ pub(crate) enum Fan {
 /// queue would hand each event to one thread where two roads may
 /// need it.
 struct Road {
+    url: String,
     own: bool,
     app: Option<PublicKey>,
     stop: Arc<AtomicBool>,
@@ -112,6 +113,11 @@ struct Road {
 /// `inbound` receiver, and publishes the bunker's answers down the
 /// road each answer names — fanning out, because two roads may both
 /// carry one answer.
+/// The inbound channel's bound: the relay threads' shed point — the
+/// try_send at the producer sheds at this many queued events. See
+/// Daemon::new for why the bound sits on this side and not status's.
+pub(crate) const INBOUND_CAP: usize = 1000;
+
 pub struct RelayPool {
     /// Every road with its sender beside it: the fan-out's whole
     /// book.
@@ -130,7 +136,7 @@ impl RelayPool {
     pub fn spawn(
         relays: Vec<String>,
         bunker_pubkey: PublicKey,
-        inbound: Sender<Event>,
+        inbound: SyncSender<Event>,
         status: Sender<RelayStatus>,
     ) -> Self {
         Self::spawn_with_timing(relays, bunker_pubkey, inbound, status, Timing::default())
@@ -141,7 +147,7 @@ impl RelayPool {
     fn spawn_with_timing(
         relays: Vec<String>,
         bunker_pubkey: PublicKey,
-        inbound: Sender<Event>,
+        inbound: SyncSender<Event>,
         status: Sender<RelayStatus>,
         timing: Timing,
     ) -> Self {
@@ -157,7 +163,7 @@ impl RelayPool {
         own: bool,
         app: Option<PublicKey>,
         bunker_pubkey: PublicKey,
-        inbound: &Sender<Event>,
+        inbound: &SyncSender<Event>,
         status: &Sender<RelayStatus>,
         timing: Timing,
     ) {
@@ -167,18 +173,22 @@ impl RelayPool {
             let stop = stop.clone();
             let inbound = inbound.clone();
             let status = status.clone();
+            let thread_url = url.clone();
             move || {
-                one_relay(url, bunker_pubkey, inbound, status, outbound_rx, stop, timing);
+                one_relay(thread_url, bunker_pubkey, inbound, status, outbound_rx, stop, timing);
             }
         });
-        self.roads.push((Road { own, app, stop, handle }, outbound));
+        // The road keeps the url beside the thread: what drop_app
+        // reads to tell a URL nobody serves anymore from one the
+        // declared set still runs.
+        self.roads.push((Road { url, own, app, stop, handle }, outbound));
     }
 
     fn spawn_own(
         &mut self,
         relays: Vec<String>,
         bunker_pubkey: PublicKey,
-        inbound: &Sender<Event>,
+        inbound: &SyncSender<Event>,
         status: &Sender<RelayStatus>,
         timing: Timing,
     ) {
@@ -200,7 +210,7 @@ impl RelayPool {
         app: &PublicKey,
         relays: Vec<String>,
         bunker_pubkey: PublicKey,
-        inbound: &Sender<Event>,
+        inbound: &SyncSender<Event>,
         status: &Sender<RelayStatus>,
     ) {
         for url in relays {
@@ -226,9 +236,11 @@ impl RelayPool {
 
     /// Tear one app's roads down: the revocation's own half. The
     /// threads exit on their next beat; the declared set's roads are
-    /// nobody else's to stop.
-    pub fn drop_app(&mut self, app: &PublicKey) {
-        self.app_urls.remove(app);
+    /// nobody else's to stop. Returns the URLs the dropped roads
+    /// served that no remaining road serves — the caller's state map
+    /// names them, and a stale Connected there is a lie.
+    pub fn drop_app(&mut self, app: &PublicKey) -> Vec<String> {
+        let gone = self.app_urls.remove(app).unwrap_or_default();
         self.roads.retain(|(road, _)| {
             let stays = road.app.as_ref() != Some(app);
             if !stays {
@@ -236,6 +248,9 @@ impl RelayPool {
             }
             stays
         });
+        gone.into_iter()
+            .filter(|url| !self.roads.iter().any(|(road, _)| road.url == *url))
+            .collect()
     }
 
     /// Whether an app's roads are still threaded — what the teardown
@@ -307,7 +322,7 @@ impl RelayPool {
 fn one_relay(
     url: String,
     bunker_pubkey: PublicKey,
-    inbound: Sender<Event>,
+    inbound: SyncSender<Event>,
     status: Sender<RelayStatus>,
     outbound: Receiver<(Event, Fan)>,
     stop: Arc<AtomicBool>,
@@ -349,7 +364,7 @@ fn one_relay(
 fn connect_and_serve(
     url: &str,
     bunker_pubkey: PublicKey,
-    inbound: &Sender<Event>,
+    inbound: &SyncSender<Event>,
     status: &Sender<RelayStatus>,
     outbound: &Receiver<(Event, Fan)>,
     stop: &AtomicBool,
@@ -423,7 +438,13 @@ fn connect_and_serve(
                     suppressed += 1;
                 }
                 for event in events {
-                    let _ = inbound.send(event);
+                    // The shed, not the block: a relay replaying a
+                    // backlog can read frames off the wire faster than
+                    // the worker plans them, and the channel's bound
+                    // is where the flood stops. A shed event is a
+                    // requester's timeout — the same end a jammed
+                    // queue would give it, without the RSS.
+                    let _ = inbound.try_send(event);
                 }
             }
             Ok(Message::Ping(payload)) => {
@@ -517,6 +538,37 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     #[test]
+    fn drop_app_returns_the_urls_nobody_serves_anymore() {
+        let signer = Keys::generate();
+        let app = Keys::generate();
+        let bunker_pubkey = signer.public_key();
+        let own = StubRelay::start(vec![]);
+        let app_relay = StubRelay::start(vec![]);
+        let (inbound_tx, _inbound_rx) = sync_channel::<Event>(INBOUND_CAP);
+        let (status_tx, _status_rx) = channel::<RelayStatus>();
+        let mut pool = RelayPool::spawn(
+            vec![own.url.clone()],
+            bunker_pubkey,
+            inbound_tx.clone(),
+            status_tx.clone(),
+        );
+        pool.subscribe_relays(
+            &app.public_key(),
+            vec![app_relay.url.clone()],
+            bunker_pubkey,
+            &inbound_tx,
+            &status_tx,
+        );
+        assert_eq!(pool.app_road_count(&app.public_key()), 1, "the app's road threaded");
+        let gone = pool.drop_app(&app.public_key());
+        assert_eq!(pool.app_road_count(&app.public_key()), 0);
+        // The app's relay is served by nobody now — it is the answer —
+        // and the declared set's road keeps it out of that answer.
+        assert_eq!(gone, vec![app_relay.url.clone()]);
+        assert!(pool.drop_app(&app.public_key()).is_empty(), "a second drop names nothing");
+    }
+
+    #[test]
     fn a_request_event_flows_relay_to_pool_and_an_answer_flows_back() {
         let signer = Keys::generate();
         let app = Keys::generate();
@@ -534,7 +586,7 @@ mod tests {
             .unwrap();
 
         let stub = StubRelay::start(vec![request.clone()]);
-        let (inbound_tx, inbound_rx) = channel::<Event>();
+        let (inbound_tx, inbound_rx) = sync_channel::<Event>(INBOUND_CAP);
         let (status_tx, status_rx) = channel::<RelayStatus>();
         let pool = RelayPool::spawn(vec![stub.url.clone()], bunker_pubkey, inbound_tx, status_tx);
 
@@ -609,7 +661,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(500));
         });
 
-        let (inbound_tx, inbound_rx) = channel::<Event>();
+        let (inbound_tx, inbound_rx) = sync_channel::<Event>(INBOUND_CAP);
         let (status_tx, _status_rx) = channel::<RelayStatus>();
         let pool = RelayPool::spawn(vec![url], bunker_pubkey, inbound_tx, status_tx);
         std::thread::sleep(Duration::from_millis(300));
@@ -678,7 +730,7 @@ mod tests {
             }
         });
 
-        let (inbound_tx, _inbound_rx) = channel::<Event>();
+        let (inbound_tx, _inbound_rx) = sync_channel::<Event>(INBOUND_CAP);
         let (status_tx, status_rx) = channel::<RelayStatus>();
         let pool = RelayPool::spawn_with_timing(
             vec![url],

@@ -250,6 +250,13 @@ const PROMPT_TTL_SECS: u64 = 300;
 /// The activity log's cap: the last 500 entries survive, which is
 /// more than a person reads and few enough that the file stays a file.
 const LOG_CAP: usize = 500;
+/// The prompts queue's cap, by the log's own rule: a paired app at
+/// Ask level spraying distinct payloads creates a card per request,
+/// and the rate limiter bounds the rate, not the queue. At the cap
+/// the oldest card is shed — its responders' senders drop, the
+/// requester times out, and the person was never asked about what
+/// nobody has room to still be asking.
+const PROMPTS_MAX: usize = 100;
 
 /// The batched writes' period. A kill can cost the last few seconds of
 /// activity log — a record of what apps asked, not state anything
@@ -810,6 +817,10 @@ impl super::bunker::Gate for Engine {
             paired.last_used_at = Some(unix_now());
             let level = paired.level;
             let trusted_everywhere = level == Level::Trust;
+            // Expired grants are pruned where they are consulted: an
+            // expired entry answers the same as an absent one, but a
+            // map that is only ever consulted is never only grown.
+            inner.remembered.retain(|_, until| *until > unix_now());
             let trusted_here = inner
                 .remembered
                 .get(&remember_key(app, method))
@@ -880,6 +891,12 @@ impl super::bunker::Gate for Engine {
                             responders: vec![tx],
                         },
                     ));
+                    // The cap is the log's eviction, run here: shed the
+                    // oldest, whose askers time out waiting on senders
+                    // that no longer exist.
+                    if inner.prompts.len() > PROMPTS_MAX {
+                        inner.prompts.remove(0);
+                    }
                     id
                 }
             }
@@ -1172,6 +1189,50 @@ mod tests {
         let prompt = engine.prompts().into_iter().next().expect("the ask is queued");
         engine.approve(&prompt.id, None).unwrap();
         assert!(matches!(ask.await.unwrap(), Decision::Allow));
+    }
+
+    #[tokio::test]
+    async fn the_prompts_queue_sheds_its_oldest_under_a_flood() {
+        let engine = engine();
+        let app = app();
+        // Distinct params so no two asks join one card: the flood the
+        // cap exists for is distinct payloads, not one ask repeated.
+        let mut asks = Vec::new();
+        for n in 0..(PROMPTS_MAX + 10) {
+            let engine_for_ask = engine.clone();
+            let params = vec![n.to_string()];
+            asks.push(tokio::spawn(async move {
+                engine_for_ask.decide(&app, &NostrConnectMethod::GetPublicKey, &params).await
+            }));
+        }
+        // The spawned asks queue at the scheduler's pace; the length
+        // stabilizes at the cap and stays there.
+        for _ in 0..1000 {
+            if engine.prompts().len() == PROMPTS_MAX {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(engine.prompts().len(), PROMPTS_MAX, "the queue holds the cap, not the flood");
+        while let Some(prompt) = engine.prompts().into_iter().next() {
+            engine.approve(&prompt.id, None).unwrap();
+        }
+        let mut allows = 0;
+        let mut dropped = 0;
+        for ask in asks {
+            match ask.await.unwrap() {
+                Decision::Allow => allows += 1,
+                Decision::Deny(reason) => {
+                    assert!(
+                        reason.contains("dropped"),
+                        "a shed ask's denial names the drop, not a crash: {reason}"
+                    );
+                    dropped += 1;
+                }
+            }
+        }
+        assert_eq!(allows, PROMPTS_MAX, "every surviving card allowed");
+        assert_eq!(dropped, 10, "the shed are the oldest ten");
     }
 
     #[tokio::test]
