@@ -1729,14 +1729,36 @@ fstype=$(findmnt -no FSTYPE -T "$target" 2>/dev/null | head -1 || true)
 # boot after the first.
 [ "$(stat -c %i "$target")" = 256 ] && { say "$target is already a subvolume"; exit 0; }
 
-# Only while nothing lives there. This runs before the account converger
-# and before any login, so on a first boot it is empty; on any later one
-# it holds somebody's home directory and this must leave it alone.
-if [ -n "$(ls -A "$target")" ]; then
-    say "$target already holds $(ls -A "$target" | tr '\n' ' ')"
-    say "leaving it alone: making it a subvolume now would mean moving what is in it"
-    exit 0
-fi
+# Only while nothing with data in it lives there. This runs before the
+# account converger and before any login, so on a first boot it is
+# empty; on any later one it holds somebody's home directory and this
+# must leave it alone. Empty directories are the exception, and they
+# are the shape of exactly this boot: a tmpfiles `d` entry creates its
+# path in sysinit, ahead of this unit — the brew prefix's parent landed
+# that way, and the flat decline left every fresh install's /var/home
+# an ordinary directory (snapshots taking nothing) because the one
+# entry inside it was a dir tmpfiles itself had just made. An empty
+# directory carries no data, so the conversion steps over it: removed
+# before the rmdir, recreated with its mode after the subvolume
+# exists — a unit whose sandbox names the path needs it back the same
+# boot. A file, a symlink, a non-empty directory: declines, exactly
+# as before.
+empty_dirs=()
+while IFS= read -r entry; do
+    if [ -L "$entry" ] || [ ! -d "$entry" ] || [ -n "$(ls -A "$entry")" ]; then
+        say "$target already holds content ($entry)"
+        say "leaving it alone: making it a subvolume now would mean moving what is in it"
+        exit 0
+    fi
+    empty_dirs+=("$entry")
+done < <(find "$target" -mindepth 1 -maxdepth 1 -print)
+entry_modes=()
+for entry in "${empty_dirs[@]}"; do
+    entry_modes+=("$(stat -c %a "$entry")")
+done
+for entry in "${empty_dirs[@]}"; do
+    rmdir "$entry"
+done
 
 # Carried across rather than assumed: tmpfiles made this directory with
 # the mode and label the system expects, and the subvolume replacing it
@@ -1747,6 +1769,11 @@ rmdir "$target"
 btrfs subvolume create "$target" >/dev/null
 chmod "$mode" "$target"
 if [ "$label" != '?' ]; then chcon "$label" "$target"; fi
+i=0
+for entry in "${empty_dirs[@]}"; do
+    mkdir -m "${entry_modes[$i]}" "$target/$(basename "$entry")"
+    i=$((i + 1))
+done
 "#;
 
 /// Runs before any login (console, greeter, ssh) so the declared account

@@ -1755,9 +1755,12 @@ mod tests {
         );
 
         // And the order of the guards: emptiness is checked before
-        // anything is removed, on the same line of reasoning.
+        // anything is removed, on the same line of reasoning. The check
+        // is per-entry now (empty directories are stepped over; anything
+        // with content still declines before the rmdir), but the shape
+        // holds: nothing is removed before the guard that reads it.
         let body = std::fs::read_to_string(&script).unwrap();
-        let empty_at = body.find(r#"[ -n "$(ls -A "$target")" ]"#).unwrap();
+        let empty_at = body.find(r#"[ -n "$(ls -A "$entry")" ]"#).unwrap();
         let rmdir_at = body.find(r#"rmdir "$target""#).unwrap();
         assert!(empty_at < rmdir_at);
     }
