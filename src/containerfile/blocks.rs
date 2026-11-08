@@ -520,6 +520,13 @@ RUN find /run /tmp -mindepth 1 -delete; \
 /// path a preset's smaller package set does not carry is fine. Sorted
 /// LC_ALL=C on both sides — comm's contract, and the check re-sorts
 /// with the same locale rather than trusting the build's.
+///
+/// /usr/libexec/qemu-bridge-helper is pinned for declarations that
+/// carry qemu-kvm: the setuid bit IS the unprivileged-bridge mechanism
+/// (an unprivileged qemu attaches a bridge interface through it), so
+/// the bit is deliberate, not an accident to strip. Presets without
+/// qemu never ship the file; the one-directional contract above means
+/// their enumerations simply don't name it.
 pub(crate) const SUID_GOLDEN: &str = r#"/usr/bin/chage
 /usr/bin/chfn
 /usr/bin/chsh
@@ -539,6 +546,7 @@ pub(crate) const SUID_GOLDEN: &str = r#"/usr/bin/chage
 /usr/bin/unix_chkpwd
 /usr/lib/polkit-1/polkit-agent-helper-1
 /usr/libexec/dbus-1/dbus-daemon-launch-helper
+/usr/libexec/qemu-bridge-helper
 "#;
 
 pub(crate) const SUID_CHECK: &str = r#"
