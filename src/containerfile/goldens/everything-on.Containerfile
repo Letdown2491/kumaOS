@@ -120,6 +120,7 @@ COPY brew-profile.fish /etc/fish/conf.d/kuma-brew.fish
 COPY brews /usr/lib/kuma/brews
 COPY --chmod=755 kuma-brew-sync /usr/libexec/kuma-brew-sync
 COPY kuma-brew-sync.service /usr/lib/systemd/system/kuma-brew-sync.service
+COPY kuma-brew-tmpfiles.conf /usr/lib/tmpfiles.d/kuma-brew.conf
 COPY kuma-brew-sync.timer /usr/lib/systemd/system/kuma-brew-sync.timer
 COPY --chmod=755 kuma-converge-gate /usr/libexec/kuma-converge-gate
 COPY kuma-brew-sync-daily.service /usr/lib/systemd/system/kuma-brew-sync-daily.service

@@ -915,7 +915,7 @@ mod tests {
                 "ReadWritePaths=/var/lib/kuma /var/home /var/cache/restic /etc/NetworkManager/system-connections",
             ),
             ("kuma-flatpak-sync.service", "ReadWritePaths=/var/lib/flatpak /var/lib/kuma"),
-            ("kuma-brew-setup.service", "ReadWritePaths=/home/linuxbrew"),
+            ("kuma-brew-setup.service", "ReadWritePaths=/var/home/linuxbrew"),
         ] {
             let text = std::fs::read_to_string(dir.path().join(unit)).unwrap();
             assert!(

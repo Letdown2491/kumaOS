@@ -3213,15 +3213,34 @@ IOWeight=25
 # The installer's whole write surface is the prefix it extracts and
 # chowns; strict holds the rest of the tree while root runs the
 # curl-tar ladder. The network stays open — fetching the tarball is
-# the job.
+# the job. The hole is the PHYSICAL path and it exists before this
+# unit can start: tmpfiles.d/kuma-brew.conf creates /var/home/linuxbrew
+# in sysinit, because a ReadWritePaths entry that names a path not yet
+# on disk fails the namespace setup and the unit dies before its
+# script runs — the v45.1.0 road's red, all three legs of it. /home is
+# a symlink to /var/home here; naming the physical side leaves nothing
+# for the resolution to decide.
 NoNewPrivileges=yes
 ProtectSystem=strict
 PrivateTmp=yes
-ReadWritePaths=/home/linuxbrew
+ReadWritePaths=/var/home/linuxbrew
 
 [Install]
 WantedBy=multi-user.target
 "#;
+
+/// The prefix's parent, created at boot before the setup unit's mount
+/// namespace is assembled. A ReadWritePaths entry that names a path
+/// not yet on disk fails the namespace setup and the unit dies before
+/// its script runs — the v45.1.0 road's red, three legs of it
+/// (install-and-boot, encrypted-boot, and the ISO lap's degraded
+/// check, which is the same unit failing on the live image). tmpfiles
+/// runs in sysinit.target, ahead of multi-user's units, and `d` on an
+/// existing directory is a no-op: the first boot creates what the
+/// namespace needs, every later boot changes nothing. Root-owned by
+/// design — the setup script's own guard refuses a prefix that is not
+/// root's, and this is what keeps it root's from the first second.
+pub(crate) const BREW_TMPFILES: &str = "d /var/home/linuxbrew 0755 root root -\n";
 
 /// Converge installed formulae to the declared list. Brew is
 /// single-prefix, with no scope split that could stand in for
@@ -3872,6 +3891,7 @@ fn brew(e: &mut Emitter<'_>) {
     let sync_timer = e.stage("kuma-brew-sync.timer", BREW_SYNC_TIMER);
     let gate = e.stage("kuma-converge-gate", CONVERGE_GATE_SCRIPT);
     let daily_service = e.stage("kuma-brew-sync-daily.service", BREW_SYNC_DAILY_SERVICE);
+    let tmpfiles = e.stage("kuma-brew-tmpfiles.conf", BREW_TMPFILES);
 
     // git-core: brew needs git at runtime to update itself.
     // tar: the setup script unpacks brew's tarball with it. fedora-bootc
@@ -3888,6 +3908,9 @@ fn brew(e: &mut Emitter<'_>) {
     e.copy(&brews, "/usr/lib/kuma/brews");
     e.copy_exec(&sync, "/usr/libexec/kuma-brew-sync");
     e.copy(&sync_service, "/usr/lib/systemd/system/kuma-brew-sync.service");
+    // The namespace's hole must exist before the unit that names it
+    // can start — see BREW_TMPFILES.
+    e.copy(&tmpfiles, "/usr/lib/tmpfiles.d/kuma-brew.conf");
     e.copy(&sync_timer, "/usr/lib/systemd/system/kuma-brew-sync.timer");
     e.copy_exec(&gate, "/usr/libexec/kuma-converge-gate");
     e.copy(&daily_service, "/usr/lib/systemd/system/kuma-brew-sync-daily.service");
