@@ -205,6 +205,7 @@ COPY --chmod=755 kuma-backup /usr/libexec/kuma-backup
 COPY kuma-backup.service /usr/lib/systemd/system/kuma-backup.service
 COPY kuma-backup.timer /usr/lib/systemd/system/kuma-backup.timer
 RUN systemctl enable kuma-backup.timer
+COPY kuma-restic-tmpfiles.conf /usr/lib/tmpfiles.d/kuma-restic.conf
 COPY --chmod=755 kuma-restore /usr/libexec/kuma-restore
 COPY kuma-restore.service /usr/lib/systemd/system/kuma-restore.service
 RUN systemctl enable kuma-restore.service

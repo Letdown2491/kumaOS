@@ -1460,6 +1460,22 @@ smoke_published() {
     fi
     ok "no kuma unit failed"
 
+    # The sandbox class, asked by name: a ReadWritePaths entry naming a
+    # path nothing has created yet fails the unit's namespace setup
+    # before its script can create it, and the failure hides from the
+    # failed-units check above whenever the unit starts after the lap's
+    # window — the backup timer's Persistent catch-up with a random
+    # delay of up to an hour is exactly that shape (the v45.1.0 road's
+    # red was brew's; this probe keeps the backup's from ever being
+    # silent). The dirs the units' own scripts create post-namespace
+    # must exist by now, whether tmpfiles made them or the installer
+    # did: the probe only fires when the unit ships.
+    if guest test -f /usr/lib/systemd/system/kuma-backup.service; then
+        guest test -d /var/cache/restic \
+            || bad "kuma-backup ships but /var/cache/restic does not exist at boot — its namespace will die on the timer's first catch-up"
+        ok "the backup surface's write paths exist at boot"
+    fi
+
     # The boot-time baseline, recorded on green laps too: unit_evidence
     # above asks critical-chain only when something already failed, so a
     # converger that quietly added half a second to every boot passed

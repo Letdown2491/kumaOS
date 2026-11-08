@@ -4507,6 +4507,20 @@ fn snapshots(e: &mut Emitter<'_>) {
 /// validation already refuses backup.enable without snapshots.enable,
 /// so nesting it would hide that dependency behind an `if` instead of
 /// stating it where somebody reading the Containerfile can see it.
+/// The restic cache dir, created at boot before the backup or restore
+/// unit's mount namespace is assembled. Same class as BREW_TMPFILES: a
+/// ReadWritePaths entry naming a path not yet on disk fails the
+/// namespace setup and the unit dies before its script's own
+/// `install -d` can run. Worse than brew's, though, in when it can be
+/// seen: kuma-backup.timer is Persistent with a random delay of up to
+/// an hour, so its first fire on a fresh install lands outside every
+/// road lap's window — without the tmpfiles entry, every fresh machine
+/// with a declared backup gets a dead backup failing daily, and the
+/// road reads green. Restore (the disaster-recovery path) names the
+/// same hole. 0700 root: the cache holds restic's local index and
+/// nobody but root reads it.
+pub(crate) const RESTIC_TMPFILES: &str = "d /var/cache/restic 0700 root root -\n";
+
 fn backup(e: &mut Emitter<'_>) {
     let config = e.config;
     if !config.backup.enable {
@@ -4517,6 +4531,7 @@ fn backup(e: &mut Emitter<'_>) {
     let timer = e.stage("kuma-backup.timer", backup_timer(&config.backup.interval));
     let restore = e.stage("kuma-restore", RESTORE_SCRIPT);
     let restore_service = e.stage("kuma-restore.service", RESTORE_SERVICE);
+    let tmpfiles = e.stage("kuma-restic-tmpfiles.conf", RESTIC_TMPFILES);
 
     // restic is named for the same reason btrfs-progs is above: a
     // timer that dies on a missing binary is a backup that silently
@@ -4527,6 +4542,9 @@ fn backup(e: &mut Emitter<'_>) {
     e.copy(&service, "/usr/lib/systemd/system/kuma-backup.service");
     e.copy(&timer, "/usr/lib/systemd/system/kuma-backup.timer");
     e.enable(&["kuma-backup.timer"]);
+    // The cache dir must exist before either unit's namespace is
+    // assembled — see RESTIC_TMPFILES.
+    e.copy(&tmpfiles, "/usr/lib/tmpfiles.d/kuma-restic.conf");
     // The other end of the promise. Enabled always and gated on a
     // request file, because the machine that needs it has been
     // installed exactly once and there is nobody to start it.
