@@ -123,7 +123,16 @@ checklist for the adopt day):
   `live_secret_service_roundtrip` (src/nostr/secrets.rs:203), run on
   hardware, daemon-agnostic by construction. CONFIRMED (tree read).
 - kumaui: no keyring client in the tree (beta-era pass CONFIRMED
-  2026-10-29; re-grepped 2026-11-08, still nothing).
+  2026-10-29; re-grepped 2026-11-08, still nothing) — and the kumaUI-side
+  audit (`kumaui docs/research/oo7-migration-kumaui-impact.md`, spot-checked
+  here) sharpens the shape: every vault contact in all five crates is a
+  `kuma-nostr` CLI subprocess, never D-Bus. The one `oo7` in kumaui's lock
+  is the *vendored gpui's* inert 0.6 client crate (nothing calls its
+  credentials API; it drags unmaintained zvariant 5.15 into the lock),
+  and two copy strings in `nostr_panel.rs` ("The keyring is open in this
+  session") assert a state the UI cannot see — wrong in exactly the
+  adopt lane's risk scenarios, a two-line softening if we adopt, never a
+  blocker. kumaUI is a passenger.
 
 Net: **what adopting actually drops is a Secret Service daemon whose
 only wired consumer in the image is the nostr vault, plus two
@@ -340,6 +349,14 @@ the package-list swap:
   nostr layer's own key-export path (docs/nostr.md's backup guidance)
   is the real safety net and should be named in the release notes for
   the cutover release.
+- **The kumaUI side costs nothing** (kumaui `docs/research/oo7-migration-kumaui-impact.md`,
+  2026-11-08): no code, test, or dependency change; the failure modes
+  the adopt lane gates on degrade in the panels as designed (error
+  toasts, an honest locked state from the daemon's own `VaultFact`).
+  The two watch items there — the "keyring is open" copy softening and
+  the VENDORED.md line for gpui's inert oo7 crate — ride the adopt lap
+  if it happens, and its zbus 5/zvariant 5 advisory hygiene is a
+  kumaUI thread the adoption does not own.
 
 ## 7. Verdict
 
