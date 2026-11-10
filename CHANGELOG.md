@@ -74,6 +74,26 @@
 
 ## Unreleased
 
+- **The release road builds the siblings once, and the nightly gets a
+  ledger.** Two road changes from the 45.2 plan. First (#74's Option
+  A): every job that boots a disk was re-running the kumaui sibling
+  compile — vendored gpui, release mode, no cache, ~100 minutes — for
+  binaries another job of the same commit had already built an hour
+  earlier, and the tag road paid it four times. ci now has a
+  `siblings` job, once per head, uploading the fifteen files the
+  compose's staging gate resolves beside the running kuma (kuma, the
+  five shells, the nostr trio, the entries and icons); ci's six
+  heavy jobs download it from their own run, and the tag road's four
+  boot jobs wait for ci's run of the same commit and download from
+  there (`actions: read` is the whole added scope). The road's target
+  is ~1h15, down from ~3h10. Second: ci's boot legs skip on push,
+  which made a first-boot unit bug on main invisible until a tag spent
+  its road discovering it — 45.1.0's brew and home-subvol reds were
+  both that class. The heavy battery's daily scheduled run now keeps a
+  ledger: one issue, opened red with the run link, commented on each
+  further red, closed green — one thread, because a nightly that
+  opens a fresh issue a day is a wall of noise no one reads either.
+
 - **`kuma dev install` — the dev loop's promotion step, with a
   receipt.** The container-build-and-stage loop (build in
   `kuma-dev-gcc`, land binaries in `~/.local/bin`, restart the session

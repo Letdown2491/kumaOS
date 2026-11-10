@@ -77,10 +77,18 @@ env:
   CARGO_TERM_COLOR: always
 
 # Declared rather than inherited, same reason as ci.yml. publish.yml
-# calls this with `packages: write` in scope; these jobs only check out
-# and boot, so they say so.
+# calls this with `packages: write` in scope; these jobs only check out,
+# boot, and read back ci's sibling artifact for their own commit, so
+# they say so.
 permissions:
   contents: read
+  # The four boot jobs consume the `kuma-siblings` artifact ci built for
+  # this commit (the Option A pass, #74): the tag road used to re-run
+  # ci's full kumaui compile — vendored gpui, release mode, no cache —
+  # once per job, ~100 minutes a lap for binaries none of the jobs
+  # change. Reading another workflow run's artifacts is the `actions:
+  # read` scope and nothing more.
+  actions: read
 
 jobs:
   install-and-boot:
@@ -91,6 +99,7 @@ jobs:
       - name: install the published image and boot the disk it wrote
         uses: ./.github/actions/install-boot
         with:
+          siblings: download-ci
           smoke_args: --published ${{ inputs.image || 'ghcr.io/letdown2491/kuma:niri' }}
 
       - name: guest console
@@ -123,6 +132,7 @@ jobs:
       - name: install an encrypted disk, then unlock it at the console
         uses: ./.github/actions/install-boot
         with:
+          siblings: download-ci
           smoke_args: >-
             --encrypted
             --published ${{ inputs.image || 'ghcr.io/letdown2491/kuma:niri' }}
@@ -226,6 +236,7 @@ jobs:
       - name: install an old version, upgrade it, and boot what it became
         uses: ./.github/actions/install-boot
         with:
+          siblings: download-ci
           smoke_args: >-
             --published ${{ steps.fixture.outputs.from }}
             --upgrade-to ${{ inputs.image || 'ghcr.io/letdown2491/kuma:niri' }}
@@ -300,6 +311,7 @@ jobs:
       - name: upgrade a published machine through the delta lane
         uses: ./.github/actions/install-boot
         with:
+          siblings: download-ci
           smoke_args: >-
             --published-delta ${{ steps.fixture.outputs.from }}
             --delta-target ${{ inputs.delta_target }}

@@ -32,6 +32,19 @@ inputs:
       image from this tree rather than one from a registry. Empty to skip.
     required: false
     default: ""
+  siblings:
+    description: >-
+      Where the kuma and kumaui sibling binaries come from. `build`
+      (default) builds them here: rust toolchain, cargo build, the
+      kuma-shell action. `download` fetches the `kuma-siblings` artifact
+      the same workflow run's `siblings` job uploaded — the Option A
+      shape (#74), where one head's expensive sibling build happens once
+      and every booting job of that head consumes it. `download-ci`
+      waits for ci's own run of this commit and downloads from there,
+      for the tag road's jobs, whose workflow is not the one that built
+      the binaries.
+    required: false
+    default: "build"
 
 runs:
   using: composite
@@ -64,8 +77,11 @@ runs:
         echo "free after:  $(df -BG / | awk 'NR==2{print $4}')"
 
     - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      if: inputs.siblings == 'build'
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      if: inputs.siblings == 'build'
     - shell: bash
+      if: inputs.siblings == 'build'
       run: cargo build --locked
 
     # Every image this action leads to is a desktop image, and a desktop
@@ -75,7 +91,68 @@ runs:
     # lives here rather than in each job because every job that boots a
     # disk builds an image through this action, and one staging gap is
     # what made all of them red at once.
+    #
+    # The two download modes stand in for both halves when another job
+    # of the same head already paid for the build: `download` for the
+    # same-run shape (ci's heavy jobs, each of which used to re-run the
+    # full sibling compile the run's own `siblings` job had just done
+    # beside it), `download-ci` for the tag road's (whose workflow never
+    # built the siblings — ci did). Same binaries either way, verified
+    # by the smoke's own staleness gate and the compose's stamp gate
+    # downstream; a download that gets nothing fails here, loudly.
+    - name: download the siblings this run's siblings job built
+      if: inputs.siblings == 'download'
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: kuma-siblings
+        path: target/debug
+    - name: wait for ci's siblings build of this commit, then download it
+      if: inputs.siblings == 'download-ci'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        # The tag road starts the moment the tag lands; ci's siblings
+        # job for the same commit is minutes behind, and this is the
+        # road's whole reason for the artifact pass — four jobs were
+        # each re-running ci's compile for a build none of them reads
+        # back. The poll names the newest completed ci run for this
+        # exact sha and asks IT for the artifact, newest-first, so the
+        # main-push run of the same commit (a fast-tier run that built
+        # no siblings) cannot answer for the tag's own; a run still in
+        # progress is a wait, not a miss. Sixty minutes of patience in
+        # two-minute steps, then a loud failure: the road gates here
+        # rather than staging binaries nobody vouched for.
+        deadline=$(( $(date +%s) + 3600 ))
+        while true; do
+          runs=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=20" \
+            --jq '[.workflow_runs[] | select(.status == "completed" and .conclusion != "skipped")] | sort_by(.run_number) | reverse | .[].id' || true)
+          for id in $runs; do
+            if gh run download -R "$REPO" "$id" -n kuma-siblings -D target/debug 2>/dev/null; then
+              echo "downloaded the siblings from ci run $id"
+              break 2
+            fi
+          done
+          [ "$(date +%s)" -lt "$deadline" ] \
+            || { echo "::error::no ci run for $SHA produced a kuma-siblings artifact within 60 minutes"; exit 1; }
+          sleep 120
+        done
+    - name: make the downloaded binaries executable again
+      # Artifacts are zips: the exec bits do not survive the round
+      # trip, and a 0644 kuma fails at the smoke's own first probe.
+      if: inputs.siblings != 'build'
+      shell: bash
+      run: |
+        chmod +x target/debug/kuma target/debug/kuma-shell target/debug/kuma-greeter \
+          target/debug/kuma-files target/debug/kuma-term target/debug/kuma-monitor \
+          target/debug/kuma-nostrd target/debug/kuma-nostr target/debug/nip46-relay
+        target/debug/kuma --version
+
     - uses: ./.github/actions/kuma-shell
+      if: inputs.siblings == 'build'
       with:
         kuma-dir: target/debug
 

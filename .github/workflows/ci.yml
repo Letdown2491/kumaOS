@@ -122,6 +122,65 @@ jobs:
               ;;
           esac
 
+  # The siblings build, once per head (#74's Option A): kuma plus the
+  # five kumaui binaries beside it, as one artifact every booting job of
+  # this run downloads instead of re-running the full sibling compile
+  # itself. Before this, every install-boot job paid the kumaui build —
+  # vendored gpui, release mode, no cache — for binaries the run had
+  # already built an hour earlier one job over, and the tag road paid it
+  # four times across its own jobs. The expensive build now happens
+  # exactly once per head, here.
+  #
+  # The tag push is in the condition beside the heavy runs: the road's
+  # jobs consume this artifact across the workflow boundary, and without
+  # the tag-triggered build there would be nothing to consume — ci runs
+  # its fast tier on tags, and no other run of this sha builds siblings.
+  siblings:
+    runs-on: ubuntu-24.04
+    needs: when
+    if: needs.when.outputs.heavy == 'true' || startsWith(github.ref, 'refs/tags/')
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo build --locked
+      - uses: ./.github/actions/kuma-shell
+        with:
+          kuma-dir: target/debug
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: kuma-siblings
+          # The fifteen files `kuma build`'s staging gate resolves beside
+          # the running kuma: kuma itself, the five kumaui shells, the
+          # nostr road's three (its stamps carry the crate version, not
+          # a commit — the gate holds them to the version), and the
+          # three desktop entries and three icons the seam COPYs. Not
+          # the whole target/debug — the artifact is a handoff, not a
+          # cache, and everything else in there is scaffolding. The
+          # nostr trio is not optional here: the gate demands every
+          # sibling it names, and a job that downloads an artifact
+          # missing three of them fails staging where a build would
+          # have passed.
+          path: |
+            target/debug/kuma
+            target/debug/kuma-shell
+            target/debug/kuma-greeter
+            target/debug/kuma-files
+            target/debug/kuma-term
+            target/debug/kuma-monitor
+            target/debug/kuma-nostrd
+            target/debug/kuma-nostr
+            target/debug/nip46-relay
+            target/debug/kuma-files.desktop
+            target/debug/kuma-term.desktop
+            target/debug/kuma-monitor.desktop
+            target/debug/kuma-files.png
+            target/debug/kuma-term.png
+            target/debug/kuma-monitor.png
+          if-no-files-found: error
+          retention-days: 7
+
   # The gate that runs on every push. It covers everything checkable
   # without a machine to run on, including the cheap tier of the smoke
   # tests: every committed example parses, validates, and compiles to an
@@ -323,7 +382,7 @@ jobs:
   # install itself rather than a second build.
   boot:
     runs-on: ubuntu-24.04
-    needs: when
+    needs: [when, siblings]
     if: needs.when.outputs.heavy == 'true'
     timeout-minutes: 60
     strategy:
@@ -349,6 +408,7 @@ jobs:
       - name: smoke (install + boot)
         uses: ./.github/actions/install-boot
         with:
+          siblings: download
           smoke_args: --install --boot ${{ matrix.example }}
 
       # A boot failure is only useful if the guest's own account of it
@@ -391,7 +451,7 @@ jobs:
   # one red job should say which question failed.
   boot-delta:
     runs-on: ubuntu-24.04
-    needs: when
+    needs: [when, siblings]
     if: needs.when.outputs.heavy == 'true'
     # The delta arm alone: check, staged delta, reboot, divergences.
     # --delta-only is that arm and nothing else — the fallback half
@@ -407,6 +467,7 @@ jobs:
       - name: smoke (boot + delta upgrade)
         uses: ./.github/actions/install-boot
         with:
+          siblings: download
           smoke_args: --boot --delta-only niri
       - name: guest console
         if: failure() || cancelled()
@@ -427,7 +488,7 @@ jobs:
   # job more than any ceiling we were willing to name.
   upgrade-fallback:
     runs-on: ubuntu-24.04
-    needs: when
+    needs: [when, siblings]
     if: needs.when.outputs.heavy == 'true'
     timeout-minutes: 150
     steps:
@@ -435,6 +496,7 @@ jobs:
       - name: smoke (boot + upgrade fallback)
         uses: ./.github/actions/install-boot
         with:
+          siblings: download
           smoke_args: --boot --fallback-only niri
       - name: guest console
         if: failure() || cancelled()
@@ -467,7 +529,7 @@ jobs:
   # tree, so it runs when the tree changes.
   install:
     runs-on: ubuntu-24.04
-    needs: when
+    needs: [when, siblings]
     if: needs.when.outputs.heavy == 'true'
     timeout-minutes: 90
     steps:
@@ -475,6 +537,7 @@ jobs:
       - name: install the image this tree builds, and boot it
         uses: ./.github/actions/install-boot
         with:
+          siblings: download
           prebuild: niri
           smoke_args: --published localhost/kuma-smoke-niri:latest
 
@@ -520,7 +583,7 @@ jobs:
   # check that a hibernated machine comes back.
   hibernate:
     runs-on: ubuntu-24.04
-    needs: when
+    needs: [when, siblings]
     if: needs.when.outputs.heavy == 'true'
     # Longer than the install job it is built from, because it pays for
     # two boots and a hibernation on top of the same install.
@@ -530,6 +593,7 @@ jobs:
       - name: install with a swapfile, hibernate under Secure Boot, resume
         uses: ./.github/actions/install-boot
         with:
+          siblings: download
           prebuild: niri
           smoke_args: >-
             --published localhost/kuma-smoke-niri:latest
@@ -561,7 +625,7 @@ jobs:
   # and if a restore does not work then nothing else here mattered.
   dead-disk:
     runs-on: ubuntu-24.04
-    needs: when
+    needs: [when, siblings]
     if: needs.when.outputs.heavy == 'true'
     timeout-minutes: 120
     steps:
@@ -569,6 +633,7 @@ jobs:
       - name: install, back up, destroy, restore, boot
         uses: ./.github/actions/install-boot
         with:
+          siblings: download
           smoke_args: --dead-disk
 
       # This lap's dir survives its own failure: smoke_dead_disk's early
@@ -661,6 +726,62 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
+
+  # The nightly's bookkeeping (#74): the heavy tier above runs on the
+  # daily cron, and a red lap nobody reads is a lap that trains nobody.
+  # Before this, a first-boot unit bug on main was silent until a tag
+  # spent its road on it — ci's boot legs skip on push because nothing
+  # in the tree changed, which is exactly the assumption a base-image
+  # move breaks (45.1.0's brew and home-subvol reds were both that
+  # class). The laps themselves run in the jobs above; this only reads
+  # their verdicts and keeps ONE issue honest: opened red, commented on
+  # each further red, closed green. One, because a permanently red
+  # nightly that opens a fresh issue a day is a wall of noise no one
+  # reads either — the single thread with a run link per comment is the
+  # shape a person can mute without going blind.
+  ledger:
+    runs-on: ubuntu-24.04
+    needs: [when, boot, boot-delta, upgrade-fallback, install, hibernate, dead-disk]
+    if: >-
+      always() &&
+      needs.when.outputs.heavy == 'true' &&
+      github.event_name == 'schedule'
+    # The whole job is one gh call on the open thread; anything longer
+    # is a bug.
+    timeout-minutes: 10
+    permissions:
+      # The nightly's only write surface: the ledger issue. The laps it
+      # reports on run in the jobs above, which carry none of this.
+      issues: write
+      contents: read
+    steps:
+      - name: open, comment, or close the ledger issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          NEEDS: ${{ toJson(needs) }}
+        run: |
+          set -euo pipefail
+          title="[nightly] main's boot laps went red"
+          number=$(gh issue list -R "$REPO" --state open --search "$title in:title" --json number --jq '.[0].number' || true)
+          verdicts=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.key != "when") | "\(.key): \(.value.result)"] | join(", ")')
+          red=$(echo "$NEEDS" | jq '[to_entries[] | select(.key != "when") | .value.result | select(. == "failure" or . == "cancelled")] | length')
+          if [ "$red" -gt 0 ]; then
+            body="the nightly battery went red at $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+          $verdicts
+
+          run: $RUN_URL"
+            if [ -n "$number" ]; then
+              gh issue comment "$number" -R "$REPO" --body "$body"
+            else
+              gh issue create -R "$REPO" --title "$title" --body "$body"
+            fi
+          elif [ -n "$number" ]; then
+            gh issue close "$number" -R "$REPO" \
+              --comment "green at $(date -u '+%Y-%m-%dT%H:%M:%SZ'): $verdicts. run: $RUN_URL"
+          fi
 
   # Nothing else here asks whether the dependencies have known holes.
   # Clippy reads our code and the tests read our behavior; neither has an
