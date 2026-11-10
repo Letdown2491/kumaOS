@@ -83,6 +83,28 @@ app updated right now, update
 it by hand; that is drift by choice, and `kuma capture` is how you would
 keep it.
 
+### Which declaration governs
+
+The machine converges to its declaration, wherever that declaration
+lives. The primary account's own `~/.config/kuma/kuma.toml` — found
+through the baked declaration's `[user].name` and the passwd entry,
+because the converger runs as root on a schedule and must not depend on
+who happened to run a verb — is the authority for an axis it names:
+naming the key is the opinion, and an empty list is a real one (`brew =
+[]` converges everything away; silence is not a zero). An axis the
+local declaration does not name falls back to the list the image baked.
+
+A local declaration that exists but is not fit to speak for its owner
+stops convergence loudly rather than falling back — one that does not
+parse, one that cannot be read, and one the primary account does not
+exclusively own (group- or world-writable means any local account could
+rewrite it; owned by another uid means it is another account's file).
+Converging silently to the baked list because the owner's file has a
+typo is the nano incident wearing a disguise, and the same refusal
+covers every other way the file can be wrong. `kuma edit --print` says
+which declaration resolved; `kuma check` says which one governs each
+axis and whether the converger follows it.
+
 The system image is the opposite. An update replaces the whole operating
 system and applies at the next reboot, so automating it would buy you
 surprise reboots or a pile of staged updates you never booted. kuma stages

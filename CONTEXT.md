@@ -86,9 +86,11 @@ _Avoid_: launcher entries, shortcuts
 
 **Dev install**:
 A development build riding a running machine beside its image:
-`kuma dev install` stages a checkout's committed, stamp-verified
-binaries into `~/.local/bin` and writes a receipt. `/usr` stays the
-image's; nothing here is a deployment.
+`kuma dev install` stages a checkout's committed, own-build,
+stamp-verified binaries into `~/.local/bin` and writes a receipt.
+`/usr` stays the image's; nothing here is a deployment. The verb
+executes the build output it verifies, so it stages only a checkout the
+invoking account built.
 _Avoid_: side install, overwrite (nothing is overwritten), manual
 deploy
 

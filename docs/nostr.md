@@ -163,14 +163,18 @@ nothing off-site able to reach it.
 The local loopback relay is opt-in (`[nostr.relay]`), for desktop apps
 that should pair with nothing leaving the house, and `serve` is its
 tailnet face: the exposure switch, `wss://` over tailscale, its own
-declaration choice and never an inference.
+declaration choice and never an inference. The relay's unit carries the
+same sandbox and the same memory ceiling as the daemon's — it is
+session furniture held to the same standard.
 
 ## What the sandbox bounds
 
 The daemon runs as a regular user service under your graphical session,
 inside the full systemd sandbox: no new privileges, read-only system and
 home, one writable directory for its own state, a reduced syscall filter,
-and no capabilities. It answers on a socket at
+no capabilities, and a memory ceiling (`MemoryMax` 256M) — a session
+daemon that runs for weeks fails its own bugs loudly instead of quietly
+eating the desktop. It answers on a socket at
 `$XDG_RUNTIME_DIR/kuma-nostr.sock`, mode 0600, and any peer whose uid
 isn't yours is dropped before its first byte. Reaching the socket buys a
 program the right to ask. The policy engine still decides.
