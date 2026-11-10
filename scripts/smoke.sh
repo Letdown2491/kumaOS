@@ -2095,6 +2095,16 @@ smoke_published() {
             # through by the ssh session it is about to take down with it,
             # and the output is kept rather than discarded, because throwing
             # it away is what turned this into two wasted runs.
+            # The greeter holds the virgl surface, and the guest
+            # kernel's virtio_gpu driver refuses S4 while objects are
+            # held — "S4 not allowed when VIRGL is enabled" — a flake
+            # that tracked whether the greeter happened to be idle when
+            # the hibernate landed (green on one nightly, red on three
+            # others, same kernel). The lap needs a machine that can
+            # hibernate, not a login screen: stop greetd first, which
+            # quits the greeter and frees the GPU objects, and whose
+            # absence the resume probes never miss — they ask over ssh.
+            gsudo "systemctl stop greetd.service" >/dev/null 2>&1 || true
             echo "   .. hibernating"
             local said
             said=$(gsudo "systemctl start --no-block systemd-hibernate.service 2>&1" || true)
@@ -4404,9 +4414,25 @@ smoke_boot() {
     # the guest helper ships the script verbatim to the VM, which
     # expands $d there — expansion on this side would read the runner's
     # /tmp, a directory the guest has never seen.
-    # shellcheck disable=SC2016
-    guest 'd=$(mktemp -d); cd "$d" && kuma run no-home -- /bin/true && kuma run airlock -- /bin/true' \
-        || bad "the sandbox verb could not exec true(1) in one of its modes"
+    # Each mode runs under its own name, and the guest's stderr rides
+    # home: guest() discards stderr, and a sandbox failure whose text
+    # is thrown away cannot be diagnosed — three nightlies went red on
+    # this line and taught nothing. The unshare probe beside the verb
+    # says directly whether the guest denies user namespaces, which is
+    # bwrap's most common way to die.
+    sandbox_probe() {
+        local mode=$1 out
+        # $mode is the one thing that SHOULD expand on the client side:
+        # the mode's own name, so the failure names the mode that failed.
+        # shellcheck disable=SC2029
+        out=$(ssh "${ssh_opts[@]}" \
+            "d=\$(mktemp -d); cd \"\$d\" && kuma run $mode -- /bin/true" 2>&1) \
+            || bad "kuma run $mode could not exec true(1): ${out:-no output captured}"
+    }
+    sandbox_probe no-home
+    sandbox_probe airlock
+    out=$(ssh "${ssh_opts[@]}" 'unshare -U true' 2>&1) \
+        || bad "the guest denies unprivileged user namespaces, which bwrap needs: $out"
     if refusal=$(guest 'cd && kuma run no-home -- /bin/true' 2>&1); then
         bad "kuma run from the home directory succeeded; the empty home is not guaranteed"
     elif ! printf '%s' "$refusal" | grep -q "refuses to sandbox"; then
