@@ -2980,6 +2980,20 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         // every boot after the first has to skip it without looking
         // like a unit that failed.
         assert!(RESTORE_SERVICE.contains("ConditionPathExists=/var/lib/kuma/restore-request"));
+        // The snapshot's PARENT directories ride the ReadWritePaths:
+        // restic's metadata pass chowns them on the way down and a
+        // chown it cannot perform costs the exit code, which stranded
+        // the request on a fully restored machine (the sandbox's own
+        // comment carries the run). If a future tightening drops one
+        // again, this names it.
+        for parent in ["/var", "/etc", "/etc/NetworkManager"] {
+            assert!(
+                RESTORE_SERVICE
+                    .lines()
+                    .any(|l| l.starts_with("ReadWritePaths=") && l.contains(parent)),
+                "ReadWritePaths must grant restic's metadata pass the parent {parent}: {RESTORE_SERVICE}"
+            );
+        }
         // A home directory over a slow link outlasts any default.
         assert!(RESTORE_SERVICE.contains("TimeoutStartSec=infinity"));
         // The credential is PARSED by systemd, never executed by a

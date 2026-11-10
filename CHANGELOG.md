@@ -4,6 +4,18 @@
 
 ## v45.2.1 (2026-11-10)
 
+- **A restored machine no longer restores again on every boot.** The
+  restore unit's sandbox — tightened in 45.1.0 to exactly the paths the
+  script writes — left out the snapshot's PARENT directories, and
+  restic's restore applies each directory's stored ownership on the way
+  down: the chowns on `/var`, `/etc` and `/etc/NetworkManager` failed
+  against the read-only sandbox, restic counted them into its exit code,
+  and the script died on `set -e` before it could clear the restore
+  request. Every file came back; the machine then carried a failed unit
+  and re-ran the restore on every boot after it. The parents join the
+  sandbox's writable set — the ownership being applied is the machine's
+  own, a no-op on a converged system — and the test pins all three.
+
 - **A locked keyring no longer reads as "no vault exists".** The vault
   is found by searching the Secret Service, and a locked login
   collection answers that search exactly like an empty one — so a

@@ -1382,15 +1382,26 @@ Type=oneshot
 EnvironmentFile=-/var/lib/kuma/secrets/restore.env
 ExecStart=/usr/libexec/kuma-restore
 TimeoutStartSec=infinity
-# The sandbox tightens to exactly the paths the script writes — the
-# cache restic demands, the home it restores, the NetworkManager
-# connections the snapshot carries (the converger backs them up for
-# this moment), and the request file it clears when the restore held.
+# The sandbox tightens to the paths the script writes — the cache restic
+# demands, the home it restores, the NetworkManager connections the
+# snapshot carries (the converger backs them up for this moment), and the
+# request file it clears when the restore held. Beside them, the PARENT
+# directories of everything the snapshot stores: restic's restore walks
+# the tree from the root applying each directory's stored ownership on
+# the way down — /var, /etc and /etc/NetworkManager included, and a
+# chown it cannot perform counts toward its exit code. Under a strict
+# sandbox those parents are read-only, so restic restored every file and
+# still exited 1, the script died on set -e before it could clear the
+# request, and a fully restored machine re-restored on every boot and
+# carried a failed unit forever (the dead-disk lap's red of Nov 10, run
+# 42909478602). The ownership being applied is the machine's own, so
+# granting the parents is a no-op on a converged system — and the one
+# thing a restore may not strand is the request.
 # Everything else on the machine stays read-only while root runs it.
 NoNewPrivileges=yes
 ProtectSystem=strict
 PrivateTmp=yes
-ReadWritePaths=/var/lib/kuma /var/home /var/cache/restic /etc/NetworkManager/system-connections
+ReadWritePaths=/var/lib/kuma /var/home /var/cache/restic /etc/NetworkManager/system-connections /etc/NetworkManager /etc /var
 
 [Install]
 WantedBy=multi-user.target

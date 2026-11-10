@@ -389,9 +389,13 @@ bad()  {
         # unit without saying why, and the severity and grep pulls below
         # have both missed a converger's error before: unit stderr logs
         # at info, and a mid-boot failure falls out of any tail once the
-        # later lines arrive.
+        # later lines arrive. The loop rides stdin into bash -s: the
+        # account's login shell is fish on the desktop images, and a
+        # for/while-do dump written in bash dies there — the dump must
+        # work on the machine as it is.
         # shellcheck disable=SC2016  # $unit must expand on the guest, not here
-        guest 'systemctl --failed --no-legend --plain | while read -r unit _; do journalctl -b -u "$unit" --no-pager | tail -20; done' || true
+        printf '%s\n' 'systemctl --failed --no-legend --plain | while read -r unit _; do journalctl -b -u "$unit" --no-pager | tail -20; done' \
+            | guest bash -s || true
         guest 'systemctl --user --failed --no-pager --plain' || true
         guest 'loginctl list-sessions --no-legend' || true
         # The harness's own polling opens an ssh connection every few
@@ -4422,11 +4426,18 @@ smoke_boot() {
     # bwrap's most common way to die.
     sandbox_probe() {
         local mode=$1 out
+        # The script rides stdin into bash -s, not the ssh command line:
+        # ssh hands the command string to the account's LOGIN shell, and
+        # the kuma account's is the image's fish — which rejected the
+        # bash-ism before kuma run ever ran ("fish: Unsupported use of
+        # '='", the Nov 8-10 nightly reds, named at last by run
+        # 42909478602 once 1115b54 let the stderr home). bash -s is the
+        # account shell's replacement: no remote expansion to quote, no
+        # login shell to disagree with.
         # $mode is the one thing that SHOULD expand on the client side:
         # the mode's own name, so the failure names the mode that failed.
-        # shellcheck disable=SC2029
-        out=$(ssh "${ssh_opts[@]}" \
-            "d=\$(mktemp -d); cd \"\$d\" && kuma run $mode -- /bin/true" 2>&1) \
+        out=$(printf 'd=$(mktemp -d); cd "$d" && exec kuma run %s -- /bin/true' "$mode" \
+            | ssh "${ssh_opts[@]}" bash -s 2>&1) \
             || bad "kuma run $mode could not exec true(1): ${out:-no output captured}"
     }
     sandbox_probe no-home
