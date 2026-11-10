@@ -74,6 +74,15 @@
 
 ## Unreleased
 
+- **Snapshot example defaults tightened.** The examples' snapshot
+  retention is now hourly, keep 6 recent plus 2 dailies (was 24 plus a
+  week of dailies) — the defaults are what a stranger gets when they
+  copy the example and never tune it, and 24 hours of coverage is the
+  floor worth shipping, not a ceiling. Machines that declared their own
+  values keep them; machines running the defaults adopt the new ones on
+  the next image — the converger re-bakes what the image carries, so
+  the tightened retention is self-healing doing its job.
+
 ## v45.0.1 (2026-11-06)
 
 - **`kuma upgrade` no longer refuses a moved declaration — the delta

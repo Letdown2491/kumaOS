@@ -62,7 +62,7 @@ flatpak = [
 [services]
 enable = []
 
-# Hourly read-only snapshots of /var/home, kept 24 deep plus a week of
-# dailies. Skipped on a machine whose /var/home isn't a btrfs subvolume.
+# Hourly read-only snapshots of /var/home, kept 6 deep plus 2 dailies.
+# Skipped on a machine whose /var/home isn't a btrfs subvolume.
 [snapshots]
 enable = true

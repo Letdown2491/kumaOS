@@ -190,10 +190,10 @@ fn default_snapshot_interval() -> String {
     "hourly".to_string()
 }
 fn default_keep_recent() -> u32 {
-    24
+    6
 }
 fn default_keep_daily() -> u32 {
-    7
+    2
 }
 
 impl Default for Snapshots {

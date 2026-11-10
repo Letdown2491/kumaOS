@@ -122,8 +122,8 @@ enable = ["tailscaled.service"]
 enable = true
 # target = "/var/home"   # snapshots land in <target>/.snapshots
 # interval = "hourly"    # any systemd OnCalendar expression
-# keep_recent = 24       # the newest N, whatever their age
-# keep_daily = 7         # plus the newest from each of N further days
+# keep_recent = 6        # the newest N, whatever their age
+# keep_daily = 2         # plus the newest from each of N further days
 
 # Offsite copies of what [snapshots] keeps locally. Snapshots survive a
 # mistake; this survives the disk. It reads from a read-only snapshot, so
