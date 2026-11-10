@@ -2134,6 +2134,47 @@ pub(crate) mod tests {
         );
     }
 
+    /// The changelog reads newest first: `Unreleased` is the very first
+    /// section — the next release's notes accumulate above everything —
+    /// and every version heading descends below it. Nothing checked
+    /// order for the whole life of the file, and the v45.2.0 bump
+    /// shipped a changelog where the new release sat BELOW the previous
+    /// one and `Unreleased` floated mid-history: a test that only asked
+    /// whether headings exist cannot see a scrambled file.
+    #[test]
+    fn the_changelog_reads_newest_first() {
+        let changelog =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/CHANGELOG.md")).unwrap();
+        let headings: Vec<&str> = changelog.lines().filter_map(|l| l.strip_prefix("## ")).collect();
+        assert_eq!(
+            headings.first().copied(),
+            Some("Unreleased"),
+            "Unreleased is the first section: the next release's notes accumulate at the top"
+        );
+        let mut previous: Option<(u64, u64, u64)> = None;
+        for heading in headings.iter().skip(1) {
+            // The heading carries a date after the version; the version
+            // token is the first word, and its dotted prefix is the shape
+            // dev.rs's stamp parser already speaks.
+            let version = heading.split_whitespace().next().unwrap_or_default();
+            let parts: Vec<u64> = version
+                .strip_prefix('v')
+                .unwrap_or(version)
+                .split('.')
+                .filter_map(|p| p.parse().ok())
+                .collect();
+            assert_eq!(parts.len(), 3, "unexpected heading shape: `## {heading}`");
+            let current = (parts[0], parts[1], parts[2]);
+            if let Some(previous) = previous {
+                assert!(
+                    current < previous,
+                    "the changelog reads newest first: v{current:?} follows v{previous:?}"
+                );
+            }
+            previous = Some(current);
+        }
+    }
+
     /// The README's example declaration is the first thing anyone copies,
     /// so it is held to the same bar as the committed examples. It has
     /// been wrong before: it showed `password_hash = '...'` for months,

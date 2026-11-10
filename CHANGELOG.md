@@ -1,82 +1,6 @@
 # Changelog
 
-## v45.1.0 (2026-11-07)
-
-- **`kuma run no-home|airlock` — the sandbox a build tool's scripts
-  deserve.** `npm install` runs lifecycle scripts on every package it
-  touches, and pip's own documentation answers "running arbitrary code
-  from distributions" for what an install does. The verb runs the
-  command under bubblewrap — unprivileged, no setuid bit, already in
-  every image — with the system read-only, a fresh `/dev` and `/proc`,
-  a `/tmp` that vanishes when it exits, and the point: an **empty
-  home**, a tmpfs mounted where yours is and gone when the command
-  finishes, so the caches and tokens a postinstall reaches for are not
-  in the sandbox to find. The working directory binds read-write after
-  the home tmpfs (later mounts win), so the project is the one real,
-  writable thing the child sees; the agent sockets are unset; the
-  child cannot TIOCSTI keystrokes back into your terminal
-  (`--new-session`); nothing is left orphaned (`--die-with-parent`).
-  The child's output is yours and its exit code is the command's.
-  `airlock` adds the network removal — loopback only — for scripts
-  that should not phone home while they run. The verb refuses the two
-  spellings that would defeat it: running from the home directory or
-  any directory containing it.
-- **External monitors get brightness.** `ddcutil` rides the image —
-  tagged `uaccess`, so the sitting user's session can reach the i2c
-  bus with no group story, with `i2c-dev` loaded through the module
-  loader the package already ships — and the shell's brightness
-  control speaks DDC/CI through it. This is the machine half of the
-  kumaUI v0.8.0 ride (pin `e333d6e`: DDC/CI brightness, avif through
-  the video path's libav decode, the wallpaper-derived theme's flavor
-  picker in Settings). The smoke asserts the plumbing rides the image.
-- **A new SUID binary fails the compose.** The image bakes a golden
-  list of the seventeen setuid paths the base should have
-  (`/usr/lib/kuma/suid.golden`), and the compose's check runs it — a
-  package update that quietly adds a privileged binary fails the build
-  instead of shipping. One-directional by design: an added SUID bit is
-  the risk class (privilege surface arriving unseen); a removed one is
-  visible at first boot where it matters.
-- **The convergence units run sandboxed.** The four units that touch
-  the machine on a schedule — backup, restore, snapshot, and the daily
-  converge with its gate — run under `NoNewPrivileges` and
-  `ProtectSystem=strict` with their write surfaces settled against
-  what the scripts actually write: restic's cache in
-  `/var/cache/restic`, and NetworkManager's `system-connections` for
-  the restore path.
-- **The daemon's residue is tightened.** The reviews' MINOR list came
-  forward rather than waiting for 45.2: the vault's `lock` now retires
-  the key with secp256k1's own `non_secure_erase` — the promise the
-  doc made is the code it runs, no new dependency, the crate had the
-  pass built in — and the same pass runs when the vault drops. The
-  inbound relay channel is bounded: a reconnecting relay's backlog
-  replay sheds at the cap instead of growing the daemon's RSS, and a
-  shed is the requester's own timeout — the same end a jammed queue
-  would have given it. The prompts queue caps at 100 and sheds its
-  oldest, by the activity log's own eviction rule. The socket reads a
-  request line under a 1 MiB cap, answers an over-long line with an
-  error before closing, and no longer keeps one connection's
-  secret-carrying buffer alive into the next. Revocation and deletion
-  forget the relay URLs nobody serves anymore, a teardown clears the
-  road-state map outright, and expired `remembered` grants are pruned
-  where they are consulted. Two stay deliberate: the blob's wrapped
-  secrets are ciphertext whose unwrap secret lives in memory by
-  design — zeroizing the dead copies buys nothing — and `clean`'s
-  per-tag `rmi` loop is per-tag tolerance, not an N+1 to fix.
-- **The release road keeps its composure.** Every cosign invocation
-  retries three times a minute apart (Rekor's transient failures took
-  two road runs on release day — the conflict, the refused connection,
-  and the maintenance window the status page named); the tag watcher
-  checks the registry before dispatching, so re-firing it after a
-  finished promote dispatches no leg; and the save/load digest
-  experiment is run and recorded — the re-serialization is `podman
-  save`'s, so the two-digests-one-content comparison stays retired in
-  favor of trusting bootc's verdict (#68).
-
 ## Unreleased
-
-- **v45.2.0 (2026-11-10)** — the version heading below is where this
-  release's notes now live; this section stays for the next release's
-  entries, written in the same push as their changes.
 
 ## v45.2.0 (2026-11-10)
 
@@ -268,6 +192,78 @@
   values keep them; machines running the defaults adopt the new ones on
   the next image — the converger re-bakes what the image carries, so
   the tightened retention is self-healing doing its job.
+
+## v45.1.0 (2026-11-07)
+
+- **`kuma run no-home|airlock` — the sandbox a build tool's scripts
+  deserve.** `npm install` runs lifecycle scripts on every package it
+  touches, and pip's own documentation answers "running arbitrary code
+  from distributions" for what an install does. The verb runs the
+  command under bubblewrap — unprivileged, no setuid bit, already in
+  every image — with the system read-only, a fresh `/dev` and `/proc`,
+  a `/tmp` that vanishes when it exits, and the point: an **empty
+  home**, a tmpfs mounted where yours is and gone when the command
+  finishes, so the caches and tokens a postinstall reaches for are not
+  in the sandbox to find. The working directory binds read-write after
+  the home tmpfs (later mounts win), so the project is the one real,
+  writable thing the child sees; the agent sockets are unset; the
+  child cannot TIOCSTI keystrokes back into your terminal
+  (`--new-session`); nothing is left orphaned (`--die-with-parent`).
+  The child's output is yours and its exit code is the command's.
+  `airlock` adds the network removal — loopback only — for scripts
+  that should not phone home while they run. The verb refuses the two
+  spellings that would defeat it: running from the home directory or
+  any directory containing it.
+- **External monitors get brightness.** `ddcutil` rides the image —
+  tagged `uaccess`, so the sitting user's session can reach the i2c
+  bus with no group story, with `i2c-dev` loaded through the module
+  loader the package already ships — and the shell's brightness
+  control speaks DDC/CI through it. This is the machine half of the
+  kumaUI v0.8.0 ride (pin `e333d6e`: DDC/CI brightness, avif through
+  the video path's libav decode, the wallpaper-derived theme's flavor
+  picker in Settings). The smoke asserts the plumbing rides the image.
+- **A new SUID binary fails the compose.** The image bakes a golden
+  list of the seventeen setuid paths the base should have
+  (`/usr/lib/kuma/suid.golden`), and the compose's check runs it — a
+  package update that quietly adds a privileged binary fails the build
+  instead of shipping. One-directional by design: an added SUID bit is
+  the risk class (privilege surface arriving unseen); a removed one is
+  visible at first boot where it matters.
+- **The convergence units run sandboxed.** The four units that touch
+  the machine on a schedule — backup, restore, snapshot, and the daily
+  converge with its gate — run under `NoNewPrivileges` and
+  `ProtectSystem=strict` with their write surfaces settled against
+  what the scripts actually write: restic's cache in
+  `/var/cache/restic`, and NetworkManager's `system-connections` for
+  the restore path.
+- **The daemon's residue is tightened.** The reviews' MINOR list came
+  forward rather than waiting for 45.2: the vault's `lock` now retires
+  the key with secp256k1's own `non_secure_erase` — the promise the
+  doc made is the code it runs, no new dependency, the crate had the
+  pass built in — and the same pass runs when the vault drops. The
+  inbound relay channel is bounded: a reconnecting relay's backlog
+  replay sheds at the cap instead of growing the daemon's RSS, and a
+  shed is the requester's own timeout — the same end a jammed queue
+  would have given it. The prompts queue caps at 100 and sheds its
+  oldest, by the activity log's own eviction rule. The socket reads a
+  request line under a 1 MiB cap, answers an over-long line with an
+  error before closing, and no longer keeps one connection's
+  secret-carrying buffer alive into the next. Revocation and deletion
+  forget the relay URLs nobody serves anymore, a teardown clears the
+  road-state map outright, and expired `remembered` grants are pruned
+  where they are consulted. Two stay deliberate: the blob's wrapped
+  secrets are ciphertext whose unwrap secret lives in memory by
+  design — zeroizing the dead copies buys nothing — and `clean`'s
+  per-tag `rmi` loop is per-tag tolerance, not an N+1 to fix.
+- **The release road keeps its composure.** Every cosign invocation
+  retries three times a minute apart (Rekor's transient failures took
+  two road runs on release day — the conflict, the refused connection,
+  and the maintenance window the status page named); the tag watcher
+  checks the registry before dispatching, so re-firing it after a
+  finished promote dispatches no leg; and the save/load digest
+  experiment is run and recorded — the re-serialization is `podman
+  save`'s, so the two-digests-one-content comparison stays retired in
+  favor of trusting bootc's verdict (#68).
 
 ## v45.0.1 (2026-11-06)
 
