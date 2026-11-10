@@ -74,6 +74,23 @@
 
 ## Unreleased
 
+- **The boot path stops paying for weather it can read.** Three trims
+  from the audit, plus one boundary guard. The offline boot's six
+  flatpak retries now cost one busctl read each instead of a full
+  vendor flail — NetworkManager's own connectivity verdict gates the
+  script, a machine whose network arrives minutes after boot still
+  converges through the retry ladder, and an unreadable verdict
+  proceeds (convergence is the machine's contract; the daily gate's
+  opposite rule governs currency). The greeter check's settle dropped
+  from five seconds to three — three is past greetd's own RestartSec=2
+  cadence, which is what makes the second sample an independent draw,
+  and every second past that was healthy-boot latency paid on every
+  boot — and the greeter wrapper's socket poll is bash builtins now,
+  where `ls | head` forked two processes every hundred milliseconds.
+  Both convergers' `xargs` calls take `-d '\n'`: the parse is
+  positional regardless of content, so the boundary no longer leans on
+  the upstream charset validator alone.
+
 - **The session's units take the same medicine the daemons wrote
   down.** Three unit-policy changes from the audit. The shell's unit
   said `Restart=always / RestartSec=1` with no start limit — a shell

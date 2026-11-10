@@ -724,10 +724,19 @@ cleanup() { kill "$niri_pid" 2>/dev/null; }
 trap cleanup EXIT
 
 # niri prints its socket when ready; wait for the file rather than a
-# fixed sleep, and bail if the compositor dies under us
+# fixed sleep, and bail if the compositor dies under us. The glob test
+# is bash builtins only — an `ls | head` per hundred milliseconds forked
+# two processes a beat, two hundred forks a boot, to learn what a `[ -S ]`
+# answers for free. An unmatched glob names itself, and -S fails on it,
+# which is the whole answer.
 sock=""
 for _ in $(seq 1 100); do
-  sock=$(ls "$XDG_RUNTIME_DIR"/wayland-? 2>/dev/null | head -1)
+  for f in "$XDG_RUNTIME_DIR"/wayland-?; do
+    if [ -S "$f" ]; then
+      sock=$f
+      break
+    fi
+  done
   [ -n "$sock" ] && break
   if ! kill -0 "$niri_pid" 2>/dev/null; then
     wait "$niri_pid"
@@ -1511,6 +1520,27 @@ marker=${2:-/run/kuma-converge-gate/skip}
 if [ -e "$marker" ]; then
     exit 0
 fi
+# The offline boot, made cheap: network-online.target proves
+# NetworkManager finished, not that the internet is reachable, and a
+# boot into a captive portal or downed Wi-Fi used to spend all six
+# retries doing real vendor work against a dead network — kuma, the
+# flatpak client, and their error output every two minutes. The read
+# is NM's own connectivity verdict (4 is full; portal and limited are
+# exactly the states a flatpak install cannot survive), so a retry now
+# costs one busctl read instead of a flail, and the retry ladder keeps
+# its real job: converging a machine whose network arrives a few
+# minutes after boot. An unreadable answer proceeds — this script
+# converges the declaration, the machine's contract, and a missing
+# verdict is not permission to skip it; the daily gate's opposite rule
+# (defer on a bad guess) governs currency, which is a different
+# promise.
+connectivity=$(busctl get-property org.freedesktop.NetworkManager \
+    /org/freedesktop/NetworkManager org.freedesktop.NetworkManager Connectivity 2>/dev/null \
+    | tr -dc '0-9' || true)
+if [ -n "$connectivity" ] && [ "$connectivity" != 4 ]; then
+    echo "NetworkManager reports connectivity ${connectivity}, not full; waiting for a retry"
+    exit 1
+fi
 # The authority question, answered by the CLI the same way a human asks
 # it: the machine's own declaration when it names this axis — empty
 # included — the image's baked list otherwise. The baked file this
@@ -1537,7 +1567,14 @@ mkdir -p /var/lib/kuma
 # applications get kept current, behind the gate, on the schedule the
 # docs promise them.
 install_declared() {
-    xargs -r -a "$declared" flatpak install --system --assumeyes --noninteractive --or-update "$@" flathub
+    # -d '\n': the parse is positional regardless of content. The list
+    # is charset-validated upstream (validate_name rejects spaces,
+    # quotes, dashes) so plain xargs is safe today, but that safety
+    # lives one refactor away — a list that skips validation would
+    # otherwise revert xargs to whitespace and quote splitting
+    # silently. One entry per line is the contract the CLI prints;
+    # this is the boundary saying so.
+    xargs -r -d '\n' -a "$declared" flatpak install --system --assumeyes --noninteractive --or-update "$@" flathub
 }
 converge() {
     install_declared || install_declared --no-static-deltas
@@ -2342,7 +2379,15 @@ pub(crate) const GREETER_CHECK: &str = r#"#!/usr/bin/bash
 # entirely is a failure now rather than in two minutes.
 set -u
 deadline=$(( SECONDS + 120 ))
-settle=5
+# Three, not five: the settle's job is decorrelating the second sample
+# from the first, and greetd's own restart cadence (RestartSec=2, the
+# drop-in above) is the cycle a crash loop rides. A settle past two
+# seconds makes the second draw independent of the first — the
+# detection the "five deaths in four seconds" incident demanded — and
+# every second past that was healthy-boot latency on the multi-user
+# path, paid on every boot to catch a case the loop below catches on
+# the next round anyway.
+settle=3
 while true; do
     if systemctl --quiet is-failed display-manager.service; then
         echo "display-manager.service failed to start"
@@ -3381,7 +3426,9 @@ state=/home/linuxbrew/.linuxbrew/.kuma-brews
 # boot: no ruby, no vendor, no network.
 if ! cmp -s "$declared" "$state"; then
     if [ -s "$declared" ]; then
-        xargs -a "$declared" "$brew" install
+        # -d '\n', the flatpak side's boundary rule: one entry per
+        # line is the parse, whatever the entries turn out to be.
+        xargs -d '\n' -a "$declared" "$brew" install
     fi
     while read -r formula; do
         grep -qxF "$formula" "$declared" && continue

@@ -3230,9 +3230,13 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
 
         // Membership is still the declaration's alone. Widening the
         // upgrade must not widen the install: only the declared list is
-        // ever installed, in both scripts.
-        assert!(BREW_SYNC_SCRIPT.contains(r#"xargs -a "$declared" "$brew" install"#));
-        assert!(FLATPAK_SYNC_SCRIPT.contains(r#"xargs -r -a "$declared" flatpak install"#));
+        // ever installed, in both scripts — parsed one entry per line,
+        // the -d making the boundary positional regardless of content.
+        assert!(BREW_SYNC_SCRIPT.contains(r#"xargs -d '\n' -a "$declared" "$brew" install"#));
+        assert!(
+            FLATPAK_SYNC_SCRIPT
+                .contains(r#"xargs -r -d '\n' -a "$declared" flatpak install"#)
+        );
     }
 
     #[test]
