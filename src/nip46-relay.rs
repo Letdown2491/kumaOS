@@ -192,7 +192,37 @@ fn one_connection(
     let (tx, rx): (SyncSender<Message>, Receiver<Message>) = sync_channel(QUEUE_CAP);
     outbound.lock().expect("the outbound map").insert(id, (tx.clone(), kicked.clone()));
 
-    let result = serve_connection(
+    // The leaving guard: the maps' entries die with this frame, on
+    // every exit path. Cleanup after `serve_connection` returns is the
+    // happy path only — a panic inside (a poisoned lock's expect)
+    // unwinds past it and leaks both entries until a broadcast kick
+    // trips over them. The guard's Drop runs on the unwind too, and
+    // takes the lock through the poison: a panicked peer thread has
+    // nothing to say about this connection's leaving.
+    struct Leaving {
+        id: u64,
+        subscriptions: Subscriptions,
+        outbound: Outbound,
+    }
+    impl Drop for Leaving {
+        fn drop(&mut self) {
+            // A gone connection is not a subscriber, and its queued
+            // frames are nobody's.
+            self.subscriptions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&self.id);
+            self.outbound
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&self.id);
+        }
+    }
+    let _leaving = Leaving { id, subscriptions: subscriptions.clone(), outbound: outbound.clone() };
+
+    // The direct expression: the guard outlives it, so the maps'
+    // entries drop after the connection's last frame either way.
+    serve_connection(
         id,
         &mut socket,
         &store,
@@ -202,13 +232,7 @@ fn one_connection(
         rate_limit,
         &rx,
         &kicked,
-    );
-
-    // Leaving takes the subscriptions and the queue with it: a gone
-    // connection is not a subscriber, and its queued frames are nobody's.
-    subscriptions.lock().expect("the subscription map").remove(&id);
-    outbound.lock().expect("the outbound map").remove(&id);
-    result
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -414,12 +438,15 @@ fn serve_connection(
                 socket.send(Message::text(
                     serde_json::json!(["EOSE", subscription_id]).to_string(),
                 ))?;
-                subscriptions
-                    .lock()
-                    .expect("the subscription map")
-                    .entry(id)
-                    .or_default()
-                    .push((subscription_id, filter));
+                let mut subs = subscriptions.lock().expect("the subscription map");
+                let entry = subs.entry(id).or_default();
+                // NIP-01's replace rule: a new REQ with a subscription
+                // id already in use REPLACES the old filter. Without
+                // this, a client that re-REQs in a loop grows its Vec
+                // one entry a time for the life of the connection —
+                // the spec's replace rule is also the leak's cap.
+                entry.retain(|(existing, _)| existing != &subscription_id);
+                entry.push((subscription_id, filter));
             }
             "CLOSE" => {
                 let Some(subscription_id) = frame.get(1).and_then(|v| v.as_str()) else {

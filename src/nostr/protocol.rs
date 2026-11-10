@@ -14,7 +14,7 @@
 //! only thing that knows a network exists.
 
 use std::collections::HashMap;
-use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -259,7 +259,7 @@ pub struct Daemon<S: super::vault::SecretStore> {
     /// lock-unlock cycle spawns a fresh pool onto a channel the worker
     /// is already reading.
     inbound: SyncSender<Event>,
-    status_tx: Sender<RelayStatus>,
+    status_tx: SyncSender<RelayStatus>,
     status_rx: Receiver<RelayStatus>,
     /// The last thing each relay said, as the Status verb drains the
     /// channel. Stale by design between statuses: the doctor's liveness
@@ -289,16 +289,21 @@ impl<S: super::vault::SecretStore> Daemon<S> {
         relays: Vec<String>,
         state_dir: Option<std::path::PathBuf>,
     ) -> (Self, Receiver<Event>) {
-        // The inbound side is bounded, the status side is not: relay
-        // threads may read frames off the wire faster than the worker
-        // plans them (each planned event costs a NIP-44 decrypt
-        // attempt), and a reconnecting relay's backlog replay is the
-        // legitimate case that looks like a flood. At the bound the
-        // shed is the pool's own (INBOUND shed at the producer), and
-        // the status channel needs no bound — one message per state
-        // change, backoff-capped.
+        // Both sides are bounded, and both shed at the producer. The
+        // inbound side: relay threads may read frames off the wire
+        // faster than the worker plans them (each planned event costs
+        // a NIP-44 decrypt attempt), and a reconnecting relay's
+        // backlog replay is the legitimate case that looks like a
+        // flood. The status side used to read "needs no bound — one
+        // message per state change, backoff-capped", and that was
+        // true of the rate but not of the drain: nothing reads this
+        // channel until someone asks for status, so a relay flapping
+        // unwatched for weeks wrote messages nobody consumed. At the
+        // bound the shed is free — the drain keeps only the newest
+        // state per URL, so a shed transition is exactly the message
+        // the drain would have overwritten.
         let (inbound, inbound_rx) = sync_channel(crate::nostr::pool::INBOUND_CAP);
-        let (status_tx, status_rx) = channel();
+        let (status_tx, status_rx) = sync_channel(crate::nostr::pool::STATUS_CAP);
         let daemon = Self {
             vault,
             relays,

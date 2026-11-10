@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender, SyncSender};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -118,10 +118,24 @@ struct Road {
 /// Daemon::new for why the bound sits on this side and not status's.
 pub(crate) const INBOUND_CAP: usize = 1000;
 
+/// The outbound and status channels' bound. The outbound queue holds
+/// one clone of each unpublished answer per road: without a bound, a
+/// road whose thread sits in backoff (holding the receiver) or stalls
+/// mid-write grows it at the bunker's publish rate for as long as the
+/// outage lasts — the daemon's one unbounded path, on a process that
+/// runs for weeks. At the cap the producer sheds, exactly as the
+/// inbound side sheds a backlog replay; a shed answer is a
+/// requester's timeout, the same end an unbounded queue gave everyone
+/// eventually, without the RSS. The status queue's drain keeps only
+/// the newest state per URL, so a shed transition is the message the
+/// drain would have overwritten anyway.
+pub(crate) const OUTBOUND_CAP: usize = 1000;
+pub(crate) const STATUS_CAP: usize = 100;
+
 pub struct RelayPool {
     /// Every road with its sender beside it: the fan-out's whole
     /// book.
-    roads: Vec<(Road, Sender<(Event, Fan)>)>,
+    roads: Vec<(Road, SyncSender<(Event, Fan)>)>,
     own_urls: Vec<String>,
     /// The nostrconnect apps' relays, by the client pubkey that
     /// presented its URI.
@@ -137,7 +151,7 @@ impl RelayPool {
         relays: Vec<String>,
         bunker_pubkey: PublicKey,
         inbound: SyncSender<Event>,
-        status: Sender<RelayStatus>,
+        status: SyncSender<RelayStatus>,
     ) -> Self {
         Self::spawn_with_timing(relays, bunker_pubkey, inbound, status, Timing::default())
     }
@@ -148,7 +162,7 @@ impl RelayPool {
         relays: Vec<String>,
         bunker_pubkey: PublicKey,
         inbound: SyncSender<Event>,
-        status: Sender<RelayStatus>,
+        status: SyncSender<RelayStatus>,
         timing: Timing,
     ) -> Self {
         let mut pool = Self { roads: Vec::new(), own_urls: Vec::new(), app_urls: HashMap::new() };
@@ -164,11 +178,11 @@ impl RelayPool {
         app: Option<PublicKey>,
         bunker_pubkey: PublicKey,
         inbound: &SyncSender<Event>,
-        status: &Sender<RelayStatus>,
+        status: &SyncSender<RelayStatus>,
         timing: Timing,
     ) {
         let stop = Arc::new(AtomicBool::new(false));
-        let (outbound, outbound_rx) = channel::<(Event, Fan)>();
+        let (outbound, outbound_rx) = sync_channel::<(Event, Fan)>(OUTBOUND_CAP);
         let handle = std::thread::spawn({
             let stop = stop.clone();
             let inbound = inbound.clone();
@@ -189,7 +203,7 @@ impl RelayPool {
         relays: Vec<String>,
         bunker_pubkey: PublicKey,
         inbound: &SyncSender<Event>,
-        status: &Sender<RelayStatus>,
+        status: &SyncSender<RelayStatus>,
         timing: Timing,
     ) {
         for url in relays {
@@ -211,7 +225,7 @@ impl RelayPool {
         relays: Vec<String>,
         bunker_pubkey: PublicKey,
         inbound: &SyncSender<Event>,
-        status: &Sender<RelayStatus>,
+        status: &SyncSender<RelayStatus>,
     ) {
         for url in relays {
             // The dedup reads the books before anything is borrowed
@@ -281,9 +295,12 @@ impl RelayPool {
     }
 
     /// The fan-out: one send per road the fan names. A road that is
-    /// down gets its copy on reconnect — the thread's first act after
-    /// a subscribe is to drain its queue — so an answer is never lost
-    /// to a relay that blinks while the bunker was thinking.
+    /// down keeps what it was handed up to the channel's bound — the
+    /// thread's first act after a subscribe is to drain its queue, so
+    /// a relay that blinks still gets every answer — but the bound is
+    /// where a road that stays down stops mattering: the shed at the
+    /// producer (the same rule the inbound side runs) is what keeps a
+    /// dead road from growing the daemon's RSS at the publish rate.
     fn send(&self, event: &Event, fan: Fan) -> Result<()> {
         if self.roads.is_empty() {
             return Err(anyhow::anyhow!("the relay threads are gone"));
@@ -297,9 +314,16 @@ impl RelayPool {
                 Fan::OnlyApp(who) => road.app.as_ref() == Some(who),
             };
             if mine {
-                outbound
-                    .send((event.clone(), fan.clone()))
-                    .map_err(|_| anyhow::anyhow!("the relay threads are gone"))?;
+                match outbound.try_send((event.clone(), fan.clone())) {
+                    Ok(()) => {}
+                    // Full is the shed: the road's queue is at its
+                    // bound, the answer's requester times out, and
+                    // nothing grows.
+                    Err(std::sync::mpsc::TrySendError::Full(_)) => {}
+                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                        return Err(anyhow::anyhow!("the relay threads are gone"));
+                    }
+                }
             }
         }
         Ok(())
@@ -323,7 +347,7 @@ fn one_relay(
     url: String,
     bunker_pubkey: PublicKey,
     inbound: SyncSender<Event>,
-    status: Sender<RelayStatus>,
+    status: SyncSender<RelayStatus>,
     outbound: Receiver<(Event, Fan)>,
     stop: Arc<AtomicBool>,
     timing: Timing,
@@ -337,8 +361,8 @@ fn one_relay(
         match connect_and_serve(&url, bunker_pubkey, &inbound, &status, &outbound, &stop, timing) {
             Ok(()) => return,
             Err(e) => {
-                let _ =
-                    status.send(RelayStatus { url: url.clone(), state: RelayState::Disconnected });
+                let _ = status
+                    .try_send(RelayStatus { url: url.clone(), state: RelayState::Disconnected });
                 if stop.load(Ordering::SeqCst) {
                     return;
                 }
@@ -365,7 +389,7 @@ fn connect_and_serve(
     url: &str,
     bunker_pubkey: PublicKey,
     inbound: &SyncSender<Event>,
-    status: &Sender<RelayStatus>,
+    status: &SyncSender<RelayStatus>,
     outbound: &Receiver<(Event, Fan)>,
     stop: &AtomicBool,
     timing: Timing,
@@ -373,13 +397,14 @@ fn connect_and_serve(
     let (mut socket, _response) =
         tungstenite::connect(url).with_context(|| format!("connecting to {url}"))?;
     set_read_timeout(&mut socket, Some(Duration::from_secs(1)))?;
+    set_write_timeout(&mut socket, Some(Duration::from_secs(10)))?;
 
     let filter = serde_json::json!({
         "kinds": [24133],
         "#p": [bunker_pubkey.to_string()],
     });
     socket.send(Message::text(serde_json::json!(["REQ", SUBSCRIPTION_ID, filter]).to_string()))?;
-    let _ = status.send(RelayStatus { url: url.to_string(), state: RelayState::Connected });
+    let _ = status.try_send(RelayStatus { url: url.to_string(), state: RelayState::Connected });
 
     // The probe's books: the beat counter since the last ping, and the
     // pings sent with no inbound frame between them. Any frame at all
@@ -531,6 +556,27 @@ fn set_read_timeout(
     }
 }
 
+/// The write timeout is the stalled-peer fuse: a socket whose peer
+/// stopped reading fills its kernel send buffer and then blocks
+/// `socket.send` forever — no read timeout fires, because nothing
+/// needs to arrive. Ten seconds of a full send buffer is a dead peer
+/// by any honest measure; the error tears the road down into the same
+/// backoff a read death takes.
+fn set_write_timeout(
+    socket: &mut tungstenite::WebSocket<MaybeTlsStream<std::net::TcpStream>>,
+    timeout: Option<Duration>,
+) -> Result<()> {
+    match socket.get_mut() {
+        MaybeTlsStream::Plain(stream) => {
+            stream.set_write_timeout(timeout).context("setting the relay write timeout")
+        }
+        MaybeTlsStream::Rustls(stream) => {
+            stream.get_ref().set_write_timeout(timeout).context("setting the relay write timeout")
+        }
+        other => Err(anyhow!("unsupported relay transport: {other:?}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,7 +592,7 @@ mod tests {
         let own = StubRelay::start(vec![]);
         let app_relay = StubRelay::start(vec![]);
         let (inbound_tx, _inbound_rx) = sync_channel::<Event>(INBOUND_CAP);
-        let (status_tx, _status_rx) = channel::<RelayStatus>();
+        let (status_tx, _status_rx) = sync_channel::<RelayStatus>(STATUS_CAP);
         let mut pool = RelayPool::spawn(
             vec![own.url.clone()],
             bunker_pubkey,
@@ -588,7 +634,7 @@ mod tests {
 
         let stub = StubRelay::start(vec![request.clone()]);
         let (inbound_tx, inbound_rx) = sync_channel::<Event>(INBOUND_CAP);
-        let (status_tx, status_rx) = channel::<RelayStatus>();
+        let (status_tx, status_rx) = sync_channel::<RelayStatus>(STATUS_CAP);
         let pool = RelayPool::spawn(vec![stub.url.clone()], bunker_pubkey, inbound_tx, status_tx);
 
         // The request arrives on the inbound channel; receiving waits
@@ -663,7 +709,7 @@ mod tests {
         });
 
         let (inbound_tx, inbound_rx) = sync_channel::<Event>(INBOUND_CAP);
-        let (status_tx, _status_rx) = channel::<RelayStatus>();
+        let (status_tx, _status_rx) = sync_channel::<RelayStatus>(STATUS_CAP);
         let pool = RelayPool::spawn(vec![url], bunker_pubkey, inbound_tx, status_tx);
         std::thread::sleep(Duration::from_millis(300));
         assert!(
@@ -732,7 +778,7 @@ mod tests {
         });
 
         let (inbound_tx, _inbound_rx) = sync_channel::<Event>(INBOUND_CAP);
-        let (status_tx, status_rx) = channel::<RelayStatus>();
+        let (status_tx, status_rx) = sync_channel::<RelayStatus>(STATUS_CAP);
         let pool = RelayPool::spawn_with_timing(
             vec![url],
             bunker_pubkey,

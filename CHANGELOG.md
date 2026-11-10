@@ -74,6 +74,34 @@
 
 ## Unreleased
 
+- **The daemon's queues are bounded, the relay's REQs replace.**
+  The four-axis pre-release audit (performance, resource usage,
+  memory leaks, security) found the leak posture strong everywhere
+  except one shape: `std::mpsc` channels the inbound side had bounded
+  and the other directions hadn't. `kuma-nostrd`'s outbound relay
+  queue was unbounded (`channel::<(Event, Fan)>` per road) and the
+  relay socket had a read timeout but no write timeout — a road whose
+  peer died or stalled mid-write grew its queue at the bunker's
+  publish rate for as long as the outage lasted, the daemon's one
+  plausible OOM path on a process that runs for weeks. Both roads are
+  closed with the idiom the inbound side already runs: a
+  `sync_channel` bound (`OUTBOUND_CAP` 1000) with `try_send`-shed at
+  the producer — a shed answer is a requester's timeout, the same end
+  an unbounded queue gave everyone eventually, without the RSS — and
+  a ten-second write timeout beside the read timeout, so a stalled
+  peer tears its road down into the ordinary backoff. The status
+  channel got the same bound (`STATUS_CAP` 100): nothing drains it
+  until someone asks for status, so a relay flapping unwatched for
+  weeks wrote messages nobody consumed, and the drain's
+  newest-state-per-URL rule makes a shed transition free. In
+  `nip46-relay`, a new REQ with a subscription id already in use now
+  replaces the old filter (NIP-01's replace rule — without it, a
+  client that re-REQs in a loop grew its Vec one entry a time for the
+  life of the connection), and the connection maps' cleanup moved into
+  a `Leaving` drop guard that also unwinds through a poisoned lock, so
+  a panic inside a connection's serve loop can no longer leak its
+  subscriptions and outbound queue.
+
 - **The release road builds the siblings once, and the nightly gets a
   ledger.** Two road changes from the 45.2 plan. First (#74's Option
   A): every job that boots a disk was re-running the kumaui sibling
