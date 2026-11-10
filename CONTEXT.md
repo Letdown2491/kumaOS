@@ -83,3 +83,33 @@ _Avoid_: snapshot test, fixture
 The desktop-entry layer between the shell and the declaration's
 verbs: entries the shell searches, every exec through kuma-launch.
 _Avoid_: launcher entries, shortcuts
+
+**Dev install**:
+A development build riding a running machine beside its image:
+`kuma dev install` stages a checkout's committed, stamp-verified
+binaries into `~/.local/bin` and writes a receipt. `/usr` stays the
+image's; nothing here is a deployment.
+_Avoid_: side install, overwrite (nothing is overwritten), manual
+deploy
+
+**Receipt**:
+The file a dev install writes
+(`~/.local/share/kuma/dev-install.json`), naming every checkout and
+binary it staged, at what commit. The record of what the machine
+borrows — informational, not enforcement.
+_Avoid_: manifest, lockfile (that is kuma.lock, a different thing)
+
+**Lease**:
+The receipt's semantics: a dev install borrows around the image only
+until the image catches up, and lapses when the running image reaches
+the version the dev install was staged around. The image is always
+the authority; the lease never outlives its own truth quietly.
+_Avoid_: pin, lock
+
+**Retirement**:
+The lease ending: the upgrade and update paths remove the staged
+binaries and the receipt once the image has caught up. Doctor grades
+a lapsed or broken lease and executes nothing — retirement belongs to
+the paths that end the lease, not the one that reports it.
+_Avoid_: uninstall, cleanup, garbage collection
+
