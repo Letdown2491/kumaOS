@@ -4436,6 +4436,7 @@ smoke_boot() {
         # login shell to disagree with.
         # $mode is the one thing that SHOULD expand on the client side:
         # the mode's own name, so the failure names the mode that failed.
+        # shellcheck disable=SC2016  # the $d is the guest's, not ours
         out=$(printf 'd=$(mktemp -d); cd "$d" && exec kuma run %s -- /bin/true' "$mode" \
             | ssh "${ssh_opts[@]}" bash -s 2>&1) \
             || bad "kuma run $mode could not exec true(1): ${out:-no output captured}"
