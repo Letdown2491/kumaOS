@@ -47,6 +47,16 @@
   container battery now holds it: Unreleased is the first section and
   every version heading descends.
 
+- **The battery's hibernate lap declines what its fixture cannot
+  prove.** The diagnostics of this cycle found the "flaky" hibernate
+  reds are neither flaky nor ours: kernel 7.3's virtio-gpu driver
+  refuses S4 on any virgl device, and the fixture's GPU is virgl
+  because the desktop cannot boot headless without it. The lap now
+  asks the still-live guest why the machine never powered down; the
+  kernel's refusal reads as a loud, permanent warning naming exactly
+  which checks the run did and did not make, and a guest without the
+  refusal still fails honestly.
+
 - **The publish road grants what its validation road needs.** The
   release workflow's permissions line up with the validation jobs it
   runs.
