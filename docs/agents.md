@@ -118,6 +118,14 @@ between runs, and nothing promises they will not gain detail.
 - **Nothing changes what's running without a reboot.** `switch`, `update`,
   `upgrade` and `rollback` gate on `--yes`, and even then only stage a
   deployment.
+- **A dev build rides the machine on a lease, not by replacing the image.**
+  `kuma dev install` stages a checkout's built binaries into `~/.local/bin`
+  — verified first: the tree must be committed and every staged binary must
+  answer `--version` for that commit — and writes a receipt at
+  `~/.local/share/kuma/dev-install.json`. The receipt is a lease: it retires
+  itself on the next `kuma upgrade` or `kuma update` once the image reaches
+  the version the dev install was staged around, and `kuma doctor` grades
+  the gap between the receipt's story and the machine.
 
 `kuma install` is the one exception, and worth understanding before driving
 it. It writes a disk immediately and cannot be undone: no staged deployment

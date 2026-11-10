@@ -882,6 +882,7 @@ pub fn doctor(json: bool, as_report: bool) -> Result<()> {
         check_etc_drift(&mut report);
         check_keymap(&mut report);
         check_mime_defaults(&mut report);
+        check_dev_install(&mut report);
     } else if Path::new("/usr/lib/kuma").is_dir() {
         report(
             Grade::Warn,
@@ -2883,6 +2884,87 @@ fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Actio
         format!(
             "mime default(s) point at handlers that are not installed — removed by convergence or by hand; pick a new default in your desktop's settings, or declare the app again: {}",
             named.join(", ")
+        ),
+        None,
+    );
+}
+
+/// The dev install's lease, graded where the machine can read it.
+/// Informational by design: a receipt on the machine is a developer's
+/// own choice, doctor executes nothing, and the retirement belongs to
+/// the upgrade path that ends the lease. What is graded is the gap
+/// between the receipt's story and the machine: a binary the receipt
+/// names that is gone, and a lease the image has already caught up to
+/// — both states where the receipt says one thing and the machine
+/// another, which is the only lie doctor exists to catch.
+fn check_dev_install(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
+    let Some(receipt) = crate::dev::Receipt::read() else {
+        // No receipt is the default, not an achievement: silence, the
+        // way a machine with no skip stamp stays silent under
+        // check_convergence.
+        return;
+    };
+    // The staged binaries live beside the account that ran the install.
+    let Some(home) = crate::state::primary_home() else {
+        report(
+            Grade::Warn,
+            "dev install",
+            format!(
+                "a receipt at {} names {} staged binary/binaries, but this machine's baked declaration names no primary account to look under",
+                crate::dev::receipt_path().display(),
+                receipt.binaries.len()
+            ),
+            None,
+        );
+        return;
+    };
+    let missing: Vec<String> = receipt
+        .binaries
+        .iter()
+        .filter(|b| !home.join(".local/bin").join(&b.name).exists())
+        .map(|b| b.name.clone())
+        .collect();
+    if !missing.is_empty() {
+        report(
+            Grade::Warn,
+            "dev install",
+            format!(
+                "the receipt names binary/binaries no longer on the machine: {} — a hand deleted them, and the receipt is the only thing left telling that story",
+                missing.join(", ")
+            ),
+            Some(Action::new(
+                "dev retire",
+                format!("rm {}", crate::dev::receipt_path().display()),
+                "clear a receipt whose binaries are gone",
+            )),
+        );
+        return;
+    }
+    if crate::dev::lapsed(&receipt) {
+        let version = receipt.version().to_string();
+        report(
+            Grade::Warn,
+            "dev install",
+            format!(
+                "the dev install is a lease and this image has reached version {version}: the image's own binaries are the ones it was staged around, and the receipt outlives its truth until someone acts"
+            ),
+            Some(Action::new(
+                "upgrade",
+                "kuma upgrade",
+                "the upgrade path retires a lapsed lease on its way through",
+            )),
+        );
+        return;
+    }
+    let commits: Vec<&str> = receipt.checkouts.iter().map(|c| c.commit.as_str()).collect();
+    report(
+        Grade::Ok,
+        "dev install",
+        format!(
+            "active: {} staged binary/binaries from commit(s) {} — retires when this image reaches {}",
+            receipt.binaries.len(),
+            commits.join(", "),
+            receipt.version()
         ),
         None,
     );

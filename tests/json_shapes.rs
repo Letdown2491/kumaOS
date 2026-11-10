@@ -101,6 +101,27 @@ fn a_broken_declaration_is_still_one_document() {
     assert!(doc["error"].is_string());
 }
 
+/// `dev install`'s refusals ride the same one-document promise: a
+/// checkout that is not a checkout fails before anything stages, and
+/// the document is the shape a caller parses, not a bare exit code.
+#[test]
+fn a_dev_install_refusal_is_one_document() {
+    let dir = std::env::temp_dir().join(format!("kuma-shape-dev-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("the fixture directory is created");
+    // Not a git checkout: the first gate the verb walks into.
+    let out = Command::new(env!("CARGO_BIN_EXE_kuma"))
+        .args(["dev", "install", "--json", dir.to_str().unwrap()])
+        .output()
+        .expect("the test binary runs kuma");
+    let stdout = String::from_utf8(out.stdout).expect("stdout is utf-8");
+    assert!(!out.status.success(), "a non-checkout is a refusal");
+    let doc: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("the refusal was not one JSON document ({e}): {stdout:?}"));
+    shape(&doc, &["error", "ok"]);
+    assert_eq!(doc["ok"], false);
+    assert!(doc["error"].is_string());
+}
+
 #[test]
 fn doctor_json_carries_findings_with_fixes() {
     let doc = kuma(&["doctor", "--json"]);

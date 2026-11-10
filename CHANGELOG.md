@@ -74,6 +74,29 @@
 
 ## Unreleased
 
+- **`kuma dev install` — the dev loop's promotion step, with a
+  receipt.** The container-build-and-stage loop (build in
+  `kuma-dev-gcc`, land binaries in `~/.local/bin`, restart the session
+  pieces by hand) never had a record: a machine carrying four binaries
+  from three different commits is how the 44.9.0 story happened, and
+  nothing on the machine could answer "what is dev-built here, from
+  what, and is any of it stale". The verb verifies before it moves —
+  every checkout's tree must be committed (a dirty tree is a stamp no
+  commit describes) and every `target/release` binary that answers
+  `--version` must answer for that checkout's HEAD (the same stamp
+  gate the image's staging runs, caught before it matters) — then
+  stages atomically (`.new` + `mv`, so a running shell or daemon keeps
+  working) and writes a receipt at
+  `~/.local/share/kuma/dev-install.json`. The receipt is a lease, not
+  enforcement: the image is always the authority, and the lease
+  retires itself on the next `kuma upgrade` or `kuma update` once the
+  image reaches the version the dev install was staged around — the
+  machines where it matters most are the ones whose next command is
+  the upgrade that ends it. `kuma doctor` grades the lease (executes
+  nothing): a binary the receipt names that is gone, and a lease the
+  image has already caught up to, are the two states where the receipt
+  says one thing and the machine another.
+
 - **The machine converges to its declaration, wherever that
   declaration lives.** The provenance gap the nano incident exposed:
   the convergers read the lists the *image* baked, so a fetch-lane

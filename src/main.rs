@@ -6,6 +6,7 @@ mod compose;
 mod config;
 mod containerfile;
 mod deployment;
+mod dev;
 mod edit;
 mod hibernate;
 mod host;
@@ -511,6 +512,20 @@ enum Cmd {
         #[command(subcommand)]
         cmd: KeymapCmd,
     },
+    /// Stage a development build onto this machine, with a receipt
+    ///
+    /// The dev loop's promotion step: verify each checkout's tree is
+    /// committed, verify every target/release binary answers --version
+    /// for that HEAD, stage it into ~/.local/bin atomically (.new + mv,
+    /// so a running shell or daemon keeps working), and write a receipt
+    /// at ~/.local/share/kuma/dev-install.json naming everything staged.
+    /// The receipt is a lease: it retires itself the moment this
+    /// machine's image reaches the version the dev install was staged
+    /// around.
+    Dev {
+        #[command(subcommand)]
+        cmd: DevCmd,
+    },
     /// Print shell completions (e.g. `kuma completions fish | source`)
     Completions {
         /// Shell to generate for
@@ -587,6 +602,20 @@ enum KeymapCmd {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum DevCmd {
+    /// Stage a checkout's built binaries beside the machine, atomically
+    Install {
+        /// The checkouts to stage from (default: this one). Each must be
+        /// committed, and every target/release binary that answers
+        /// --version must answer for that checkout's HEAD.
+        checkouts: Vec<std::path::PathBuf>,
+        /// Report the result as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let explicit = cli.config.is_some();
@@ -625,6 +654,7 @@ fn main() -> Result<()> {
             | Cmd::Remove { json, .. }
             | Cmd::Hibernate { json, .. }
             | Cmd::Install { json, .. }
+            | Cmd::Dev { cmd: DevCmd::Install { json, .. } }
             | Cmd::Keymap { cmd: KeymapCmd::Apply { json, .. } } => Some(*json),
             _ => None,
         }
@@ -875,6 +905,18 @@ fn run(
         Cmd::BootTitles => boot_titles(),
         Cmd::AccountsHeal => accounts::heal(),
         Cmd::FlatpakOverrides { scope } => flatpak_overrides(scope),
+        Cmd::Dev {
+            cmd: DevCmd::Install { checkouts, json: _ },
+        } => {
+            // No checkout named means this one: `kuma dev install` in the
+            // tree you just built is the common call.
+            let owned: Vec<PathBuf> = if checkouts.is_empty() {
+                vec![PathBuf::from(".")]
+            } else {
+                checkouts
+            };
+            dev::install(&owned, json)
+        }
         Cmd::Keymap { cmd } => match cmd {
             // apply's JSON resolution happened in main (the mutating
             // or-pattern); status is a read verb and resolves its own,
@@ -1820,6 +1862,12 @@ fn upgrade_staged_response(
 }
 
 fn update(config_path: &Path, tag: &str, yes: bool, json: bool) -> Result<()> {
+    // A dev install is a lease, and the machine just committed to moving
+    // its image: the moment before that move is when the lease's own
+    // terms (retire when the image reaches you) say the retirement runs.
+    // An image that catches up makes the receipt's side-by-side pointless
+    // and the receipt's story false.
+    dev::retire_if_lapsed();
     let config = Config::load(config_path)?;
     // The before-release is the RUNNING system's own answer, read
     // before anything moves: what the machine boots is what an update
@@ -2007,6 +2055,14 @@ fn release_move_json(
 }
 
 fn upgrade(config_path: &Path, check: bool, yes: bool, json: bool) -> Result<()> {
+    // Same lease logic as update's, but a check measures and does not
+    // touch: the retirement runs only on the apply lanes. An image that
+    // just moved past the dev install is the moment the lease ends, and
+    // the machines where it matters most are the ones whose next
+    // command is the upgrade that ends it.
+    if !check {
+        dev::retire_if_lapsed();
+    }
     // The verb never edits a declaration, but its routing reads the
     // machine's desktop, and the machine's answer is the baked one —
     // the same resolution update --check uses, for the same reason
