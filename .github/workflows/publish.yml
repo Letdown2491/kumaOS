@@ -59,6 +59,15 @@ on:
 permissions:
   contents: read
   packages: write
+  # The validate job calls published.yml, and a reusable workflow's
+  # permissions are capped by what the caller grants at the call site.
+  # published.yml reads ci's sibling artifact for its own commit (the
+  # Option A pass, #74), which costs the `actions: read` scope — a
+  # caller that does not grant it starts up with "requesting 'actions:
+  # read', but is only allowed 'actions: none'", and the whole
+  # dispatched run dies before a job exists. 45.2.0's first publish-tag
+  # red was exactly that: the callee's new scope never met a caller.
+  actions: read
 
 # Serialized against publish-tag.yml's legs and any manual dispatch:
 # the staging tags are per-example, but the moving tags are global, and
