@@ -74,6 +74,20 @@
 
 ## Unreleased
 
+- **`dev install` only executes what you built.** Three hardening
+  fixes on the dev surface, all from the same audit. Receipt-controlled
+  binary names are now bare filenames or the receipt reads as absent —
+  a name with a `/` or `..` in it (the receipt is a user-editable file)
+  would have walked the `retire` path join outside `~/.local/bin`. The
+  checkout's `target/` must be owned by the invoking account: the
+  verification executes the build output it stages, and
+  `kuma dev install ~/some-cloned-repo` would otherwise run a
+  stranger's binaries before any check names it — the refusal says so,
+  and the verb's help now states the boundary too. And the staged
+  `.new` copy is re-hashed against the receipt before the rename, so a
+  source changed between verify and copy fails the install loudly
+  instead of staging bytes the receipt vouches for falsely.
+
 - **The local declaration is what its owner wrote, provably.** Two
   authority-resolution fixes in `state.rs`. An unreadable declaration
   used to read as an absent one (`.ok()` made "cannot be read" and

@@ -61,7 +61,21 @@ pub struct Receipt {
 impl Receipt {
     pub fn read() -> Option<Receipt> {
         let text = std::fs::read_to_string(receipt_path()).ok()?;
-        serde_json::from_str(&text).ok()
+        let receipt: Receipt = serde_json::from_str(&text).ok()?;
+        // The names are joined into paths — at stage, at retire, at
+        // the daemon adopt — and the receipt is a file any user-level
+        // process can edit. A name with a `/` in it (or `..`, or an
+        // absolute path, which PathBuf::join lets replace the base
+        // whole) would walk outside ~/.local/bin at exactly the
+        // moment `retire` reaches for `remove_file`. An unauthenticated
+        // lease earns the same treatment as an unparseable one: None,
+        // the lease is gone, and doctor grades the machine on what it
+        // finds there.
+        receipt
+            .binaries
+            .iter()
+            .all(|b| is_bare_name(&b.name))
+            .then_some(receipt)
     }
 
     pub fn write(&self) -> Result<()> {
@@ -111,6 +125,15 @@ impl Receipt {
         let _ = std::fs::remove_file(receipt_path());
         retired
     }
+}
+
+/// A receipt's binary name may only be a bare filename: it is joined
+/// into ~/.local/bin on every road that consumes it, and `../..` or an
+/// absolute path would take the join outside the directory the lease
+/// owns — `PathBuf::join` with an absolute name replaces the base
+/// entirely.
+fn is_bare_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains('/')
 }
 
 /// Where dev binaries stage to: the home the stamp gate already
@@ -214,6 +237,27 @@ pub fn install(checkouts: &[PathBuf], json: bool) -> Result<()> {
             format!("cannot stage {} from {}", dest.display(), binary.from)
         })?;
         set_executable(&new)?;
+        // The verify-then-copy gap: between the hash the check took
+        // and this copy, the source could have changed (a concurrent
+        // build in the same checkout). The receipt must answer for the
+        // bytes actually staged, so the `.new` file is hashed and the
+        // rename happens only if it matches — a mismatch fails the
+        // install loudly instead of shipping a binary the receipt
+        // vouches for falsely.
+        let staged_sha = sha256_file(&new).with_context(|| {
+            format!("cannot hash the staged copy of {}", dest.display())
+        })?;
+        if staged_sha != binary.sha256 {
+            let _ = std::fs::remove_file(&new);
+            bail!(
+                "{} changed between verify and stage. The receipt names \
+                 sha256 {}; the staged copy hashes to {}. Nothing moved — \
+                 rebuild and install again.",
+                binary.from,
+                binary.sha256,
+                staged_sha
+            );
+        }
         // A running shell or daemon keeps the old inode; the rename is
         // why a hand-run kuma-shell survives the next install.
         std::fs::rename(&new, &dest)
@@ -286,6 +330,28 @@ fn stage_checkout(dir: &Path, receipt: &mut Receipt) -> Result<()> {
     }
     let version = checkout_version(dir)?;
     let release = dir.join("target/release");
+    // The stamp gate is about to RUN every binary it is about to
+    // stage — that is the check. For a checkout this account built,
+    // that crosses no line: cargo already ran that tree's build
+    // scripts. But `kuma dev install ~/some-cloned-repo` would execute
+    // a stranger's build output before any check names it, so the
+    // tree the binaries come from must be this account's own: refuse
+    // a target/ owned by anyone else, and say plainly that the verb
+    // executes what it verifies.
+    use std::os::unix::fs::MetadataExt;
+    let owner = std::fs::metadata(&release)
+        .with_context(|| format!("cannot read {} — build first", release.display()))?
+        .uid();
+    if owner != unsafe { libc::getuid() } {
+        bail!(
+            "{} is owned by uid {}, not yours. `dev install` executes the \
+             build output it verifies — every target/release binary answers \
+             --version as the check itself — so it only stages a checkout \
+             this account built.",
+            release.display(),
+            owner
+        );
+    }
     let mut staged = 0;
     let entries = std::fs::read_dir(&release)
         .with_context(|| format!("cannot read {} — build first", release.display()))?;

@@ -521,7 +521,9 @@ enum Cmd {
     /// at ~/.local/share/kuma/dev-install.json naming everything staged.
     /// The receipt is a lease: it retires itself the moment this
     /// machine's image reaches the version the dev install was staged
-    /// around.
+    /// around. Verification EXECUTES the build output — every staged
+    /// binary answers --version as the check itself — so this verb only
+    /// stages checkouts your own account built.
     Dev {
         #[command(subcommand)]
         cmd: DevCmd,
