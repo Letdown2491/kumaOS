@@ -3967,6 +3967,54 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         assert!(stamped.contains("on battery (10%)"), "{stamped}");
         assert!(stamped.contains("on a metered connection"), "{stamped}");
 
+        // The cap. The stamp's oldest line is the deferral clock: a
+        // proceed clears the stamp and every deferral adds its own, so
+        // "parked for 72 hours" is readable straight off it — no new
+        // file, no clock but the one the gate already keeps.
+        std::fs::write(&answer, "u 0").unwrap();
+        let iso = |ago: &str| -> String {
+            let out = Command::new("date")
+                .args(["-u", "-d", ago, "+%Y-%m-%dT%H:%M:%SZ"])
+                .output()
+                .unwrap();
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+
+        // A young deferral defers again: the same battery state, one
+        // more line, the marker the sync script reads.
+        let parked = battery("Discharging", "12");
+        let stamp = dir.path().join("stamp-Discharging-12");
+        std::fs::write(&stamp, format!("{} on battery (12%)\n", iso("1 hour ago"))).unwrap();
+        let (_, stamped) = run(&parked);
+        assert_eq!(stamped.lines().count(), 2, "a young deferral appends: {stamped}");
+        assert!(!stamped.contains("converged despite"), "{stamped}");
+        assert!(dir.path().join("marker-Discharging-12").exists(), "still deferred");
+
+        // The same state, three days later: the run is forced. The
+        // stamp is rewritten, not appended — the forced run is a run,
+        // so the deferrals it answers are spent and the clock restarts
+        // from it — and no marker is left, or the sync would skip the
+        // very run the gate decided to spend.
+        std::fs::write(&stamp, format!("{} on battery (12%)\n", iso("3 days ago"))).unwrap();
+        let (code, stamped) = run(&parked);
+        assert_eq!(code, 0);
+        assert!(stamped.contains("converged despite on battery (12%)"), "{stamped}");
+        assert_eq!(
+            stamped.lines().count(),
+            1,
+            "the forced run resets the deferral clock: {stamped}"
+        );
+        assert!(
+            !dir.path().join("marker-Discharging-12").exists(),
+            "no marker, or the sync skips the run the gate forced"
+        );
+
+        // A stamp that cannot be parsed defers: the gate may starve a
+        // run on a bad guess, never force one on a missing answer.
+        std::fs::write(&stamp, "not a timestamp the gate wrote\n").unwrap();
+        let (_, stamped) = run(&parked);
+        assert_eq!(stamped.lines().count(), 2, "an unparseable stamp defers: {stamped}");
+
         // A proceed clears the skips it is about to answer.
         let stale = dir.path().join("stale-stamp");
         std::fs::write(&stale, "2026-09-01T00:00:00Z on battery (5%)").unwrap();

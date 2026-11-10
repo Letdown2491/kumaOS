@@ -932,7 +932,7 @@ WantedBy=timers.target
 /// the currency passes: boot converges, the timer also keeps what the
 /// declaration never named current.
 pub(crate) const FLATPAK_SYNC_DAILY_SERVICE: &str = r#"[Unit]
-Description=Daily Flatpak convergence, skipped on battery or a metered connection
+Description=Daily Flatpak convergence, deferred on battery or a metered connection, forced past 72h
 Wants=network-online.target
 After=network-online.target
 StartLimitIntervalSec=1h
@@ -1567,6 +1567,17 @@ fi
 /// measurement settled too. A declaration key would be promise surface
 /// for a number nobody asked to change.
 ///
+/// Deferral has a ceiling, by the same logic. A deferral is a decision
+/// about now — low battery, a metered line — and none of those reasons
+/// ages into an excuse, so a deferral older than 72 hours runs anyway
+/// and the clock restarts from it: the stamp's oldest line is how long
+/// deferral has been true, since a proceed clears the stamp and every
+/// deferral adds its own. Without the cap, a laptop that lives in a
+/// bag or on a hotspot converges never, and the failure is silent —
+/// the browser stops updating while the timer stays green. The 72 is
+/// kuma's own, like the 20: three daily skips is the shape of
+/// "parked", not a knob anyone asked to turn.
+///
 /// Both roots are arguments so the decision table is runnable in tests:
 /// `[sysfs] [stamp] [marker]`, defaulting to the real paths.
 pub(crate) const CONVERGE_GATE_SCRIPT: &str = r#"#!/usr/bin/bash
@@ -1605,7 +1616,38 @@ case "$metered" in
 esac
 
 if [ -n "$reasons" ]; then
+    # The cap. A deferral is a decision about NOW — the battery is low,
+    # the connection is metered — and none of those reasons ages into an
+    # excuse: a machine parked on battery for a week would otherwise
+    # never converge again, and a browser that silently stops updating
+    # is the failure doctor exists to name. The stamp's oldest line is
+    # how long deferral has been true, because a proceed clears the
+    # stamp and every deferral adds its own. Past 72 hours currency is
+    # worth more than the battery the deferral saves, and the run
+    # happens — once, and the clock restarts from it. 72 is kuma's own,
+    # like the battery threshold: three daily skips is the shape of
+    # "parked", not a knob anyone asked to turn.
+    force=false
+    if [ -s "$stamp" ]; then
+        # An unreadable or malformed stamp defers: the gate may starve
+        # a run on a bad guess, never force one on a missing answer.
+        oldest=$(head -n 1 "$stamp" | cut -d' ' -f1)
+        oldest_epoch=$(date -u -d "$oldest" +%s 2>/dev/null || true)
+        now_epoch=$(date -u +%s)
+        if [ -n "$oldest_epoch" ] && [ -n "$now_epoch" ] \
+            && [ $((now_epoch - oldest_epoch)) -ge 259200 ]; then
+            force=true
+        fi
+    fi
     mkdir -p "$(dirname "$stamp")"
+    if [ "$force" = true ]; then
+        # Rewrite, not append: the forced run is a run, so the
+        # deferrals it answers are spent. What stays is the one line
+        # doctor reads out — the machine converged, and why it had to
+        # be forced to.
+        echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') converged despite ${reasons} — deferred past 72h" > "$stamp"
+        exit 0
+    fi
     echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') ${reasons}" >> "$stamp"
     : > "$marker"
     exit 0
@@ -3375,7 +3417,7 @@ WantedBy=timers.target
 /// stamp it writes is machine state in /var/lib/kuma; the sync itself
 /// stays uid 1000 — brew refuses root, and the prefix is owned by it.
 pub(crate) const BREW_SYNC_DAILY_SERVICE: &str = r#"[Unit]
-Description=Daily Homebrew convergence, skipped on battery or a metered connection
+Description=Daily Homebrew convergence, deferred on battery or a metered connection, forced past 72h
 Wants=network-online.target
 After=network-online.target kuma-brew-setup.service
 StartLimitIntervalSec=1h

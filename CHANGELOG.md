@@ -74,6 +74,21 @@
 
 ## Unreleased
 
+- **The convergence deferral has a ceiling.** The daily brew and
+  flatpak runs already defer on a low battery or a metered connection;
+  now a deferral older than 72 hours runs anyway. A deferral is a
+  decision about now — none of those reasons ages into an excuse, and
+  a laptop that lives in a bag or on a hotspot would otherwise never
+  converge again, its browser silently going stale while the timer
+  stays green. The skip stamp's oldest line is the deferral clock — a
+  proceed clears the stamp, every deferral adds its own — so the cap
+  needs no new state, and a forced run rewrites the stamp to the one
+  line `kuma doctor` reads out: converged, and why it had to be
+  forced. The 72 hours is kuma's own, like the 20% battery threshold —
+  three daily skips is the shape of "parked", not a knob anyone asked
+  to turn. Snapshots are untouched: the snapshot timer has never been
+  gated, and a snapshot on battery costs one copy-on-write mkdir.
+
 - **Snapshot example defaults tightened.** The examples' snapshot
   retention is now hourly, keep 6 recent plus 2 dailies (was 24 plus a
   week of dailies) — the defaults are what a stranger gets when they
