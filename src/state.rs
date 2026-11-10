@@ -132,6 +132,10 @@ pub fn locally_governed(axis: Axis) -> bool {
 /// A local declaration that exists but does not parse is an error, not
 /// a fallback: converging silently to the baked list because the
 /// owner's file has a typo is the nano incident wearing a disguise.
+/// The same ruling, one step earlier: a declaration that exists but
+/// cannot be read is an error, not an absence — `.ok()` used to make
+/// "unreadable" and "not there" the same answer, and the fallback that
+/// followed was silent convergence to a list the owner never named.
 pub fn governing(axis: Axis) -> anyhow::Result<Governs> {
     // A machine that cannot describe itself cannot answer the
     // authority question at all: the baked declaration is what names
@@ -140,15 +144,61 @@ pub fn governing(axis: Axis) -> anyhow::Result<Governs> {
     let baked_text = std::fs::read_to_string(BAKED_CONFIG)
         .map_err(|_| anyhow::anyhow!("this machine carries no baked declaration ({BAKED_CONFIG}); it is not a kuma machine"))?;
     let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
-    let local = primary_account(&Some(baked_text), &passwd)
-        .map(|home| home.join(".config/kuma/kuma.toml"));
+    let local = primary_record(&Some(baked_text), &passwd);
     match local {
-        Some(path) => {
-            let text = std::fs::read_to_string(&path).ok();
+        Some((primary_uid, home)) => {
+            let path = home.join(".config/kuma/kuma.toml");
+            let text = match std::fs::read_to_string(&path) {
+                Ok(text) => {
+                    // The opinion is about to be executed by a root
+                    // converger, so the file speaking for the primary
+                    // account must be the primary account's own, and
+                    // writable by no one else. Another local account's
+                    // file — or a group/world-writable one, which any
+                    // local account can rewrite — is not the owner's
+                    // opinion, and treating it as such would let one
+                    // account author what root converges for another.
+                    refuse_foreign_opinion(&path, primary_uid)?;
+                    Some(text)
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "the local declaration {} cannot be read: {e}",
+                        path.display()
+                    ))
+                }
+            };
             governing_core(axis, text.as_deref(), &path, Path::new(axis.baked_list()))
         }
         None => governing_core(axis, None, Path::new(""), Path::new(axis.baked_list())),
     }
+}
+
+/// The declaration's mode and ownership, checked before its text is
+/// read as an opinion: group- or world-writable, or owned by anyone
+/// but the primary account, is refused as an authority error — loud,
+/// like every other way the local declaration can be wrong.
+fn refuse_foreign_opinion(path: &Path, primary_uid: u32) -> anyhow::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path)
+        .map_err(|e| anyhow::anyhow!("the local declaration {} cannot be stated: {e}", path.display()))?;
+    if meta.mode() & 0o022 != 0 {
+        return Err(anyhow::anyhow!(
+            "the local declaration {} is group- or world-writable (mode {:o}); refusing it as an opinion any local account could rewrite",
+            path.display(),
+            meta.mode() & 0o777
+        ));
+    }
+    if meta.uid() != primary_uid {
+        return Err(anyhow::anyhow!(
+            "the local declaration {} is owned by uid {}, not the primary account's {}; refusing it as another account's opinion",
+            path.display(),
+            meta.uid(),
+            primary_uid
+        ));
+    }
+    Ok(())
 }
 
 /// The declared primary account's home on this machine, or None when
@@ -157,22 +207,29 @@ pub fn governing(axis: Axis) -> anyhow::Result<Governs> {
 pub(crate) fn primary_home() -> Option<std::path::PathBuf> {
     let baked_text = std::fs::read_to_string(BAKED_CONFIG).ok();
     let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
-    primary_account(&baked_text, &passwd)
+    primary_record(&baked_text, &passwd).map(|(_, home)| home)
 }
 
-/// The declared primary account's home directory, from the baked
-/// declaration's `[user].name` and the passwd entry. None when either
-/// is missing — a machine that cannot say who its primary account is
-/// has no local declaration to look for.
-fn primary_account(baked_text: &Option<String>, passwd: &str) -> Option<std::path::PathBuf> {
+/// The declared primary account's uid and home directory, from the
+/// baked declaration's `[user].name` and the passwd entry. None when
+/// either is missing — a machine that cannot say who its primary
+/// account is has no local declaration to look for. The uid rides
+/// beside the home because the declaration's ownership is checked
+/// against it: the account the declaration speaks for is the account
+/// whose file it must be.
+fn primary_record(baked_text: &Option<String>, passwd: &str) -> Option<(u32, std::path::PathBuf)> {
     let text = baked_text.as_deref()?;
     let config: Config = toml::from_str(text).ok()?;
     let name = config.user?.name;
     passwd
         .lines()
         .find(|line| line.split(':').next() == Some(name.as_str()))
-        .and_then(|line| line.split(':').nth(5))
-        .map(std::path::PathBuf::from)
+        .and_then(|line| {
+            let fields: Vec<&str> = line.split(':').collect();
+            let uid = fields.get(2)?.parse::<u32>().ok()?;
+            let home = fields.get(5)?;
+            Some((uid, std::path::PathBuf::from(home)))
+        })
 }
 
 /// One entry of a baked list: trimmed, non-empty.
@@ -1499,11 +1556,21 @@ mod tests {
         // A declaration with no primary account has no local file to
         // look for: the live wrapper only reads one when the baked
         // declaration names its primary account and passwd places it.
-        assert_eq!(primary_account(&Some("schema_version = 1\n".into()), "me:x:1000:1000:me:/var/home/me:/bin/bash"), None, "no [user], no primary account");
-        assert_eq!(primary_account(&Some(baked_cfg.into()), "other:x:1000:1000::/var/home/other:/bin/sh"), None, "an account the passwd entry lacks has no home");
+        // The record now carries the uid beside the home — the
+        // declaration's ownership is checked against it.
         assert_eq!(
-            primary_account(&Some(baked_cfg.into()), "root:x:0:0::/root:/bin/bash\nme:x:1000:1000::/var/home/me:/bin/bash"),
-            Some(std::path::PathBuf::from("/var/home/me")),
+            primary_record(&Some("schema_version = 1\n".into()), "me:x:1000:1000:me:/var/home/me:/bin/bash"),
+            None,
+            "no [user], no primary account"
+        );
+        assert_eq!(
+            primary_record(&Some(baked_cfg.into()), "other:x:1000:1000::/var/home/other:/bin/sh"),
+            None,
+            "an account the passwd entry lacks has no home"
+        );
+        assert_eq!(
+            primary_record(&Some(baked_cfg.into()), "root:x:0:0::/root:/bin/bash\nme:x:1000:1000::/var/home/me:/bin/bash"),
+            Some((1000, std::path::PathBuf::from("/var/home/me"))),
             "the primary account's home is the passwd entry's"
         );
     }

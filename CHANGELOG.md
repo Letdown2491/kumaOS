@@ -74,6 +74,18 @@
 
 ## Unreleased
 
+- **The local declaration is what its owner wrote, provably.** Two
+  authority-resolution fixes in `state.rs`. An unreadable declaration
+  used to read as an absent one (`.ok()` made "cannot be read" and
+  "not there" the same answer), so a root converger could silently
+  fall back to the baked list — the nano incident's shape, one
+  directory-permission away. A declaration that exists but cannot be
+  read is now an authority error, loud like a declaration that does
+  not parse. And the declaration's mode and ownership are checked
+  before its text becomes the opinion root executes: group- or
+  world-writable (any local account's rewrite), or owned by anyone but
+  the primary account, is refused as another account's opinion.
+
 - **The boot path stops paying for weather it can read.** Three trims
   from the audit, plus one boundary guard. The offline boot's six
   flatpak retries now cost one busctl read each instead of a full
