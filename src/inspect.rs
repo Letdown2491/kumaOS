@@ -433,18 +433,31 @@ pub(crate) fn image_list_stale(path: &str, declared: &BTreeSet<&str>) -> bool {
 
 /// Whether what this image baked is behind the declaration in hand.
 ///
-/// Only the lists a converger reads, because that is the question being
-/// asked: `kuma sync` starts convergers, convergers read
-/// `/usr/lib/kuma`, and an edit that has not been baked cannot reach
-/// them however many times you run it. rpm is out of scope here for the
-/// opposite reason to usual: it never converges at all, so a stale rpm
-/// list is a rebuild you have not done rather than a sync that lied.
+/// The override stores, yes, always: their converger still reads the
+/// image's baked stores, so an edit that has not been built cannot
+/// reach them however many times you run sync. The flatpak and brew
+/// lists, only where the baked list still governs — an axis the
+/// machine's own declaration names reaches the converger through the
+/// CLI road with no build, and an axis this declaration leaves silent
+/// is no opinion for the baked list to be behind. rpm is out of scope
+/// here for the usual reason: it never converges at all, so a stale
+/// rpm list is a rebuild you have not done rather than a sync that
+/// lied.
 pub(crate) fn baked_is_behind(config: &Config, root: &Path) -> bool {
-    let flatpak: BTreeSet<&str> = config.packages.flatpak.iter().map(String::as_str).collect();
-    let brew: BTreeSet<&str> = config.packages.brew.iter().map(String::as_str).collect();
-    let list = |name: &str| root.join("usr/lib/kuma").join(name).to_string_lossy().to_string();
-    image_list_stale(&list("flatpaks"), &flatpak)
-        || image_list_stale(&list("brews"), &brew)
+    let axis_stale = |axis: crate::state::Axis, declared: &[String]| -> bool {
+        if !crate::state::locally_governed(axis) {
+            let set: BTreeSet<&str> = declared.iter().map(String::as_str).collect();
+            let list = root.join("usr/lib/kuma").join(match axis {
+                crate::state::Axis::Flatpak => "flatpaks",
+                crate::state::Axis::Brew => "brews",
+            });
+            image_list_stale(&list.to_string_lossy(), &set)
+        } else {
+            false
+        }
+    };
+    axis_stale(crate::state::Axis::Flatpak, &config.packages.flatpak)
+        || axis_stale(crate::state::Axis::Brew, &config.packages.brew)
         || crate::overrides::image_stale(&config.overrides, root)
 }
 
@@ -868,6 +881,7 @@ pub fn doctor(json: bool, as_report: bool) -> Result<()> {
         check_hibernate(&mut report);
         check_etc_drift(&mut report);
         check_keymap(&mut report);
+        check_mime_defaults(&mut report);
     } else if Path::new("/usr/lib/kuma").is_dir() {
         report(
             Grade::Warn,
@@ -2791,8 +2805,90 @@ fn check_etc_drift(report: &mut impl FnMut(Grade, &str, String, Option<Action>))
 /// common drift is exactly the quiet one: `kuma keymap apply` moved the
 /// runtime layers, nothing recomposed, and the prompt kept speaking the
 /// old layout. Warn, not Fail: every layer works, they just disagree.
-fn check_keymap(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
-    let layers = crate::keymap::Layers::read();
+/// A mime default is a promise about a desktop entry, and convergence
+/// is one of the things that can take the entry away: a flatpak the
+/// machine's declaration converges away (or a store uninstall) removes
+/// the exported `.desktop`, and the default silently points at nothing
+/// — clicks on that mime type fall back to a chooser the user never
+/// chose. The edge is cheap to check and invisible to feel: both
+/// mimeapps files the spec names, every standard entry directory, and
+/// the first handler of each default, which is the only one consulted.
+fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
+    let home = crate::state::primary_home();
+    let mut files: Vec<std::path::PathBuf> = vec!["/etc/xdg/mimeapps.list".into()];
+    if let Some(home) = &home {
+        files.push(home.join(".config/mimeapps.list"));
+    }
+    // The directories a desktop entry may resolve in: the image's own,
+    // flatpak's two exports, and the account's private additions.
+    let mut dirs: Vec<std::path::PathBuf> =
+        ["/usr/share/applications", "/usr/local/share/applications",
+         "/var/lib/flatpak/exports/share/applications"]
+            .iter().map(std::path::PathBuf::from).collect();
+    if let Some(home) = &home {
+        dirs.push(home.join(".local/share/applications"));
+        dirs.push(home.join(".local/share/flatpak/exports/share/applications"));
+    }
+
+    // [Default Applications] entries only: `mime=handler.desktop`, the
+    // first handler of a list being the default. Added Associations are
+    // candidates, not answers, and nothing here grades them.
+    let mut defaults: Vec<(String, String)> = Vec::new();
+    for file in &files {
+        let Ok(text) = std::fs::read_to_string(file) else { continue };
+        let mut in_defaults = false;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                in_defaults = line == "[Default Applications]";
+                continue;
+            }
+            if !in_defaults || line.starts_with('#') || line.starts_with(';') {
+                continue;
+            }
+            let Some((mime, handlers)) = line.split_once('=') else { continue };
+            let Some(handler) = handlers.split(';').map(str::trim).find(|h| !h.is_empty()) else {
+                continue;
+            };
+            defaults.push((mime.trim().to_string(), handler.to_string()));
+        }
+    }
+    if defaults.is_empty() {
+        return;
+    }
+    let resolves = |handler: &str| -> bool {
+        handler.contains('/') || dirs.iter().any(|dir| dir.join(handler).exists())
+    };
+    let missing: Vec<(String, String)> = defaults
+        .iter()
+        .filter(|(_, handler)| !resolves(handler))
+        .cloned()
+        .collect();
+    if missing.is_empty() {
+        report(
+            Grade::Ok,
+            "defaults",
+            format!("all {} mime default(s) resolve to an installed handler", defaults.len()),
+            None,
+        );
+        return;
+    }
+    let named: Vec<String> = missing
+        .iter()
+        .map(|(mime, handler)| format!("{mime} → {handler}"))
+        .collect();
+    report(
+        Grade::Warn,
+        "defaults",
+        format!(
+            "mime default(s) point at handlers that are not installed — removed by convergence or by hand; pick a new default in your desktop's settings, or declare the app again: {}",
+            named.join(", ")
+        ),
+        None,
+    );
+}
+
+fn check_keymap(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {    let layers = crate::keymap::Layers::read();
     let drifts = layers.drifts();
     if drifts.is_empty() {
         // Report the agreement rather than going silent: "which layer

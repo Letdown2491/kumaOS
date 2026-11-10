@@ -325,6 +325,16 @@ enum Cmd {
         /// Report the result as JSON (progress moves to stderr)
         #[arg(long)]
         json: bool,
+        /// Print the brew list convergence follows, one formula per
+        /// line, and exit — the road the converger itself reads. stdout
+        /// is the artifact.
+        #[arg(long, conflicts_with = "print_flatpaks")]
+        print_brews: bool,
+        /// Print the flatpak list convergence follows, one app ID per
+        /// line, and exit — the road the converger itself reads. stdout
+        /// is the artifact.
+        #[arg(long, conflicts_with = "print_brews")]
+        print_flatpaks: bool,
     },
     /// Reclaim build leftovers: dangling images, abandoned build containers, stale composed bases, live media images
     Clean {
@@ -419,7 +429,8 @@ enum Cmd {
         #[arg(long)]
         report: bool,
     },
-    /// Validate the declaration without building anything (read-only)
+    /// Validate the declaration and report which declaration governs
+    /// convergence on this machine (read-only)
     Check {
         /// Emit the verdict as JSON
         #[arg(long)]
@@ -607,7 +618,7 @@ fn main() -> Result<()> {
             | Cmd::Update { json, .. }
             | Cmd::Upgrade { json, .. }
             | Cmd::Rollback { json, .. }
-            | Cmd::Sync { json }
+            | Cmd::Sync { json, .. }
             | Cmd::Clean { json }
             | Cmd::Add { json, .. }
             | Cmd::Capture { json, .. }
@@ -761,7 +772,17 @@ fn run(
             let path = read_config_path(config_path, explicit, !json);
             upgrade(&path, check, yes, json)
         }
-        Cmd::Sync { json: _ } => {
+        Cmd::Sync { json, print_brews, print_flatpaks } => {
+            // The print road answers the authority question instead of
+            // running convergence: the convergers themselves call this,
+            // so it must not depend on a caller, a working directory, or
+            // anything else a scheduled unit does not have.
+            if print_brews {
+                return print_governs(state::Axis::Brew, json);
+            }
+            if print_flatpaks {
+                return print_governs(state::Axis::Flatpak, json);
+            }
             // Resolved the same way diff resolves it: sync converges to
             // what the image baked, so whether the file being edited is
             // ahead of that is part of the answer, not a footnote.
@@ -906,6 +927,7 @@ fn check(config_path: &Path, json: bool) -> Result<()> {
                             "brew": config.packages.brew.len(),
                             "overrides": config.overrides.len(),
                         },
+                        "convergence": convergence_report(config_path),
                         "actions": next.iter().map(action_json).collect::<Vec<_>>(),
                     }))?
                 );
@@ -925,6 +947,7 @@ fn check(config_path: &Path, json: bool) -> Result<()> {
                     config.packages.flatpak.len(),
                     config.packages.brew.len()
                 );
+                print_convergence_prose(config_path);
                 print_actions(&next);
             }
             Ok(())
@@ -951,6 +974,81 @@ fn check(config_path: &Path, json: bool) -> Result<()> {
             // document after this one
             Err(response::Emitted("declaration invalid".into()).into())
         }
+    }
+}
+
+/// Which declaration governs each convergent axis on this machine, and
+/// whether this file's opinion is the one the converger follows — the
+/// divergence report the local-declaration ruling made a hard
+/// requirement, because a fetch-lane owner editing their own
+/// declaration must be able to ask who is listening.
+///
+/// The JSON shape is total: on a machine that cannot answer (not a
+/// kuma image, or no primary account), the axis says `unknown` rather
+/// than vanishing, so a caller reads one shape everywhere.
+fn convergence_report(config_path: &Path) -> serde_json::Value {
+    let text = std::fs::read_to_string(config_path).unwrap_or_default();
+    let axis_doc = |axis: state::Axis| {
+        let opinion = state::axis_opinion(&text, axis).ok().flatten();
+        let governing = state::governing(axis).ok();
+        let (governs, declaration) = match &governing {
+            Some(g) => (g.source.as_str().to_string(), Some(g.path.display().to_string())),
+            None => ("unknown".to_string(), None),
+        };
+        let diverges = match (&opinion, &governing) {
+            (Some(list), Some(g)) => {
+                let mine: std::collections::BTreeSet<&str> = list.iter().map(String::as_str).collect();
+                let theirs: std::collections::BTreeSet<&str> = g.list.iter().map(String::as_str).collect();
+                Some(mine != theirs)
+            }
+            _ => None,
+        };
+        serde_json::json!({
+            "governs": governs,
+            "declaration": declaration,
+            "diverges": diverges,
+        })
+    };
+    serde_json::json!({
+        "brew": axis_doc(state::Axis::Brew),
+        "flatpak": axis_doc(state::Axis::Flatpak),
+    })
+}
+
+/// The same report in prose, printed under the verdict — and only when
+/// this machine can answer it: a report of `unknown` on every axis is
+/// silence about a question this machine was never asked, not a line
+/// to print.
+fn print_convergence_prose(config_path: &Path) {
+    let text = std::fs::read_to_string(config_path).unwrap_or_default();
+    let checked = std::fs::canonicalize(config_path).ok();
+    let mut lines: Vec<String> = Vec::new();
+    for axis in [state::Axis::Brew, state::Axis::Flatpak] {
+        let Ok(g) = state::governing(axis) else { continue };
+        let opinion = state::axis_opinion(&text, axis).ok().flatten();
+        let named = opinion.is_some();
+        let mine = checked.as_ref().is_some_and(|c| {
+            std::fs::canonicalize(&g.path).is_ok_and(|p| p == *c)
+        });
+        let what = if mine {
+            format!("{} follows this file", axis.key())
+        } else if named {
+            format!(
+                "{} follows {} — not this file; the converger reads the declaration that governs",
+                axis.key(),
+                g.path.display()
+            )
+        } else {
+            format!(
+                "{} follows {} (this file names no opinion on it)",
+                axis.key(),
+                g.path.display()
+            )
+        };
+        lines.push(what);
+    }
+    if !lines.is_empty() {
+        println!("\nConvergence on this machine: {}.", lines.join("; "));
     }
 }
 
@@ -2843,6 +2941,31 @@ fn sync_response(
         .actions(actions)
 }
 
+/// The authority answer, one axis at a time: the list convergence
+/// follows and the declaration it came from. The plain form is the
+/// converger's own input — one entry per line, no header, no prose —
+/// and the JSON form is the same answer for a caller that wants to
+/// know whose list it is, not just what it says.
+fn print_governs(axis: state::Axis, json: bool) -> Result<()> {
+    let g = state::governing(axis)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "axis": axis.key(),
+                "governs": g.source.as_str(),
+                "declaration": g.path.display().to_string(),
+                "list": g.list,
+            })
+        );
+        return Ok(());
+    }
+    for item in g.list {
+        println!("{item}");
+    }
+    Ok(())
+}
+
 fn sync(declared: Option<&Config>, json: bool) -> Result<()> {
     let mut units: Vec<&str> = Vec::new();
     if Path::new(state::BAKED_NOSTR_PRESET).exists() {
@@ -2885,6 +3008,16 @@ fn sync(declared: Option<&Config>, json: bool) -> Result<()> {
         }
         bail!("not a kuma machine; sync converges a machine booted into a kuma image (`kuma vm` boots one)");
     }
+    // The authority probe, before "Converged" is said: the convergers
+    // ask the same question this verb is about to answer for them, and
+    // a local declaration that does not parse fails HERE — a refusal a
+    // caller can read — instead of starting units that all fail and a
+    // summary that said the opposite.
+    for axis in [state::Axis::Flatpak, state::Axis::Brew] {
+        if let Err(err) = state::governing(axis) {
+            bail!("convergence cannot resolve which declaration governs {}: {err}", axis.key());
+        }
+    }
     for (call, must_succeed) in convergence_calls(&units) {
         let args: Vec<&str> = call.iter().map(String::as_str).collect();
         if must_succeed {
@@ -2904,12 +3037,12 @@ fn sync(declared: Option<&Config>, json: bool) -> Result<()> {
     {
         converged.push("kuma-flatpak-overrides.service (user)".to_string());
     }
-    // What sync converges to is the declaration the *image* baked, and
-    // for a long time it said "Converged" and then sent you to `kuma
-    // diff` to confirm a match it could not produce: edit the
-    // declaration, run sync, and it starts convergers that read
-    // /usr/lib/kuma and never heard of the edit. Saying which
-    // declaration was applied is the whole fix.
+    // What sync converges to is the machine's own declaration where it
+    // speaks, and the image's baked list where it does not — the ruling
+    // the nano incident produced. What still needs a build is exactly
+    // the rest: the overrides stores (still read from the image), and
+    // an axis this declaration names while the machine's local road
+    // does not govern it.
     let behind = declared.is_some_and(|c| crate::inspect::baked_is_behind(c, Path::new("/")));
     let mut actions = Vec::new();
     if behind {
@@ -2931,7 +3064,7 @@ fn sync(declared: Option<&Config>, json: bool) -> Result<()> {
     let mut prose = format!("Converged: {}", converged.join(", "));
     if behind {
         prose.push_str(
-            "\n\nConverged to the declaration this image baked, which is behind yours: the edits it does not have cannot reach a converger until a build of them boots.",
+            "\n\nConverged where the machine's declaration governs; what still needs a build: the permission overrides this image does not have, and any axis this file names that the machine's local declaration leaves silent.",
         );
     }
     sync_response(converged, behind, &actions).print(json, &prose);

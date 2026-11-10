@@ -827,8 +827,10 @@ pub(crate) fn greetd_config(config: &Config) -> String {
 pub(crate) const DESKTOP_KARGS: &str = "kargs = [\"quiet\", \"rhgb\"]\n";
 
 /// Declared flatpaks are baked into the image as a list; this oneshot
-/// converges the machine to it on boot. The declaration is atomic image
-/// content — only the app installs are runtime state.
+/// converges the machine to it on boot — to the machine's own
+/// declaration where it names this axis, the baked list otherwise; see
+/// FLATPAK_SYNC_SCRIPT. The declaration is atomic image content — only
+/// the app installs are runtime state.
 ///
 /// The retries cover the timer's Persistent=true catch-up, which fires on
 /// resume before Wi-Fi is back — network-online.target only orders boot.
@@ -1509,7 +1511,17 @@ marker=${2:-/run/kuma-converge-gate/skip}
 if [ -e "$marker" ]; then
     exit 0
 fi
-declared=/usr/lib/kuma/flatpaks
+# The authority question, answered by the CLI the same way a human asks
+# it: the machine's own declaration when it names this axis — empty
+# included — the image's baked list otherwise. The baked file this
+# script used to read directly is the declaration of last resort now,
+# and the CLI is where the ruling lives; a script that parsed TOML
+# itself would be a second authority to keep in step. A CLI failure
+# fails the run rather than converging to a list nothing vouched for:
+# converging faithfully to the wrong authority is the nano incident.
+declared=$(mktemp)
+trap 'rm -f "$declared"' EXIT
+/usr/bin/kuma sync --print-flatpaks > "$declared"
 state=/var/lib/kuma/flatpaks-installed
 mkdir -p /var/lib/kuma
 [ -f "$state" ] || : > "$state"
@@ -3346,7 +3358,12 @@ if [ -e "$marker" ]; then
 fi
 brew=/home/linuxbrew/.linuxbrew/bin/brew
 [ -x "$brew" ] || exit 0
-declared=/usr/lib/kuma/brews
+# The flatpak sync's authority question, word for word: the machine's
+# own declaration governs where it speaks, the baked list is the last
+# resort, and a CLI failure fails the run. See FLATPAK_SYNC_SCRIPT.
+declared=$(mktemp)
+trap 'rm -f "$declared"' EXIT
+/usr/bin/kuma sync --print-brews > "$declared"
 state=/home/linuxbrew/.linuxbrew/.kuma-brews
 [ -f "$state" ] || : > "$state"
 # The convergence/currency split, the flatpak sync's word for word in

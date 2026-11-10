@@ -68,8 +68,16 @@ fn the_probe_is_the_root_resource() {
 fn check_json_carries_the_verdict() {
     let fixture = fixture();
     let doc = kuma(&["check", "--json", "--config", &fixture]);
-    shape(&doc, &["actions", "config", "declares", "ok", "valid"]);
+    shape(&doc, &["actions", "config", "convergence", "declares", "ok", "valid"]);
     assert_eq!(doc["ok"], true);
+    // The convergence report is a total shape: an axis this machine
+    // cannot answer says `unknown` rather than vanishing, so a caller
+    // reads one shape everywhere.
+    for axis in ["brew", "flatpak"] {
+        shape(&doc["convergence"][axis], &["declaration", "diverges", "governs"]);
+        assert_eq!(doc["convergence"][axis]["governs"], "unknown");
+        assert_eq!(doc["convergence"][axis]["diverges"], serde_json::Value::Null);
+    }
     for action in doc["actions"].as_array().expect("actions is an array") {
         shape(action, &["rel", "cmd", "why"]);
     }

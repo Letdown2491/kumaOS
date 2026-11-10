@@ -74,6 +74,27 @@
 
 ## Unreleased
 
+- **The machine converges to its declaration, wherever that
+  declaration lives.** The provenance gap the nano incident exposed:
+  the convergers read the lists the *image* baked, so a fetch-lane
+  owner editing their own `~/.config/kuma/kuma.toml` was editing a
+  file nothing read — and a release adoption converged away formulae
+  the machine's own declaration had installed. The convergers now ask
+  `kuma sync --print-flatpaks` / `--print-brews`, which resolves the
+  declared primary account's local declaration and falls back to the
+  image's baked list when no local opinion exists. The ruling's edge
+  rules are exact: an absent key is no opinion (the baked list
+  governs), a named key governs even when empty — `brew = []` means
+  converge away, because silence is not a zero. A local declaration
+  that fails to parse stops convergence loudly instead of falling
+  back: converging to the baked list because of a typo is the
+  incident one level deeper. `kuma check` now reports which
+  declaration governs each axis and whether this file's opinion is
+  the one the converger follows (the divergence report, in prose and
+  in the `convergence` key of its JSON), and doctor grades a mime
+  default whose handler no longer resolves — the one dangling promise
+  a converged-away flatpak leaves behind.
+
 - **The convergence deferral has a ceiling.** The daily brew and
   flatpak runs already defer on a low battery or a metered connection;
   now a deferral older than 72 hours runs anyway. A deferral is a

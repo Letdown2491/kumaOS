@@ -2716,12 +2716,15 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         use crate::inventory::FLATPAK_STATE;
         use crate::state::{BAKED_BREWS, BAKED_FLATPAKS, BAKED_OVERRIDES};
         let niri = generate(&config(EVERYTHING_ON));
-        for (path, script) in
-            [(BAKED_FLATPAKS, FLATPAK_SYNC_SCRIPT), (BAKED_BREWS, BREW_SYNC_SCRIPT)]
+        for (path, script, axis) in
+            [(BAKED_FLATPAKS, FLATPAK_SYNC_SCRIPT, "flatpaks"), (BAKED_BREWS, BREW_SYNC_SCRIPT, "brews")]
         {
+            // The converger asks the CLI which list governs; the baked
+            // path is the CLI's own last resort, so the agreement the
+            // test pins is the CLI's constant against the COPY.
             assert!(
-                script.contains(&format!("declared={path}")),
-                "the converger reads a different path than the one Rust decides from: {path}"
+                script.contains(&format!("/usr/bin/kuma sync --print-{axis}")),
+                "the converger does not ask who governs: {path}"
             );
             assert!(niri.contains(&format!(" {path}\n")), "nothing copies {path} into the image");
         }
@@ -4058,6 +4061,34 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         // green having installed nothing.
         assert!(FLATPAK_SYNC_SCRIPT.contains("/run/kuma-converge-gate/skip"));
         assert!(BREW_SYNC_SCRIPT.contains("/run/kuma-converge-gate/skip"));
+    }
+
+    /// The convergers ask the CLI which list to follow — the machine's
+    /// own declaration where it speaks, the baked list otherwise — and
+    /// never parse TOML themselves: a second parser would be a second
+    /// authority to keep in step, and one that already lost the ruling
+    /// once. The scripts fail when the CLI fails, so a broken local
+    /// declaration is a red unit, not a silent converge elsewhere.
+    #[test]
+    fn the_convergers_ask_the_cli_which_declaration_governs() {
+        assert!(
+            FLATPAK_SYNC_SCRIPT.contains("/usr/bin/kuma sync --print-flatpaks > \"$declared\""),
+            "the flatpak converger reads the authority answer, not a baked file"
+        );
+        assert!(
+            BREW_SYNC_SCRIPT.contains("/usr/bin/kuma sync --print-brews > \"$declared\""),
+            "the brew converger reads the authority answer, not a baked file"
+        );
+        assert!(
+            !FLATPAK_SYNC_SCRIPT.contains("declared=/usr/lib/kuma/flatpaks")
+                && !BREW_SYNC_SCRIPT.contains("declared=/usr/lib/kuma/brews"),
+            "no script reads the baked list directly anymore"
+        );
+        assert!(
+            FLATPAK_SYNC_SCRIPT.contains("set -euo pipefail")
+                && BREW_SYNC_SCRIPT.contains("set -euo pipefail"),
+            "a failed CLI call fails the run"
+        );
     }
 
     #[test]

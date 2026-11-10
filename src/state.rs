@@ -49,6 +49,208 @@ pub const BAKED_OVERRIDES: &str = "/usr/lib/kuma/overrides";
 /// that it does not.
 pub const BAKED_NOSTR_PRESET: &str = "/usr/lib/systemd/user-preset/50-kuma-nostr.preset";
 
+/// A convergent axis whose list a declaration can name: the two the
+/// daily convergers install and remove until the machine matches.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Axis {
+    Flatpak,
+    Brew,
+}
+
+impl Axis {
+    /// The baked list this axis reads when no declaration governs.
+    pub fn baked_list(self) -> &'static str {
+        match self {
+            Axis::Flatpak => BAKED_FLATPAKS,
+            Axis::Brew => BAKED_BREWS,
+        }
+    }
+
+    /// The `[packages]` key that names this axis.
+    pub fn key(self) -> &'static str {
+        match self {
+            Axis::Flatpak => "flatpak",
+            Axis::Brew => "brew",
+        }
+    }
+}
+
+/// Which declaration a governing list came from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Source {
+    /// The machine's own declaration named this axis: its list governs,
+    /// empty included. Empty is an opinion — converge away.
+    Local,
+    /// No local opinion for this axis: the image's baked list governs,
+    /// exactly as every image before the local-declaration road did.
+    Baked,
+}
+
+impl Source {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Source::Local => "local",
+            Source::Baked => "baked",
+        }
+    }
+}
+
+/// The list a convergent axis follows on this machine, and the
+/// declaration it came from.
+#[derive(Clone, Debug)]
+pub struct Governs {
+    pub source: Source,
+    /// The file the list was read from — the local declaration or the
+    /// baked list — so a report can name it.
+    pub path: std::path::PathBuf,
+    pub list: Vec<String>,
+}
+
+/// Whether a convergent axis is governed by the machine's own local
+/// declaration — the question `baked_is_behind` asks per axis, because
+/// a locally governed axis reaches the converger without a build.
+pub fn locally_governed(axis: Axis) -> bool {
+    governing(axis).map(|g| g.source == Source::Local).unwrap_or(false)
+}
+
+/// Which declaration governs a convergent axis on this machine.
+///
+/// The ruling the nano incident produced: the machine converges to its
+/// declaration, wherever that declaration lives. A local declaration
+/// naming this axis IS the convergence target — silence is not a zero,
+/// but a named key is, `= []` included. The image's baked list is the
+/// declaration of last resort, for a machine that never spoke.
+///
+/// The local declaration lives in the declared primary account's
+/// config directory, because the converger runs as root on a schedule:
+/// resolving the caller's own home would make the answer depend on who
+/// happened to run the verb, and a systemd unit has no caller. The
+/// primary account comes from the baked declaration — the machine's
+/// own self-description — and its home from the passwd entry, so the
+/// answer is the same whoever asks and whenever the timer fires.
+///
+/// A local declaration that exists but does not parse is an error, not
+/// a fallback: converging silently to the baked list because the
+/// owner's file has a typo is the nano incident wearing a disguise.
+pub fn governing(axis: Axis) -> anyhow::Result<Governs> {
+    // A machine that cannot describe itself cannot answer the
+    // authority question at all: the baked declaration is what names
+    // the primary account to ask, and without it "baked governs" would
+    // be a guess dressed as an answer.
+    let baked_text = std::fs::read_to_string(BAKED_CONFIG)
+        .map_err(|_| anyhow::anyhow!("this machine carries no baked declaration ({BAKED_CONFIG}); it is not a kuma machine"))?;
+    let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
+    let local = primary_account(&Some(baked_text), &passwd)
+        .map(|home| home.join(".config/kuma/kuma.toml"));
+    match local {
+        Some(path) => {
+            let text = std::fs::read_to_string(&path).ok();
+            governing_core(axis, text.as_deref(), &path, Path::new(axis.baked_list()))
+        }
+        None => governing_core(axis, None, Path::new(""), Path::new(axis.baked_list())),
+    }
+}
+
+/// The declared primary account's home on this machine, or None when
+/// the baked declaration and the passwd entry cannot name one. Shared
+/// by the doctor checks that grade one account's state.
+pub(crate) fn primary_home() -> Option<std::path::PathBuf> {
+    let baked_text = std::fs::read_to_string(BAKED_CONFIG).ok();
+    let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
+    primary_account(&baked_text, &passwd)
+}
+
+/// The declared primary account's home directory, from the baked
+/// declaration's `[user].name` and the passwd entry. None when either
+/// is missing — a machine that cannot say who its primary account is
+/// has no local declaration to look for.
+fn primary_account(baked_text: &Option<String>, passwd: &str) -> Option<std::path::PathBuf> {
+    let text = baked_text.as_deref()?;
+    let config: Config = toml::from_str(text).ok()?;
+    let name = config.user?.name;
+    passwd
+        .lines()
+        .find(|line| line.split(':').next() == Some(name.as_str()))
+        .and_then(|line| line.split(':').nth(5))
+        .map(std::path::PathBuf::from)
+}
+
+/// One entry of a baked list: trimmed, non-empty.
+fn entries(text: &str) -> Vec<String> {
+    text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect()
+}
+
+/// The axis opinion a declaration text carries: None when the axis key
+/// is absent — no opinion, the baked list's question to answer — and
+/// Some(list) when named, empty included. The whole local-declaration
+/// ruling lives in this distinction, so it is one function.
+pub fn axis_opinion(text: &str, axis: Axis) -> anyhow::Result<Option<Vec<String>>> {
+    let value: toml::Value = toml::from_str(text)?;
+    match value.get("packages").and_then(|p| p.get(axis.key())) {
+        None => Ok(None),
+        Some(list) => Ok(Some(
+            list.as_array()
+                .ok_or_else(|| anyhow::anyhow!("[packages].{} is not a list", axis.key()))?
+                .iter()
+                .map(|item| {
+                    item.as_str()
+                        .map(String::from)
+                        .ok_or_else(|| anyhow::anyhow!("[packages].{} holds a non-string", axis.key()))
+                })
+                .collect::<anyhow::Result<Vec<String>>>()?,
+        )),
+    }
+}
+
+/// The resolution, pure: local declaration text in (None when there is
+/// no file to read) with its path, and the baked list's path for the
+/// last-resort answer. Everything live about the machine sits in the
+/// text, so the decision table is testable without one.
+fn governing_core(
+    axis: Axis,
+    local_text: Option<&str>,
+    local_path: &Path,
+    baked_list_path: &Path,
+) -> anyhow::Result<Governs> {
+    let local = match local_text {
+        None => None,
+        Some(text) => {
+            // The file parses and validates first — a typo must stop the
+            // machine, not send convergence somewhere else — and then
+            // the axis question is presence, because absent and empty
+            // mean different things here.
+            let parsed: Config = toml::from_str(text).map_err(|e| {
+                anyhow::anyhow!(
+                    "the local declaration {} does not parse: {e}",
+                    local_path.display()
+                )
+            })?;
+            parsed.validate().map_err(|e| {
+                anyhow::anyhow!(
+                    "the local declaration {} does not validate: {e}",
+                    local_path.display()
+                )
+            })?;
+            axis_opinion(text, axis).map_err(|e| {
+                anyhow::anyhow!("{}: {e}", local_path.display())
+            })?
+        }
+    };
+    Ok(match local {
+        Some(list) => Governs {
+            source: Source::Local,
+            path: local_path.to_path_buf(),
+            list,
+        },
+        None => Governs {
+            source: Source::Baked,
+            path: baked_list_path.to_path_buf(),
+            list: std::fs::read_to_string(baked_list_path)
+                .map_or_else(|_| Vec::new(), |t| entries(&t)),
+        },
+    })
+}
+
 #[derive(Clone)]
 pub struct Action {
     pub rel: &'static str,
@@ -1225,5 +1427,84 @@ mod tests {
         assert!(json["facts"]["machine"].is_string());
         assert_eq!(json["actions"][0]["cmd"], "kuma build");
         assert!(json["actions"][0]["why"].is_string());
+    }
+
+    /// The authority decision table. The nano incident is the case the
+    /// whole gate exists for: a machine whose own declaration says one
+    /// thing while the image baked another converged faithfully to the
+    /// wrong authority. These pin which one wins, per shape of local
+    /// declaration — named axis governs, absent key does not, empty
+    /// list is an opinion, a broken file stops the machine rather than
+    /// silently re-bending it to the baked list.
+    #[test]
+    fn the_machine_converges_to_its_declaration_wherever_it_lives() {
+        let baked_cfg = "schema_version = 1\n[user]\nname = \"me\"\n";
+        let dir = tempfile::tempdir().unwrap();
+        let flatpak_list = dir.path().join("flatpaks");
+        std::fs::write(&flatpak_list, "org.mozilla.firefox\n").unwrap();
+        let brew_list = dir.path().join("brews");
+        std::fs::write(&brew_list, "ripgrep\n").unwrap();
+
+        // No local file at all: the baked list governs, the fetch lane's
+        // old behavior, which is the right behavior for a machine that
+        // never spoke.
+        let g = governing_core(Axis::Flatpak, None, Path::new(""), &flatpak_list)
+            .expect("resolves without a local declaration");
+        assert_eq!(g.source, Source::Baked);
+        assert_eq!(g.path, flatpak_list);
+        assert_eq!(g.list, ["org.mozilla.firefox"]);
+
+        // The local file names the axis: it governs, even against the
+        // baked list, and the report names whose file won.
+        let local = "schema_version = 1\n[packages]\nflatpak = [\"org.gnome.Loupe\"]\n";
+        let g = governing_core(
+            Axis::Flatpak,
+            Some(local),
+            Path::new("/var/home/me/.config/kuma/kuma.toml"),
+            &flatpak_list,
+        )
+        .expect("a valid local declaration resolves");
+        assert_eq!(g.source, Source::Local);
+        assert_eq!(g.list, ["org.gnome.Loupe"]);
+        assert_eq!(g.path, Path::new("/var/home/me/.config/kuma/kuma.toml"));
+
+        // Empty is an opinion: the owner said none, and convergence
+        // takes away what it installed. This is the case the old
+        // scripts could not even express, because silence and zero
+        // were the same empty file.
+        let local = "schema_version = 1\n[packages]\nflatpak = []\n";
+        let g = governing_core(Axis::Flatpak, Some(local), Path::new("/l"), &flatpak_list)
+            .expect("an empty list is a valid opinion");
+        assert_eq!(g.source, Source::Local);
+        assert!(g.list.is_empty(), "an empty list governs as empty");
+
+        // The axis this file does not name is not an opinion on it:
+        // brew is baked's, even though this local file governs flatpak.
+        let local = "schema_version = 1\n[packages]\nflatpak = []\n";
+        let g = governing_core(Axis::Brew, Some(local), Path::new("/l"), &brew_list)
+            .expect("an unnamed axis falls through");
+        assert_eq!(g.source, Source::Baked);
+        assert_eq!(g.path, brew_list);
+        assert_eq!(g.list, ["ripgrep"], "the baked list is the last resort's answer");
+
+        // A broken local declaration stops the machine loudly. Falling
+        // back to the baked list here would converge away the owner's
+        // formulae because of a typo — the incident again, one level
+        // deeper.
+        let local = "schema_version = 1\n[packages]\nflatpak = [\"no closing\n";
+        let err = governing_core(Axis::Flatpak, Some(local), Path::new("/l"), &flatpak_list)
+            .expect_err("a broken local declaration is a refusal");
+        assert!(err.to_string().contains("does not parse"), "{err}");
+
+        // A declaration with no primary account has no local file to
+        // look for: the live wrapper only reads one when the baked
+        // declaration names its primary account and passwd places it.
+        assert_eq!(primary_account(&Some("schema_version = 1\n".into()), "me:x:1000:1000:me:/var/home/me:/bin/bash"), None, "no [user], no primary account");
+        assert_eq!(primary_account(&Some(baked_cfg.into()), "other:x:1000:1000::/var/home/other:/bin/sh"), None, "an account the passwd entry lacks has no home");
+        assert_eq!(
+            primary_account(&Some(baked_cfg.into()), "root:x:0:0::/root:/bin/bash\nme:x:1000:1000::/var/home/me:/bin/bash"),
+            Some(std::path::PathBuf::from("/var/home/me")),
+            "the primary account's home is the passwd entry's"
+        );
     }
 }
