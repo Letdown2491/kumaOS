@@ -71,11 +71,7 @@ impl Receipt {
         // lease earns the same treatment as an unparseable one: None,
         // the lease is gone, and doctor grades the machine on what it
         // finds there.
-        receipt
-            .binaries
-            .iter()
-            .all(|b| is_bare_name(&b.name))
-            .then_some(receipt)
+        receipt.binaries.iter().all(|b| is_bare_name(&b.name)).then_some(receipt)
     }
 
     pub fn write(&self) -> Result<()> {
@@ -155,8 +151,7 @@ const DAEMON_UNIT: &str = "kuma-nostrd.service";
 fn daemon_override() -> PathBuf {
     std::env::var_os("HOME")
         .map(|home| {
-            PathBuf::from(home)
-                .join(".config/systemd/user/kuma-nostrd.service.d/override.conf")
+            PathBuf::from(home).join(".config/systemd/user/kuma-nostrd.service.d/override.conf")
         })
         .unwrap_or_else(|| {
             PathBuf::from(".config/systemd/user/kuma-nostrd.service.d/override.conf")
@@ -199,9 +194,7 @@ fn adopt_daemon(receipt: &Receipt) -> Result<Option<String>> {
     }
     let override_path = daemon_override();
     std::fs::create_dir_all(
-        override_path
-            .parent()
-            .with_context(|| "the override path has no parent".to_string())?,
+        override_path.parent().with_context(|| "the override path has no parent".to_string())?,
     )?;
     std::fs::write(
         &override_path,
@@ -233,9 +226,8 @@ pub fn install(checkouts: &[PathBuf], json: bool) -> Result<()> {
     for binary in &receipt.binaries {
         let dest = bin_home().join(&binary.name);
         let new = dest.with_extension("new");
-        std::fs::copy(&binary.from, &new).with_context(|| {
-            format!("cannot stage {} from {}", dest.display(), binary.from)
-        })?;
+        std::fs::copy(&binary.from, &new)
+            .with_context(|| format!("cannot stage {} from {}", dest.display(), binary.from))?;
         set_executable(&new)?;
         // The verify-then-copy gap: between the hash the check took
         // and this copy, the source could have changed (a concurrent
@@ -244,9 +236,8 @@ pub fn install(checkouts: &[PathBuf], json: bool) -> Result<()> {
         // rename happens only if it matches — a mismatch fails the
         // install loudly instead of shipping a binary the receipt
         // vouches for falsely.
-        let staged_sha = sha256_file(&new).with_context(|| {
-            format!("cannot hash the staged copy of {}", dest.display())
-        })?;
+        let staged_sha = sha256_file(&new)
+            .with_context(|| format!("cannot hash the staged copy of {}", dest.display()))?;
         if staged_sha != binary.sha256 {
             let _ = std::fs::remove_file(&new);
             bail!(
@@ -309,8 +300,7 @@ fn stage_checkout(dir: &Path, receipt: &mut Receipt) -> Result<()> {
     let git = |args: &[&str]| -> Result<String> {
         let out = Command::new("git").arg("-C").arg(dir).args(args).output()?;
         if !out.status.success() {
-            bail!("`git {}` failed: not a checkout, or a checkout git cannot read",
-                args.join(" "));
+            bail!("`git {}` failed: not a checkout, or a checkout git cannot read", args.join(" "));
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     };
@@ -417,19 +407,14 @@ fn stage_checkout(dir: &Path, receipt: &mut Receipt) -> Result<()> {
             commit
         );
     }
-    receipt.checkouts.push(Checkout {
-        path: dir.display().to_string(),
-        version,
-        commit,
-    });
+    receipt.checkouts.push(Checkout { path: dir.display().to_string(), version, commit });
     Ok(())
 }
 
 /// The checkout's version, from its Cargo.toml's [package] version —
 /// the same number the built binary's stamp carries.
 fn checkout_version(dir: &Path) -> Result<String> {
-    let text = std::fs::read_to_string(dir.join("Cargo.toml"))
-        .context("cannot read Cargo.toml")?;
+    let text = std::fs::read_to_string(dir.join("Cargo.toml")).context("cannot read Cargo.toml")?;
     let value: toml::Value = toml::from_str(&text).context("cannot parse Cargo.toml")?;
     value
         .get("package")
@@ -517,10 +502,7 @@ pub fn lapsed(receipt: &Receipt) -> bool {
 /// how a lease that can never lapse gets written: `dotted("kuma")` is
 /// nothing, and nothing never reaches the image's version.
 fn version_token(line: &str) -> String {
-    line.split_whitespace()
-        .find(|t| dotted(t).is_some())
-        .unwrap_or_default()
-        .to_string()
+    line.split_whitespace().find(|t| dotted(t).is_some()).unwrap_or_default().to_string()
 }
 
 /// The image's own kuma version — the dotted token of
@@ -565,11 +547,7 @@ pub fn retire_if_lapsed() {
     note(&format!(
         "Retired the dev install (a lease, lapsed when this image reached {}): {}.{}",
         receipt.version(),
-        if retired.is_empty() {
-            "nothing left to remove".to_string()
-        } else {
-            retired.join(", ")
-        },
+        if retired.is_empty() { "nothing left to remove".to_string() } else { retired.join(", ") },
         if daemon {
             " The nostr daemon's override is gone: it runs the image's binary again."
         } else {

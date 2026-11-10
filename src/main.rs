@@ -907,16 +907,11 @@ fn run(
         Cmd::BootTitles => boot_titles(),
         Cmd::AccountsHeal => accounts::heal(),
         Cmd::FlatpakOverrides { scope } => flatpak_overrides(scope),
-        Cmd::Dev {
-            cmd: DevCmd::Install { checkouts, json: _ },
-        } => {
+        Cmd::Dev { cmd: DevCmd::Install { checkouts, json: _ } } => {
             // No checkout named means this one: `kuma dev install` in the
             // tree you just built is the common call.
-            let owned: Vec<PathBuf> = if checkouts.is_empty() {
-                vec![PathBuf::from(".")]
-            } else {
-                checkouts
-            };
+            let owned: Vec<PathBuf> =
+                if checkouts.is_empty() { vec![PathBuf::from(".")] } else { checkouts };
             dev::install(&owned, json)
         }
         Cmd::Keymap { cmd } => match cmd {
@@ -1041,8 +1036,10 @@ fn convergence_report(config_path: &Path) -> serde_json::Value {
         };
         let diverges = match (&opinion, &governing) {
             (Some(list), Some(g)) => {
-                let mine: std::collections::BTreeSet<&str> = list.iter().map(String::as_str).collect();
-                let theirs: std::collections::BTreeSet<&str> = g.list.iter().map(String::as_str).collect();
+                let mine: std::collections::BTreeSet<&str> =
+                    list.iter().map(String::as_str).collect();
+                let theirs: std::collections::BTreeSet<&str> =
+                    g.list.iter().map(String::as_str).collect();
                 Some(mine != theirs)
             }
             _ => None,
@@ -1071,9 +1068,8 @@ fn print_convergence_prose(config_path: &Path) {
         let Ok(g) = state::governing(axis) else { continue };
         let opinion = state::axis_opinion(&text, axis).ok().flatten();
         let named = opinion.is_some();
-        let mine = checked.as_ref().is_some_and(|c| {
-            std::fs::canonicalize(&g.path).is_ok_and(|p| p == *c)
-        });
+        let mine =
+            checked.as_ref().is_some_and(|c| std::fs::canonicalize(&g.path).is_ok_and(|p| p == *c));
         let what = if mine {
             format!("{} follows this file", axis.key())
         } else if named {

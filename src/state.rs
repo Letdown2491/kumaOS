@@ -141,8 +141,11 @@ pub fn governing(axis: Axis) -> anyhow::Result<Governs> {
     // authority question at all: the baked declaration is what names
     // the primary account to ask, and without it "baked governs" would
     // be a guess dressed as an answer.
-    let baked_text = std::fs::read_to_string(BAKED_CONFIG)
-        .map_err(|_| anyhow::anyhow!("this machine carries no baked declaration ({BAKED_CONFIG}); it is not a kuma machine"))?;
+    let baked_text = std::fs::read_to_string(BAKED_CONFIG).map_err(|_| {
+        anyhow::anyhow!(
+            "this machine carries no baked declaration ({BAKED_CONFIG}); it is not a kuma machine"
+        )
+    })?;
     let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
     let local = primary_record(&Some(baked_text), &passwd);
     match local {
@@ -181,8 +184,9 @@ pub fn governing(axis: Axis) -> anyhow::Result<Governs> {
 /// like every other way the local declaration can be wrong.
 fn refuse_foreign_opinion(path: &Path, primary_uid: u32) -> anyhow::Result<()> {
     use std::os::unix::fs::MetadataExt;
-    let meta = std::fs::metadata(path)
-        .map_err(|e| anyhow::anyhow!("the local declaration {} cannot be stated: {e}", path.display()))?;
+    let meta = std::fs::metadata(path).map_err(|e| {
+        anyhow::anyhow!("the local declaration {} cannot be stated: {e}", path.display())
+    })?;
     if meta.mode() & 0o022 != 0 {
         return Err(anyhow::anyhow!(
             "the local declaration {} is group- or world-writable (mode {:o}); refusing it as an opinion any local account could rewrite",
@@ -221,15 +225,12 @@ fn primary_record(baked_text: &Option<String>, passwd: &str) -> Option<(u32, std
     let text = baked_text.as_deref()?;
     let config: Config = toml::from_str(text).ok()?;
     let name = config.user?.name;
-    passwd
-        .lines()
-        .find(|line| line.split(':').next() == Some(name.as_str()))
-        .and_then(|line| {
-            let fields: Vec<&str> = line.split(':').collect();
-            let uid = fields.get(2)?.parse::<u32>().ok()?;
-            let home = fields.get(5)?;
-            Some((uid, std::path::PathBuf::from(home)))
-        })
+    passwd.lines().find(|line| line.split(':').next() == Some(name.as_str())).and_then(|line| {
+        let fields: Vec<&str> = line.split(':').collect();
+        let uid = fields.get(2)?.parse::<u32>().ok()?;
+        let home = fields.get(5)?;
+        Some((uid, std::path::PathBuf::from(home)))
+    })
 }
 
 /// One entry of a baked list: trimmed, non-empty.
@@ -250,9 +251,9 @@ pub fn axis_opinion(text: &str, axis: Axis) -> anyhow::Result<Option<Vec<String>
                 .ok_or_else(|| anyhow::anyhow!("[packages].{} is not a list", axis.key()))?
                 .iter()
                 .map(|item| {
-                    item.as_str()
-                        .map(String::from)
-                        .ok_or_else(|| anyhow::anyhow!("[packages].{} holds a non-string", axis.key()))
+                    item.as_str().map(String::from).ok_or_else(|| {
+                        anyhow::anyhow!("[packages].{} holds a non-string", axis.key())
+                    })
                 })
                 .collect::<anyhow::Result<Vec<String>>>()?,
         )),
@@ -288,17 +289,12 @@ fn governing_core(
                     local_path.display()
                 )
             })?;
-            axis_opinion(text, axis).map_err(|e| {
-                anyhow::anyhow!("{}: {e}", local_path.display())
-            })?
+            axis_opinion(text, axis)
+                .map_err(|e| anyhow::anyhow!("{}: {e}", local_path.display()))?
         }
     };
     Ok(match local {
-        Some(list) => Governs {
-            source: Source::Local,
-            path: local_path.to_path_buf(),
-            list,
-        },
+        Some(list) => Governs { source: Source::Local, path: local_path.to_path_buf(), list },
         None => Governs {
             source: Source::Baked,
             path: baked_list_path.to_path_buf(),
@@ -1559,7 +1555,10 @@ mod tests {
         // The record now carries the uid beside the home — the
         // declaration's ownership is checked against it.
         assert_eq!(
-            primary_record(&Some("schema_version = 1\n".into()), "me:x:1000:1000:me:/var/home/me:/bin/bash"),
+            primary_record(
+                &Some("schema_version = 1\n".into()),
+                "me:x:1000:1000:me:/var/home/me:/bin/bash"
+            ),
             None,
             "no [user], no primary account"
         );
@@ -1569,7 +1568,10 @@ mod tests {
             "an account the passwd entry lacks has no home"
         );
         assert_eq!(
-            primary_record(&Some(baked_cfg.into()), "root:x:0:0::/root:/bin/bash\nme:x:1000:1000::/var/home/me:/bin/bash"),
+            primary_record(
+                &Some(baked_cfg.into()),
+                "root:x:0:0::/root:/bin/bash\nme:x:1000:1000::/var/home/me:/bin/bash"
+            ),
             Some((1000, std::path::PathBuf::from("/var/home/me"))),
             "the primary account's home is the passwd entry's"
         );

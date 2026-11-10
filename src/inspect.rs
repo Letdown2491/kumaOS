@@ -2822,10 +2822,14 @@ fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Actio
     }
     // The directories a desktop entry may resolve in: the image's own,
     // flatpak's two exports, and the account's private additions.
-    let mut dirs: Vec<std::path::PathBuf> =
-        ["/usr/share/applications", "/usr/local/share/applications",
-         "/var/lib/flatpak/exports/share/applications"]
-            .iter().map(std::path::PathBuf::from).collect();
+    let mut dirs: Vec<std::path::PathBuf> = [
+        "/usr/share/applications",
+        "/usr/local/share/applications",
+        "/var/lib/flatpak/exports/share/applications",
+    ]
+    .iter()
+    .map(std::path::PathBuf::from)
+    .collect();
     if let Some(home) = &home {
         dirs.push(home.join(".local/share/applications"));
         dirs.push(home.join(".local/share/flatpak/exports/share/applications"));
@@ -2860,11 +2864,8 @@ fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Actio
     let resolves = |handler: &str| -> bool {
         handler.contains('/') || dirs.iter().any(|dir| dir.join(handler).exists())
     };
-    let missing: Vec<(String, String)> = defaults
-        .iter()
-        .filter(|(_, handler)| !resolves(handler))
-        .cloned()
-        .collect();
+    let missing: Vec<(String, String)> =
+        defaults.iter().filter(|(_, handler)| !resolves(handler)).cloned().collect();
     if missing.is_empty() {
         report(
             Grade::Ok,
@@ -3063,7 +3064,8 @@ fn plain(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
 
-fn check_keymap(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {    let layers = crate::keymap::Layers::read();
+fn check_keymap(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
+    let layers = crate::keymap::Layers::read();
     let drifts = layers.drifts();
     if drifts.is_empty() {
         // Report the agreement rather than going silent: "which layer

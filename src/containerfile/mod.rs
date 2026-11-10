@@ -2716,9 +2716,10 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         use crate::inventory::FLATPAK_STATE;
         use crate::state::{BAKED_BREWS, BAKED_FLATPAKS, BAKED_OVERRIDES};
         let niri = generate(&config(EVERYTHING_ON));
-        for (path, script, axis) in
-            [(BAKED_FLATPAKS, FLATPAK_SYNC_SCRIPT, "flatpaks"), (BAKED_BREWS, BREW_SYNC_SCRIPT, "brews")]
-        {
+        for (path, script, axis) in [
+            (BAKED_FLATPAKS, FLATPAK_SYNC_SCRIPT, "flatpaks"),
+            (BAKED_BREWS, BREW_SYNC_SCRIPT, "brews"),
+        ] {
             // The converger asks the CLI which list governs; the baked
             // path is the CLI's own last resort, so the agreement the
             // test pins is the CLI's constant against the COPY.
@@ -3233,10 +3234,7 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         // ever installed, in both scripts — parsed one entry per line,
         // the -d making the boundary positional regardless of content.
         assert!(BREW_SYNC_SCRIPT.contains(r#"xargs -d '\n' -a "$declared" "$brew" install"#));
-        assert!(
-            FLATPAK_SYNC_SCRIPT
-                .contains(r#"xargs -r -d '\n' -a "$declared" flatpak install"#)
-        );
+        assert!(FLATPAK_SYNC_SCRIPT.contains(r#"xargs -r -d '\n' -a "$declared" flatpak install"#));
     }
 
     #[test]
