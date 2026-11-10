@@ -9,9 +9,12 @@
 //!
 //! The startup posture is the plan's gate made concrete: the keyring is
 //! PAM-unlocked by the session, so the daemon auto-unlocks and comes up
-//! answering — a reboot is invisible to a paired phone. A vault that
-//! will not open says so on stderr and the daemon keeps running locked;
-//! `kuma-nostr status` and the doctor both say so.
+//! answering — a reboot is invisible to a paired phone. The unlock rides
+//! a short retry burst, because the session's first minute is when the
+//! Secret Service is at its flakiest and one refused handshake should
+//! not cost the whole session. A vault that will not open says so on
+//! stderr and the daemon keeps running locked; `kuma-nostr status` and
+//! the doctor both say so.
 
 use std::sync::{Arc, Mutex};
 
@@ -100,9 +103,15 @@ fn main() -> anyhow::Result<()> {
     daemon.with_inactivity(window);
     let engine = daemon.engine();
 
-    // The startup posture: come up answering. A vault that will not
-    // open is a locked daemon, not a dead one.
-    match runtime.block_on(daemon.startup_unlock()) {
+    // The startup posture: come up answering. The retry burst rides
+    // over the session's first-minute races — the Secret Service
+    // activating, handing off between the PAM-spawned daemon and a
+    // DBus-activated one, or its known 51.x abort-on-OpenSession —
+    // where a single attempt would strand the bunker locked for the
+    // whole session. A vault that will not open is a locked daemon,
+    // not a dead one.
+    match runtime.block_on(daemon.startup_unlock_with_retries(3, std::time::Duration::from_secs(2)))
+    {
         Ok(npub) => eprintln!("kuma-nostrd: vault unlocked, bunker live as {npub}"),
         Err(e) => {
             eprintln!("kuma-nostrd: starting locked: {e:#}");

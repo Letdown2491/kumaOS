@@ -658,6 +658,38 @@ impl<S: super::vault::SecretStore> Daemon<S> {
         Ok(self.arm_bunker(&key))
     }
 
+    /// The startup posture with retries. The session's first minute is
+    /// the Secret Service's worst: it can be mid-activation, mid-handoff
+    /// between the PAM-spawned daemon and a DBus-activated one, or — on
+    /// gnome-keyring 51.x — mid-abort when the daemon's first OpenSession
+    /// arrives, and one NoReply would otherwise strand the bunker locked
+    /// for the whole session. A short retry burst gives the same PAM-open
+    /// wall a second and third chance. A vault that is genuinely absent
+    /// or locked answers the same every time, so the last error is
+    /// returned as-is after the attempts run out.
+    pub async fn startup_unlock_with_retries(
+        &mut self,
+        attempts: u32,
+        pause: Duration,
+    ) -> Result<String> {
+        let mut last = None;
+        for attempt in 1..=attempts.max(1) {
+            match self.startup_unlock().await {
+                Ok(npub) => return Ok(npub),
+                Err(e) => {
+                    if attempt < attempts {
+                        eprintln!(
+                            "kuma-nostrd: startup unlock attempt {attempt} failed, retrying: {e:#}"
+                        );
+                        tokio::time::sleep(pause).await;
+                    }
+                    last = Some(e);
+                }
+            }
+        }
+        Err(last.expect("the loop runs at least once"))
+    }
+
     async fn setup(&mut self, mode: SetupMode) -> Response {
         let key = match mode {
             SetupMode::Generate => SecretKey::generate(),
@@ -950,6 +982,66 @@ mod tests {
         assert!(daemon.startup_unlock().await.is_err());
         assert!(daemon.bunker.is_none(), "no vault, no bunker");
         assert!(daemon.pool.is_none(), "no vault, no road");
+    }
+
+    /// A store whose first N loads fail with the transport-shaped error
+    /// the session's first minute produces: the Secret Service refusing
+    /// its handshake. The startup retry burst's instrument.
+    struct FlakyStore {
+        inner: std::sync::Arc<MemoryStore>,
+        failures: std::sync::atomic::AtomicUsize,
+    }
+
+    impl SecretStore for FlakyStore {
+        async fn load(&self) -> Result<Option<Vec<u8>>> {
+            let remaining = self.failures.load(std::sync::atomic::Ordering::SeqCst);
+            if remaining > 0 {
+                self.failures.store(remaining - 1, std::sync::atomic::Ordering::SeqCst);
+                anyhow::bail!(
+                    "cannot open a Secret Service session: NoReply: Remote peer disconnected"
+                );
+            }
+            self.inner.load().await
+        }
+
+        async fn save(&self, payload: &[u8]) -> Result<()> {
+            self.inner.save(payload).await
+        }
+
+        async fn remove(&self) -> Result<()> {
+            self.inner.remove().await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_flaky_secret_service_does_not_strand_the_startup() {
+        // The 51.x keyring's first-minute abort storm, held still: a
+        // vault that exists behind a Secret Service that refuses its
+        // first two handshakes. One attempt strands the bunker locked —
+        // the session the panel watched on the morning of the update —
+        // and the burst brings it up answering.
+        let key = SecretKey::generate();
+        let inner = std::sync::Arc::new(MemoryStore::default());
+        Vault::new(inner.clone()).setup(&key).await.unwrap();
+
+        let flaky = |failures: usize| FlakyStore {
+            inner: inner.clone(),
+            failures: std::sync::atomic::AtomicUsize::new(failures),
+        };
+
+        let mut daemon = Daemon::new(Vault::new(flaky(2)), Vec::new(), None).0;
+        assert!(
+            daemon.startup_unlock_with_retries(1, Duration::ZERO).await.is_err(),
+            "one attempt is the old startup: the refusal strands it"
+        );
+        assert!(daemon.bunker.is_none(), "one refusal, no bunker");
+
+        let mut daemon = Daemon::new(Vault::new(flaky(2)), Vec::new(), None).0;
+        daemon
+            .startup_unlock_with_retries(3, Duration::from_millis(1))
+            .await
+            .expect("the burst rides over the storm");
+        assert!(daemon.bunker.is_some(), "the retry burst brings the bunker up");
     }
 
     #[tokio::test]

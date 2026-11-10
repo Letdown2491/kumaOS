@@ -82,8 +82,9 @@ async fn item_proxy<'a>(conn: &'a Connection, path: &'a OwnedObjectPath) -> Resu
 
 /// The items matching the attributes, exactly as the spec matches: every
 /// attribute must be present and equal. Searched through the service, so a
-/// locked collection answers the same as an empty one — the vault's `None`
-/// on load means "no vault here yet", not "wall".
+/// locked collection answers the same as an empty one — which is why
+/// `load` never trusts an empty search on its own: it asks the collection's
+/// own `Locked` property before believing `None`.
 ///
 /// The reply's shape is the daemon's dialect: the spec says one array, and
 /// gnome-keyring answers a structure of two — the second never filled. Both
@@ -126,14 +127,40 @@ async fn item_secret(
     Ok(secret.2)
 }
 
-/// Load the payload, or `None` when no vault exists here yet.
+/// Whether the default collection is locked. This is the empty search's
+/// second opinion: the service answers a locked collection and a missing
+/// vault with the same no-items, and the two could not be more different
+/// — one means "nothing was ever stored", the other means "the wall is
+/// shut". gnome-keyring 51.x makes the distinction daily: when the
+/// PAM-unlocked daemon dies at session start, the DBus-activated
+/// replacement comes up locked, and reading that as "no vault" would
+/// advise a setup that would overwrite a key nobody can see.
+async fn default_collection_locked(conn: &Connection) -> Result<bool> {
+    let collection = default_collection(conn).await?;
+    let proxy = Proxy::new(conn, SERVICE, collection.as_ref(), COLLECTION_IFACE)
+        .await
+        .context("cannot address the default collection")?;
+    proxy
+        .get_property::<bool>("Locked")
+        .await
+        .context("cannot read the default collection's lock state")
+}
+
+/// Load the payload, or `None` when no vault exists here yet. A locked
+/// collection is neither: the empty search it answers is an error naming
+/// the lock, so no caller mistakes a shut wall for an empty store.
 pub async fn load(attributes: &HashMap<String, String>) -> Result<Option<Vec<u8>>> {
     let conn = connect().await?;
     let session = open_session(&conn).await?;
     let items = search_items(&conn, attributes).await?;
     match items.first() {
         Some(item) => Ok(Some(item_secret(&conn, item, &session).await?)),
-        None => Ok(None),
+        None => {
+            if default_collection_locked(&conn).await? {
+                bail!("the login collection is locked; the vault cannot be read behind the lock — unlock the keyring and retry");
+            }
+            Ok(None)
+        }
     }
 }
 
