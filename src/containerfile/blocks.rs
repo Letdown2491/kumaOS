@@ -2479,6 +2479,14 @@ pub(crate) const SHELL_SERVICE: &str = r#"[Unit]
 Description=kuma-shell, the kuma desktop shell
 PartOf=graphical-session.target
 After=graphical-session.target
+# The same lesson the daemon units below carry: a wedged shell must
+# not respawn-spin forever. RestartSec=1 turned each failure into a
+# full GPU/allocator initialization every second, indefinitely, while
+# the shell held the logind lock-listener role; five tries a minute
+# and five seconds between them keeps the restart available and the
+# failure quiet.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -2491,7 +2499,7 @@ Environment=XCURSOR_THEME=Adwaita
 Environment=XCURSOR_SIZE=24
 ExecStart=/usr/bin/kuma-shell
 Restart=always
-RestartSec=1
+RestartSec=5
 Slice=session.slice
 
 [Install]
@@ -3416,11 +3424,18 @@ WantedBy=multi-user.target
 /// Same rationale as the flatpak timer: boot-only convergence goes
 /// stale on machines that stay up. Same name-keeps-the-enablement
 /// trick too, retargeting the timer at the gated daily unit.
+/// The brew timer's calendar is `01:00`, not `daily`: both daily
+/// convergers used to fire at midnight-plus-jitter, and on a resume
+/// where Persistent fires both catch-ups at once, `flatpak update`
+/// and `brew upgrade` ran as competing network and IO storms against
+/// a btrfs home. The hour's stagger is the whole fix — the flatpak
+/// side keeps its midnight calendar, and a job still running when the
+/// other starts is one hour of margin, not one jitter away.
 pub(crate) const BREW_SYNC_TIMER: &str = r#"[Unit]
 Description=Daily Homebrew convergence
 
 [Timer]
-OnCalendar=daily
+OnCalendar=01:00
 Persistent=true
 RandomizedDelaySec=1h
 Unit=kuma-brew-sync-daily.service
@@ -5060,6 +5075,13 @@ Restart=always
 # churn for nothing; five seconds between restarts is inaudible in a
 # session and keeps the failure quiet.
 RestartSec=5
+# The ceiling on the one process whose leak would grow without bound
+# beside a signing key: the daemon runs for weeks, and the audit that
+# bounded its channels also bounds what its own bugs can take from the
+# session. 256M is generosity itself for what the daemon does — the
+# cap is there to fail a broken daemon loudly, not to shape a healthy
+# one.
+MemoryMax=256M
 Slice=session.slice
 
 # The sandbox. A bunker holds a signing key; the unit is the reason an
@@ -5281,6 +5303,10 @@ Restart=always
 # daemon is a session service, not a boot-critical one, so a slow
 # restart costs seconds and buys a quiet failure.
 RestartSec=5
+# The daemon's ceiling, for the same reason the bunker's: a session
+# daemon that runs for weeks takes a cap, so its bugs fail loudly
+# instead of quietly eating the desktop.
+MemoryMax=256M
 Slice=session.slice
 
 # Loopback is the boundary: the relay carries signing metadata for the

@@ -74,6 +74,24 @@
 
 ## Unreleased
 
+- **The session's units take the same medicine the daemons wrote
+  down.** Three unit-policy changes from the audit. The shell's unit
+  said `Restart=always / RestartSec=1` with no start limit — a shell
+  wedged at startup respawn-spun every second forever, each attempt a
+  full GPU/allocator initialization, while holding the logind
+  lock-listener role. It now carries the exact lesson the daemon
+  units' comments record (`StartLimitIntervalSec=60`,
+  `StartLimitBurst=5`, `RestartSec=5`). The two session daemons
+  (kuma-nostrd, nip46-relay) take `MemoryMax=256M` — the first memory
+  ceilings in the image: a daemon that runs for weeks beside a signing
+  key now fails a leak loudly instead of quietly eating the session
+  (the heavy jobs — restic, flatpak — stay uncapped until their
+  ceilings are sized, because a cap too low breaks legitimate
+  multi-GB deltas). And the brew timer's calendar moved from `daily`
+  to `01:00`, ending the resume-time double storm where
+  Persistent-fired catch-ups of both convergers ran as competing
+  network and IO jobs against the same home.
+
 - **The daemon's queues are bounded, the relay's REQs replace.**
   The four-axis pre-release audit (performance, resource usage,
   memory leaks, security) found the leak posture strong everywhere
