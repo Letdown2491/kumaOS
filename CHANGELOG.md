@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+## v45.2.1 (2026-11-10)
+
+- **A locked keyring no longer reads as "no vault exists".** The vault
+  is found by searching the Secret Service, and a locked login
+  collection answers that search exactly like an empty one — so a
+  machine whose keyring daemon died mid-session (see next entry) was
+  told, on every unlock attempt, that no vault existed, which reads as
+  advice to run `setup` and threatens an overwrite of a key nobody can
+  see. The empty search now double-checks the collection's own
+  `Locked` property before it is believed: a shut wall is an error
+  naming the lock, and only a genuinely absent vault reads as absent.
+
+- **The daemon's startup unlock rides a retry burst.** The session's
+  first minute is the Secret Service's worst — gnome-keyring 51.1
+  aborts on bursts of fresh `OpenSession` connections (an upstream
+  `plain_negotiate` bug, see hey-cli#352/#453 for the identical
+  backtrace), and the daemon's login-morning handshake could land in
+  the storm and take a single NoReply as the whole session's answer,
+  stranding the bunker locked even though the PAM-unlocked daemon
+  survived. The startup posture now gives the same wall three tries,
+  two seconds apart, and a vault that is genuinely absent or locked
+  still fails fast on the last error.
+
+- **The battery's flaky laps say what hurt.** A smoke lap that failed
+  on a flaky fixture now names the flake in its verdict instead of a
+  bare red, so a rerun can be judged against what actually failed.
+
+- **The changelog reads newest first, and something checks.** The
+  v45.2.0 bump renamed Unreleased in place, burying the new release
+  under the previous one; the file's convention is restored and the
+  container battery now holds it: Unreleased is the first section and
+  every version heading descends.
+
+- **The publish road grants what its validation road needs.** The
+  release workflow's permissions line up with the validation jobs it
+  runs.
+
 ## v45.2.0 (2026-11-10)
 
 - **Doctor's report carries facts, not escapes.** The strings doctor
