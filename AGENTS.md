@@ -48,7 +48,15 @@ midway through producing. One battery at a time, read to the end.
 The daemon on a kuma machine is deployed from the checkout: a user-level
 drop-in (`~/.config/systemd/user/kuma-nostrd.service.d/override.conf`)
 re-points `ExecStart` at `target/release/kuma-nostrd`, marked TEMPORARY
-until the image ships the fixed daemon. So the deploy is: commit, then
+until the image ships the fixed daemon. Since 45.2's dev install,
+`kuma dev install` performs this ritual as its daemon step: it stages
+the nostr road's binaries beside kuma (their `--version` is held to the
+checkout's version, the same rule the image's staging gate uses),
+writes the override at the staged binary, and restarts the unit only if
+it was running; the lease's retirement removes the override, so
+`kuma upgrade` puts the daemon back on the image's binary. The manual
+road below still works and is the fallback. So the deploy is: commit,
+then
 `cargo build --release` + `cargo install --path .` in the container
 (the CLI comes from `~/.local/bin`, where the kumaui build script
 installs the five siblings too — the stamp gate resolves them beside

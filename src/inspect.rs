@@ -2894,14 +2894,56 @@ fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Actio
 /// own choice, doctor executes nothing, and the retirement belongs to
 /// the upgrade path that ends the lease. What is graded is the gap
 /// between the receipt's story and the machine: a binary the receipt
-/// names that is gone, and a lease the image has already caught up to
-/// — both states where the receipt says one thing and the machine
-/// another, which is the only lie doctor exists to catch.
+/// names that is gone, staged bytes the receipt did not record, and a
+/// lease the image has already caught up to — the states where the
+/// receipt says one thing and the machine another, which is the only
+/// lie doctor exists to catch.
 fn check_dev_install(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
+    // The known sibling names — the set `kuma build`'s staging gate
+    // resolves beside the running kuma (kuma itself, the five kumaui
+    // binaries, the nostr road's three).
+    const KNOWN: &[&str] = &[
+        "kuma",
+        "kuma-shell",
+        "kuma-greeter",
+        "kuma-files",
+        "kuma-term",
+        "kuma-monitor",
+        "kuma-nostrd",
+        "kuma-nostr",
+        "nip46-relay",
+    ];
     let Some(receipt) = crate::dev::Receipt::read() else {
-        // No receipt is the default, not an achievement: silence, the
-        // way a machine with no skip stamp stays silent under
-        // check_convergence.
+        // No receipt: the default, not an achievement — unless a home
+        // binary shadows the image's anyway. A hand-staged copy is
+        // the stale-sibling incident with no story attached: the
+        // stamp gate cannot interrogate it, the lease cannot retire
+        // it, and PATH prefers it over the image's binary.
+        if let Some(home) = crate::state::primary_home() {
+            let shadowing: Vec<String> = KNOWN
+                .iter()
+                .filter(|n| home.join(".local/bin").join(n).exists())
+                .map(|n| n.to_string())
+                .collect();
+            if !shadowing.is_empty() {
+                report(
+                    Grade::Warn,
+                    "dev install",
+                    format!(
+                        "binary/binaries in ~/.local/bin shadow the image's with no receipt \
+                         naming them: {} — `kuma dev install` is the way one gets there \
+                         legitimately, with a record; a hand-staged copy retires never and \
+                         explains itself to nobody",
+                        shadowing.join(", ")
+                    ),
+                    Some(Action::new(
+                        "dev install",
+                        "kuma dev install",
+                        "receipt the binaries you meant to stage, or remove the ones you didn't",
+                    )),
+                );
+            }
+        }
         return;
     };
     // The staged binaries live beside the account that ran the install.
@@ -2936,6 +2978,38 @@ fn check_dev_install(report: &mut impl FnMut(Grade, &str, String, Option<Action>
                 "dev retire",
                 format!("rm {}", crate::dev::receipt_path().display()),
                 "clear a receipt whose binaries are gone",
+            )),
+        );
+        return;
+    }
+    // The bytes must still be the bytes the receipt vouched for: a
+    // staged file replaced by hand is the receipt lying by proxy —
+    // every stamp it recorded describes bytes that are no longer
+    // there.
+    let replaced: Vec<String> = receipt
+        .binaries
+        .iter()
+        .filter(|b| {
+            crate::dev::sha256_file(&home.join(".local/bin").join(&b.name))
+                .map(|actual| actual != b.sha256)
+                .unwrap_or(true)
+        })
+        .map(|b| b.name.clone())
+        .collect();
+    if !replaced.is_empty() {
+        report(
+            Grade::Warn,
+            "dev install",
+            format!(
+                "the staged binary/binaries are not the bytes the receipt recorded: {} — \
+                 replaced by hand since the install, and every stamp the receipt carries \
+                 now describes bytes that are gone",
+                replaced.join(", ")
+            ),
+            Some(Action::new(
+                "dev install",
+                "kuma dev install",
+                "re-stage from the receipt's checkouts, or retire the receipt by hand",
             )),
         );
         return;

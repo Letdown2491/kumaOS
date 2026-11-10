@@ -112,9 +112,13 @@
   retires itself on the next `kuma upgrade` or `kuma update` once the
   image reaches the version the dev install was staged around — the
   machines where it matters most are the ones whose next command is
-  the upgrade that ends it. `kuma doctor` grades the lease (executes
-  nothing): a binary the receipt names that is gone, and a lease the
-  image has already caught up to, are the two states where the receipt
+  the upgrade that ends it — and the retirement is complete: the
+  nostr daemon's override goes with the binaries, so a daemon the dev
+  install adopted runs the image's binary again. `kuma doctor` grades
+  the lease (executes nothing): a binary the receipt names that is
+  gone, staged bytes the receipt did not record, a home binary
+  shadowing the image's with no receipt to tell its story, and a lease
+  the image has already caught up to, are the states where the receipt
   says one thing and the machine another.
 
 - **The machine converges to its declaration, wherever that

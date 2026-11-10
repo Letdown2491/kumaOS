@@ -70,7 +70,16 @@ Two kinds of software, two policies.
 Flatpaks and brews update themselves. Convergence runs at boot and on a
 daily timer, installs what your declaration names, and updates everything
 present whether declared or not. The daily run waits for wall power and
-an unmetered network first. If you want an app updated right now, update
+an unmetered network first — and a wait is a deferral, not a pardon: a
+deferral older than 72 hours runs anyway, battery or metered or not.
+Every reason to wait is a reason about right now — a low battery, a
+metered line — and none of them ages into an excuse, so the laptop that
+lives in a bag converges on the timer's third day instead of never. The
+72 hours is kuma's own, like the 20% battery threshold: there is no knob
+to turn, because a cap with an off switch is not a cap. Snapshots are
+outside this entirely — they are local and cheap, and a struggling
+machine is the one that wants more of them, not fewer. If you want an
+app updated right now, update
 it by hand; that is drift by choice, and `kuma capture` is how you would
 keep it.
 

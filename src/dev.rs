@@ -87,6 +87,12 @@ impl Receipt {
     /// Remove everything the receipt staged, then the receipt itself.
     /// Best effort on the binaries — a hand already deleted one is the
     /// common way a receipt goes stale — and loud about what went.
+    /// When the receipt staged the nostr daemon, the override goes
+    /// with them: it is the only thing pointing the unit at the
+    /// staged binary, and an override at a deleted binary is a daemon
+    /// that will not come back after the next reboot. With the
+    /// override gone, the unit's baked ExecStart answers — the image's
+    /// binary again, which is what "reverts to the image" means.
     pub fn retire(&self) -> Vec<String> {
         let mut retired = Vec::new();
         for binary in &self.binaries {
@@ -94,6 +100,13 @@ impl Receipt {
             if std::fs::remove_file(&dest).is_ok() {
                 retired.push(dest.display().to_string());
             }
+        }
+        if self.binaries.iter().any(|b| b.name == "kuma-nostrd") {
+            let override_path = daemon_override();
+            if std::fs::remove_file(&override_path).is_ok() {
+                retired.push(override_path.display().to_string());
+            }
+            bounce_daemon();
         }
         let _ = std::fs::remove_file(receipt_path());
         retired
@@ -106,6 +119,79 @@ fn bin_home() -> PathBuf {
     std::env::var_os("HOME")
         .map(|home| PathBuf::from(home).join(".local/bin"))
         .unwrap_or_else(|| PathBuf::from(".local/bin"))
+}
+
+/// The nostr daemon's user unit, and the drop-in a dev deploy of the
+/// daemon writes. The image bakes the unit with ExecStart at the
+/// image's binary; systemd does not consult PATH, so a staged daemon
+/// runs only if the override points at it — and only with the
+/// override REMOVED does retirement truly revert the daemon to the
+/// image's binary.
+const DAEMON_UNIT: &str = "kuma-nostrd.service";
+
+fn daemon_override() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(|home| {
+            PathBuf::from(home)
+                .join(".config/systemd/user/kuma-nostrd.service.d/override.conf")
+        })
+        .unwrap_or_else(|| {
+            PathBuf::from(".config/systemd/user/kuma-nostrd.service.d/override.conf")
+        })
+}
+
+/// Restart the nostr daemon if its user unit is running. A stopped
+/// daemon stays stopped: a dev install adopts the daemon, retirement
+/// reverts it, and neither one starts a unit the machine had
+/// deliberately down.
+fn bounce_daemon() {
+    let _ = Command::new("systemctl").args(["--user", "daemon-reload"]).status();
+    let active = Command::new("systemctl")
+        .args(["--user", "is-active", "--quiet", DAEMON_UNIT])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if active {
+        let _ = Command::new("systemctl").args(["--user", "restart", DAEMON_UNIT]).status();
+    }
+}
+
+/// Point the nostr daemon at the staged binary and bounce it — the
+/// last step of the ritual the nostr dev loop ran by hand (override,
+/// daemon-reload, restart). Only acts when the receipt stages the
+/// daemon AND the machine has the user unit: a machine without the
+/// nostr layer gets nothing written and says nothing.
+fn adopt_daemon(receipt: &Receipt) -> Result<Option<String>> {
+    if !receipt.binaries.iter().any(|b| b.name == "kuma-nostrd") {
+        return Ok(None);
+    }
+    let unit = Command::new("systemctl")
+        .args(["--user", "cat", DAEMON_UNIT])
+        .status()
+        .with_context(|| format!("cannot ask systemd about {DAEMON_UNIT}"))?;
+    if !unit.success() {
+        // No nostr layer on this machine: the daemon stages for an
+        // image that may carry it, and there is nothing here to adopt.
+        return Ok(None);
+    }
+    let override_path = daemon_override();
+    std::fs::create_dir_all(
+        override_path
+            .parent()
+            .with_context(|| "the override path has no parent".to_string())?,
+    )?;
+    std::fs::write(
+        &override_path,
+        format!(
+            "# Managed by `kuma dev install` — removed when the lease retires,\n\
+             # so the daemon reverts to the image's binary.\n\
+             [Service]\nExecStart=\nExecStart={}\n",
+            bin_home().join("kuma-nostrd").display()
+        ),
+    )
+    .with_context(|| format!("cannot write {}", override_path.display()))?;
+    bounce_daemon();
+    Ok(Some(override_path.display().to_string()))
 }
 
 /// The verb: stage one or more checkouts' built binaries onto this
@@ -135,6 +221,10 @@ pub fn install(checkouts: &[PathBuf], json: bool) -> Result<()> {
     }
     receipt.write()?;
     let names: Vec<&str> = receipt.binaries.iter().map(|b| b.name.as_str()).collect();
+    // The daemon adopt comes after the receipt: the receipt is the
+    // record that a dev daemon deploy exists, and the override is the
+    // only way the staged daemon runs — systemd does not consult PATH.
+    let daemon = adopt_daemon(&receipt)?;
     if json {
         println!(
             "{}",
@@ -143,6 +233,7 @@ pub fn install(checkouts: &[PathBuf], json: bool) -> Result<()> {
                 "receipt": receipt_path().display().to_string(),
                 "checkouts": receipt.checkouts,
                 "installed": names,
+                "daemon_override": daemon,
             })
         );
         return Ok(());
@@ -150,6 +241,12 @@ pub fn install(checkouts: &[PathBuf], json: bool) -> Result<()> {
     println!("Staged {} binary/binaries beside the machine:", names.len());
     for b in &receipt.binaries {
         println!("  {} ({}, {})", b.name, b.version, b.commit);
+    }
+    if let Some(path) = &daemon {
+        println!(
+            "\nThe nostr daemon runs the staged binary (override at {path}; \
+             a stopped unit stays stopped)."
+        );
     }
     println!(
         "\nThe receipt at {} is a lease: it retires itself when this machine's \
@@ -209,9 +306,19 @@ fn stage_checkout(dir: &Path, receipt: &mut Receipt) -> Result<()> {
         }
         let version_line = String::from_utf8_lossy(&out.stdout).trim().to_string();
         match stamp_sha(&version_line) {
-            // No commit token in the answer: not one of this project's
-            // stamped binaries, and not ours to judge.
-            None => continue,
+            // No commit token in the answer: the nostr road's trio —
+            // their `--version` is clap's crate version, and the
+            // image's own staging gate holds them to exactly that:
+            // the stamp must contain this checkout's version, because
+            // cargo builds the four together and a partial install is
+            // the stale-sibling shape the gate exists for. The same
+            // rule here is what makes "deploys ALL siblings" true and
+            // dev staging promise what image staging promises.
+            None => {
+                if !version_line.contains(&version) {
+                    continue;
+                }
+            }
             // A stale sibling — the exact state the image's own gate
             // fails on, refused here for the same reason: the receipt
             // would name a tree while staging bytes from another.
@@ -230,7 +337,7 @@ fn stage_checkout(dir: &Path, receipt: &mut Receipt) -> Result<()> {
             name: name.to_string(),
             from: path.display().to_string(),
             commit: commit.clone(),
-            version: first_token(&version_line),
+            version: version_token(&version_line),
             sha256,
         });
         staged += 1;
@@ -289,7 +396,11 @@ fn set_executable(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn sha256_file(path: &Path) -> Result<String> {
+/// sha256 of a file — the receipt records it, and the doctor's net
+/// compares it: the staged bytes must still be the bytes the receipt
+/// vouched for. `pub(crate)` because the doctor check is the other
+/// reader.
+pub(crate) fn sha256_file(path: &Path) -> Result<String> {
     // sha256sum is on every machine this verb can run on: it is the
     // same tool the image's verification story names.
     let out = Command::new("sha256sum").arg(path).output()?;
@@ -298,10 +409,6 @@ fn sha256_file(path: &Path) -> Result<String> {
     }
     let line = String::from_utf8_lossy(&out.stdout);
     Ok(line.split_whitespace().next().unwrap_or_default().to_string())
-}
-
-fn first_token(line: &str) -> String {
-    line.split_whitespace().next().unwrap_or_default().to_string()
 }
 
 /// The 7-hex commit token a `--version` stamp carries — kuma's own
@@ -337,12 +444,27 @@ pub fn lapsed(receipt: &Receipt) -> bool {
     image >= dev
 }
 
-/// The image's own kuma version, first token of `/usr/bin/kuma --version`.
+/// The version token in a `--version` line: the first token that
+/// parses as a dotted number. clap prints `{name} {version}`, so the
+/// line opens with the binary's own name — `kuma 45.2.0 (afea6df …)` —
+/// and the first token is the NAME. Reading the name as the version is
+/// how a lease that can never lapse gets written: `dotted("kuma")` is
+/// nothing, and nothing never reaches the image's version.
+fn version_token(line: &str) -> String {
+    line.split_whitespace()
+        .find(|t| dotted(t).is_some())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The image's own kuma version — the dotted token of
+/// `/usr/bin/kuma --version`, not the one on PATH, which a dev install
+/// is exactly the thing that shadows.
 fn image_version() -> String {
     Command::new("/usr/bin/kuma")
         .arg("--version")
         .output()
-        .map(|o| first_token(&String::from_utf8_lossy(&o.stdout)))
+        .map(|o| version_token(&String::from_utf8_lossy(&o.stdout)))
         .unwrap_or_default()
 }
 
@@ -372,14 +494,20 @@ pub fn retire_if_lapsed() {
     if !lapsed(&receipt) {
         return;
     }
+    let daemon = receipt.binaries.iter().any(|b| b.name == "kuma-nostrd");
     let retired = receipt.retire();
     note(&format!(
-        "Retired the dev install (a lease, lapsed when this image reached {}): {}.",
+        "Retired the dev install (a lease, lapsed when this image reached {}): {}.{}",
         receipt.version(),
         if retired.is_empty() {
             "nothing left to remove".to_string()
         } else {
             retired.join(", ")
+        },
+        if daemon {
+            " The nostr daemon's override is gone: it runs the image's binary again."
+        } else {
+            ""
         }
     ));
 }
@@ -438,6 +566,23 @@ mod tests {
         assert!(image > dev, "an image past the lease lapses it");
         assert!(dotted("45.2.0") <= dotted("45.2.0"), "equal versions lapse: the image caught up");
         assert!(dotted("45.1.9") < dotted("45.2.0"), "the dev build is ahead: the lease holds");
+    }
+
+    /// The version token's parse: clap prints `{name} {version}`, so
+    /// the first token is the binary's NAME. Reading the name as the
+    /// version made `dotted` answer nothing and a lease that could
+    /// never lapse — the bug this pins.
+    #[test]
+    fn the_version_token_is_the_first_dotted_word_not_the_first_word() {
+        assert_eq!(version_token("kuma 45.2.0 (abc1234 2026-11-10)"), "45.2.0");
+        assert_eq!(version_token("kuma-nostrd 45.2.0"), "45.2.0");
+        assert_eq!(version_token("kuma-shell 0.9.0 (7c0ffee)"), "0.9.0");
+        assert_eq!(version_token(""), "");
+        // A name that is all digits-and-nothing-else could impersonate
+        // a version; nothing in this repo is named that, and if one
+        // ever is, the parse's failure mode is a version that reads as
+        // the name's digits — caught here the day the name changes.
+        assert_eq!(version_token("2026 45.2.0"), "2026", "the FIRST dotted word wins");
     }
 
     /// The receipt's document shape: what it serializes as, and that a
