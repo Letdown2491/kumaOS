@@ -74,6 +74,12 @@
 
 ## Unreleased
 
+- **v45.2.0 (2026-11-10)** — the version heading below is where this
+  release's notes now live; this section stays for the next release's
+  entries, written in the same push as their changes.
+
+## v45.2.0 (2026-11-10)
+
 - **Doctor's report carries facts, not escapes.** The strings doctor
   formats into its report — receipt binary names and versions, the
   handler half of a mime default — come from files a user-level
