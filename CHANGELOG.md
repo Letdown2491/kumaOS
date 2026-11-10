@@ -74,6 +74,14 @@
 
 ## Unreleased
 
+- **Doctor's report carries facts, not escapes.** The strings doctor
+  formats into its report — receipt binary names and versions, the
+  handler half of a mime default — come from files a user-level
+  process can write, and doctor runs under sudo: a control character
+  in one was a terminal escape arriving in root's terminal. Every
+  user-controlled string is stripped to plain before it is formatted
+  in; UTF-8 names pass, control characters keep nothing.
+
 - **`dev install` only executes what you built.** Three hardening
   fixes on the dev surface, all from the same audit. Receipt-controlled
   binary names are now bare filenames or the receipt reads as absent —

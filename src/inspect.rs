@@ -2876,7 +2876,7 @@ fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Actio
     }
     let named: Vec<String> = missing
         .iter()
-        .map(|(mime, handler)| format!("{mime} → {handler}"))
+        .map(|(mime, handler)| format!("{} → {}", plain(mime), plain(handler)))
         .collect();
     report(
         Grade::Warn,
@@ -2899,6 +2899,14 @@ fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Actio
 /// receipt says one thing and the machine another, which is the only
 /// lie doctor exists to catch.
 fn check_dev_install(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
+    // Report text is terminal text, and doctor runs under sudo: the
+    // strings below come from files a user-level process can write —
+    // the receipt's names and versions, a mimeapps.list handler — and
+    // a control character in one is a terminal escape arriving in
+    // root's report. Everything user-controlled is stripped to plain
+    // before it is formatted in; `plain` is the one place that rule
+    // lives.
+    //
     // The known sibling names — the set `kuma build`'s staging gate
     // resolves beside the running kuma (kuma itself, the five kumaui
     // binaries, the nostr road's three).
@@ -2964,7 +2972,7 @@ fn check_dev_install(report: &mut impl FnMut(Grade, &str, String, Option<Action>
         .binaries
         .iter()
         .filter(|b| !home.join(".local/bin").join(&b.name).exists())
-        .map(|b| b.name.clone())
+        .map(|b| plain(&b.name))
         .collect();
     if !missing.is_empty() {
         report(
@@ -2994,7 +3002,7 @@ fn check_dev_install(report: &mut impl FnMut(Grade, &str, String, Option<Action>
                 .map(|actual| actual != b.sha256)
                 .unwrap_or(true)
         })
-        .map(|b| b.name.clone())
+        .map(|b| plain(&b.name))
         .collect();
     if !replaced.is_empty() {
         report(
@@ -3015,7 +3023,7 @@ fn check_dev_install(report: &mut impl FnMut(Grade, &str, String, Option<Action>
         return;
     }
     if crate::dev::lapsed(&receipt) {
-        let version = receipt.version().to_string();
+        let version = plain(receipt.version());
         report(
             Grade::Warn,
             "dev install",
@@ -3037,11 +3045,22 @@ fn check_dev_install(report: &mut impl FnMut(Grade, &str, String, Option<Action>
         format!(
             "active: {} staged binary/binaries from commit(s) {} — retires when this image reaches {}",
             receipt.binaries.len(),
-            commits.join(", "),
-            receipt.version()
+            plain(&commits.join(", ")),
+            plain(receipt.version())
         ),
         None,
     );
+}
+
+/// Doctor's report strings are terminal bytes, and the ones sourced
+/// from user-writable files — receipt fields, mime handlers — are
+/// opinions about what to display, written by whatever process edited
+/// the file. Control characters (ESC first among them: C0, DEL, and
+/// the C1 range `char::is_control` names) are stripped; everything
+/// else, UTF-8 included, passes — a fact a report needs is allowed to
+/// have a name in any script.
+fn plain(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).collect()
 }
 
 fn check_keymap(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {    let layers = crate::keymap::Layers::read();
@@ -5113,5 +5132,18 @@ mod tests {
         put("var/home/x/.config/niri/local.kdl", "output \"eDP-1\" { scale 1 }\n");
         let found = run_niri_shadow_check(root);
         assert_eq!(found.len(), 1, "only the shadowing account is graded");
+    }
+
+    /// The escape strip is the rule the sudo-run report stands on: a
+    /// user-crafted receipt field or mime handler arrives as report
+    /// text, and ESC in it would be a terminal escape in root's
+    /// terminal. Facts keep their names — UTF-8 included — control
+    /// characters keep nothing.
+    #[test]
+    fn report_strings_carry_facts_not_escapes() {
+        assert_eq!(plain("\u{1b}]2;pwned\u{7}clean"), "]2;pwnedclean");
+        assert_eq!(plain("org.mozilla.firefox"), "org.mozilla.firefox");
+        assert_eq!(plain("café.desktop"), "café.desktop", "UTF-8 names pass");
+        assert_eq!(plain("two\r\nlines"), "twolines", "newline is control too");
     }
 }
