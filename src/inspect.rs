@@ -3002,12 +3002,12 @@ mod mime_tests {
         // `\?$#d` as a second command).
         let cmd = prune_command(
             &[("text/plain".into(), "org.gnome.Nautilus.desktop".into())],
-            Some(std::path::Path::new("/var/home/martin")),
+            Some(std::path::Path::new("/var/home/myuser")),
         );
         assert_eq!(
             cmd,
             "sed -i -e '\\#^text/plain=org\\.gnome\\.Nautilus\\.desktop;\\?$#d' \
-             '/var/home/martin/.config/mimeapps.list'"
+             '/var/home/myuser/.config/mimeapps.list'"
         );
         // Two dead lines ride as two -e expressions, one command.
         let two = prune_command(

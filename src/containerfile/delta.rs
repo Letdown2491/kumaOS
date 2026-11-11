@@ -657,38 +657,36 @@ pub(crate) fn compile(
     // The presence question is the TEXT's to answer — the defaulted
     // struct erases it, which is why the opinion is not read off
     // `declared.packages`.
-    match crate::state::axis_opinion(config_text, crate::state::Axis::Flatpak).map_err(|e| {
-        anyhow::anyhow!("the declaration's flatpak list cannot be read as an opinion: {e}")
-    })? {
-        Some(list) => {
-            let mut list = list.join("\n");
-            if !list.is_empty() {
-                list.push('\n');
-            }
-            let flatpaks = e.stage("flatpaks", list);
-            e.raw("\n");
-            e.copy(&flatpaks, "/usr/lib/kuma/flatpaks");
+    if let Some(list) = crate::state::axis_opinion(config_text, crate::state::Axis::Flatpak)
+        .map_err(|e| {
+            anyhow::anyhow!("the declaration's flatpak list cannot be read as an opinion: {e}")
+        })?
+    {
+        let mut list = list.join("\n");
+        if !list.is_empty() {
+            list.push('\n');
         }
-        None => {}
+        let flatpaks = e.stage("flatpaks", list);
+        e.raw("\n");
+        e.copy(&flatpaks, "/usr/lib/kuma/flatpaks");
     }
     // The brew machinery's presence is a refusal field (above), so
     // reaching here the declared and baked flags agree; a named axis
     // re-bakes unconditionally, for the same reason as the flatpaks.
     let declared_brew = declared.system.brew || !declared.packages.brew.is_empty();
     if declared_brew {
-        match crate::state::axis_opinion(config_text, crate::state::Axis::Brew).map_err(|e| {
-            anyhow::anyhow!("the declaration's brew list cannot be read as an opinion: {e}")
-        })? {
-            Some(list) => {
-                let mut list = list.join("\n");
-                if !list.is_empty() {
-                    list.push('\n');
-                }
-                let brews = e.stage("brews", list);
-                e.raw("\n");
-                e.copy(&brews, "/usr/lib/kuma/brews");
+        if let Some(list) = crate::state::axis_opinion(config_text, crate::state::Axis::Brew)
+            .map_err(|e| {
+                anyhow::anyhow!("the declaration's brew list cannot be read as an opinion: {e}")
+            })?
+        {
+            let mut list = list.join("\n");
+            if !list.is_empty() {
+                list.push('\n');
             }
-            None => {}
+            let brews = e.stage("brews", list);
+            e.raw("\n");
+            e.copy(&brews, "/usr/lib/kuma/brews");
         }
     }
     {

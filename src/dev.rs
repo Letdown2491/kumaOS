@@ -658,16 +658,16 @@ Description=kumaOS nostr bunker
 [Service]
 ExecStart=/usr/bin/kuma-nostrd --relay wss://relay.nip46.com
 ExecStartPre=+/usr/bin/mkdir -p %h/.local/state/kuma-nostr
-# /var/home/martin/.config/systemd/user/kuma-nostrd.service.d/override.conf
+# /var/home/myuser/.config/systemd/user/kuma-nostrd.service.d/override.conf
 # Managed by `kuma dev install`
 [Service]
 ExecStart=
-ExecStart=/var/home/martin/.local/bin/kuma-nostrd
+ExecStart=/var/home/myuser/.local/bin/kuma-nostrd
 ";
         let args = execstart_args_from_cat(
             text,
             &PathBuf::from(
-                "/var/home/martin/.config/systemd/user/kuma-nostrd.service.d/override.conf",
+                "/var/home/myuser/.config/systemd/user/kuma-nostrd.service.d/override.conf",
             ),
         )
         .expect("the image's ExecStart is in the cat output");
@@ -697,18 +697,18 @@ ExecStart=/var/home/martin/.local/bin/kuma-nostrd
 # /usr/lib/systemd/user/kuma-nostrd.service
 [Service]
 ExecStart=/usr/bin/kuma-nostrd --relay wss://relay.nip46.com
-# /var/home/martin/.config/systemd/user/kuma-nostrd.service.d/10-kuma-nostr-relays.conf
+# /var/home/myuser/.config/systemd/user/kuma-nostrd.service.d/10-kuma-nostr-relays.conf
 [Service]
 ExecStart=
 ExecStart=/usr/bin/kuma-nostrd --relay wss://my-share.brainstick.wtf
-# /var/home/martin/.config/systemd/user/kuma-nostrd.service.d/override.conf
+# /var/home/myuser/.config/systemd/user/kuma-nostrd.service.d/override.conf
 # Managed by `kuma dev install`
 [Service]
 ExecStart=
-ExecStart=/var/home/martin/.local/bin/kuma-nostrd
+ExecStart=/var/home/myuser/.local/bin/kuma-nostrd
 ";
         let override_path = PathBuf::from(
-            "/var/home/martin/.config/systemd/user/kuma-nostrd.service.d/override.conf",
+            "/var/home/myuser/.config/systemd/user/kuma-nostrd.service.d/override.conf",
         );
         let args = execstart_args_from_cat(delta, &override_path)
             .expect("the drop-in's ExecStart is in the cat output");
@@ -725,12 +725,12 @@ ExecStart=/var/home/martin/.local/bin/kuma-nostrd
         let commented = "\
 # /usr/lib/systemd/user/kuma-nostrd.service
 ExecStart=/usr/bin/kuma-nostrd --relay wss://relay.nip46.com
-# /var/home/martin/.config/systemd/user/kuma-nostrd.service.d/override.conf
+# /var/home/myuser/.config/systemd/user/kuma-nostrd.service.d/override.conf
 # Managed by `kuma dev install`
 # staged by the dev lease; retired by `kuma dev retire`
 [Service]
 ExecStart=
-ExecStart=/var/home/martin/.local/bin/kuma-nostrd
+ExecStart=/var/home/myuser/.local/bin/kuma-nostrd
 ";
         let args = execstart_args_from_cat(commented, &override_path)
             .expect("the image's ExecStart is in the cat output");
