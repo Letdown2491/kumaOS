@@ -47,6 +47,11 @@ env:
 jobs:
   release:
     runs-on: ubuntu-24.04
+    # ~2x the post-road-fix median for the ISO-carrying shape (44.1m
+    # over 42923027602 and 42852312575, heaviest observed 50.4m); the
+    # rolling channel's no-ISO shape rides the same ceiling and has
+    # never needed a tenth of it.
+    timeout-minutes: 90
     env:
       # Whether a release carries the live ISO, decided in one place.
       #

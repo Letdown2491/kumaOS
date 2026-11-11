@@ -82,6 +82,10 @@ jobs:
   # staging tag leaves this job.
   publish:
     runs-on: ubuntu-24.04
+    # ~2x the post-road-fix median (23.5m over the two sized runs,
+    # 42878640722 and 42923055412); the caller-wide 360-minute default
+    # sized nothing.
+    timeout-minutes: 50
     outputs:
       repo: ${{ steps.ref.outputs.repo }}
       example: ${{ steps.guard.outputs.example }}
@@ -407,6 +411,10 @@ jobs:
   promote:
     needs: [publish, validate]
     runs-on: ubuntu-24.04
+    # checkout + cosign + a registry move: 12s observed on both sized
+    # runs. The 5-minute floor is ci.yml's smallest; the sign-off's
+    # tools must not be what a hung runner waits on all night.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
