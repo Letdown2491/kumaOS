@@ -22,10 +22,18 @@ runs:
         # driver /usr/lib/apt/methods/archive.ubuntu.com/... could not
         # be found" — the first roll's own death, the azure file's
         # bare-host shape being schemeful or azure-steered somewhere
-        # else). The two lines are fallbacks apt tries in order (the
+        # else). The lines are fallbacks apt tries in order (the
         # runner's deb822 sources point every suite at the one
-        # mirror+file URI), so both hosts are named: a host that answers
-        # serves every pocket, and one that does not hands the fetch to
-        # the next.
-        printf 'http://archive.ubuntu.com/ubuntu\nhttp://security.ubuntu.com/ubuntu\n' \
+        # mirror+file URI).
+        #
+        # kernel.org FIRST: Canonical's 2026-11-11 archive incident was
+        # not one mirror's DNS but the runners' resolution of
+        # Canonical-hosted names generally — azure's traffic-manager
+        # chain died four rolls, and re-routing to archive/security
+        # died the same death on a different Canonical name. mirrors
+        # .kernel.org is kernel.org infrastructure: a different
+        # organization, a different DNS path, every noble pocket
+        # carried (verified 2026-11-11). The Canonical hosts stay as
+        # fallbacks for the day kernel.org's mirror is the sick one.
+        printf 'http://mirrors.kernel.org/ubuntu\nhttp://archive.ubuntu.com/ubuntu\nhttp://security.ubuntu.com/ubuntu\n' \
             | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
