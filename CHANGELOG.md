@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **A dev deploy keeps the daemon's arguments.** `kuma dev install`
+  rewrote the daemon's override with the staged binary alone — and the
+  image's unit bakes its relay set onto the same ExecStart line, so the
+  adopted daemon came up with an EMPTY relay set: no relay threads, no
+  wire, no error anywhere, a bunker that listens and never hears a
+  note. The override now carries the image unit's own arguments beside
+  the staged binary, the parse is pinned by test, and a unit with no
+  ExecStart fails the adoption loudly instead of inventing a bare
+  daemon.
+
 ## v45.2.1 (2026-11-10)
 
 - **A restored machine no longer restores again on every boot.** The

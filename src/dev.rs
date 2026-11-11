@@ -174,6 +174,56 @@ fn bounce_daemon() {
     }
 }
 
+/// The arguments the image's unit bakes onto the daemon's ExecStart —
+/// everything after the binary path. A dev deploy that swapped only
+/// the binary and dropped the arguments ran a bunker with an EMPTY
+/// relay set: no road threads, no wire, no error anywhere — the daemon
+/// listens and never hears a note (the silent afternoon of Nov 10,
+/// found by the note that never sent). The unit's arguments are part
+/// of its posture; the override replaces the binary, not the posture.
+/// The parse behind `unit_execstart_args`: the first `ExecStart=` in
+/// the fragments that are NOT the dev override, minus its binary. Pure
+/// so the test can hold it against the real interleaving `systemctl
+/// cat` prints — the override's own bare ExecStart is last, and taking
+/// the wrong line is exactly the empty-argument bug this exists to
+/// prevent.
+fn execstart_args_from_cat(text: &str, override_path: &std::path::Path) -> Option<String> {
+    let override_fragment = override_path.display().to_string();
+    let mut current_is_override = false;
+    for line in text.lines() {
+        if let Some(path) = line.strip_prefix("# ") {
+            current_is_override = path == override_fragment;
+            continue;
+        }
+        if current_is_override {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("ExecStart=") {
+            let mut words = rest.split_whitespace();
+            let _binary = words.next().unwrap_or_default();
+            return Some(words.collect::<Vec<_>>().join(" "));
+        }
+    }
+    None
+}
+
+fn unit_execstart_args() -> Result<String> {
+    let out = Command::new("systemctl")
+        .args(["--user", "cat", DAEMON_UNIT])
+        .output()
+        .with_context(|| format!("cannot ask systemd about {DAEMON_UNIT}"))?;
+    if !out.status.success() {
+        bail!("{DAEMON_UNIT} does not exist on this machine");
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    execstart_args_from_cat(&text, &daemon_override()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "the image's {DAEMON_UNIT} carries no ExecStart — \
+             the override would not know what arguments to keep"
+        )
+    })
+}
+
 /// Point the nostr daemon at the staged binary and bounce it — the
 /// last step of the ritual the nostr dev loop ran by hand (override,
 /// daemon-reload, restart). Only acts when the receipt stages the
@@ -192,6 +242,17 @@ fn adopt_daemon(receipt: &Receipt) -> Result<Option<String>> {
         // image that may carry it, and there is nothing here to adopt.
         return Ok(None);
     }
+    // The arguments ride along: the image's unit may bake flags the
+    // daemon cannot answer without (the relay set is one — an empty
+    // set is a bunker with no wire, silently). Read them from the
+    // unit BEFORE the override is written: after it, the override's
+    // own bare ExecStart is what systemd would answer with.
+    let args = unit_execstart_args()?;
+    let args_line = if args.is_empty() {
+        String::new()
+    } else {
+        format!(" {args}")
+    };
     let override_path = daemon_override();
     std::fs::create_dir_all(
         override_path.parent().with_context(|| "the override path has no parent".to_string())?,
@@ -201,7 +262,7 @@ fn adopt_daemon(receipt: &Receipt) -> Result<Option<String>> {
         format!(
             "# Managed by `kuma dev install` — removed when the lease retires,\n\
              # so the daemon reverts to the image's binary.\n\
-             [Service]\nExecStart=\nExecStart={}\n",
+             [Service]\nExecStart=\nExecStart={}{args_line}\n",
             bin_home().join("kuma-nostrd").display()
         ),
     )
@@ -563,6 +624,50 @@ fn note(text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The override's args preservation. The image's unit bakes the
+    /// relay set onto its ExecStart, and a dev deploy that dropped it
+    /// ran a bunker with no wire at all — silent, listening, deaf.
+    /// The parser reads the unit's OWN fragment out of `systemctl
+    /// cat`'s multi-fragment output and keeps everything after the
+    /// binary.
+    #[test]
+    fn the_override_keeps_the_image_units_arguments() {
+        // The real interleaving: the image fragment first, the dev
+        // override last, the override's own ExecStart the bare
+        // staged binary. The parser must take the image's line.
+        let text = "\
+# /usr/lib/systemd/user/kuma-nostrd.service
+[Unit]
+Description=kumaOS nostr bunker
+
+[Service]
+ExecStart=/usr/bin/kuma-nostrd --relay wss://relay.nip46.com
+ExecStartPre=+/usr/bin/mkdir -p %h/.local/state/kuma-nostr
+# /var/home/martin/.config/systemd/user/kuma-nostrd.service.d/override.conf
+# Managed by `kuma dev install`
+[Service]
+ExecStart=
+ExecStart=/var/home/martin/.local/bin/kuma-nostrd
+";
+        let args = execstart_args_from_cat(text, &PathBuf::from(
+            "/var/home/martin/.config/systemd/user/kuma-nostrd.service.d/override.conf",
+        ))
+        .expect("the image's ExecStart is in the cat output");
+        assert_eq!(
+            args, "--relay wss://relay.nip46.com",
+            "the image's relay argument must survive the override"
+        );
+        // And the honest absences: an image unit with no arguments
+        // keeps none, and a unit cat with no ExecStart at all names
+        // the gap instead of inventing a bare daemon.
+        let bare = "ExecStart=/usr/bin/kuma-nostrd\n";
+        assert_eq!(
+            execstart_args_from_cat(bare, &PathBuf::from("/no/override.conf")).as_deref(),
+            Some(""),
+        );
+        assert_eq!(execstart_args_from_cat("[Unit]\n", &PathBuf::from("/no/override.conf")), None);
+    }
 
     /// The stamp gate's parsing side. The kuma shape is
     /// `45.2.0 (<7-hex> <date>)`; the kumaui siblings print their own
