@@ -109,6 +109,11 @@ struct Baked {
     // carry) from one the release bakes itself.
     other_users: BTreeMap<String, config::AdditionalUser>,
     backup: config::Backup,
+    // Never read as data — the overrides tree is written
+    // unconditionally now — but its tolerant read is the schema check:
+    // a [overrides] section this kuma knows and cannot deserialize
+    // refuses here, before any build runs.
+    #[allow(dead_code)]
     overrides: BTreeMap<String, config::AppOverride>,
 }
 
@@ -313,12 +318,22 @@ fn refusals_for(declared: &Config, baked: &Baked, units: BaseUnits) -> Vec<Strin
 /// door), and no binary is ever staged: the base image's are newer
 /// than anything this kuma could put beside them.
 pub(crate) fn compile(
-    declared: &Config,
+    config_text: &str,
     base_text: &str,
     release: &Release,
     units: BaseUnits,
 ) -> Result<emit::Plan> {
-    let (baked, refusals) = read_and_diff(declared, base_text, units)?;
+    // The declared opinion is read from the TEXT, not the parsed
+    // struct: the struct's fields default absent and empty alike, and
+    // the converged-list authority turns on exactly that difference
+    // (a declaration that names an axis governs it; one that omits it
+    // leaves the base's list governing). The parse below is the same
+    // one the caller already ran; it repeats here so the compiler's
+    // one entry point owns its own preconditions.
+    let declared: Config = toml::from_str(config_text)
+        .map_err(|e| anyhow::anyhow!("the declaration does not parse: {e}"))?;
+    declared.validate().map_err(|e| anyhow::anyhow!("the declaration does not validate: {e}"))?;
+    let (baked, refusals) = read_and_diff(&declared, base_text, units)?;
     if !refusals.is_empty() {
         bail!(
             "the delta compiler carries packages, firmware, services, [nostr] arming and \
@@ -331,7 +346,7 @@ pub(crate) fn compile(
     }
 
     // ---- the plan ----
-    let mut e = Emitter::new(declared);
+    let mut e = Emitter::new(&declared);
     e.raw(&format!(
         "\n\
          # A delta build: the declaration compiled onto the release by kuma {}.\n\
@@ -485,7 +500,7 @@ pub(crate) fn compile(
         e.enter_block(block);
         e.raw("\n");
         if declared.snapshots.enable {
-            let snapshot = e.stage("kuma-snapshot", snapshot_script(declared));
+            let snapshot = e.stage("kuma-snapshot", snapshot_script(&declared));
             let service = e.stage("kuma-snapshot.service", SNAPSHOT_SERVICE);
             let timer =
                 e.stage("kuma-snapshot.timer", snapshot_timer(&declared.snapshots.interval));
@@ -621,31 +636,70 @@ pub(crate) fn compile(
     // carries the LISTS so convergence targets the declaration. The
     // delta re-bakes them and nothing else — the converger scripts and
     // units are the base's, newer than this compiler's.
-    if declared.packages.flatpak != baked.packages.flatpak {
-        let mut list = declared.packages.flatpak.join("\n");
-        if !list.is_empty() {
-            list.push('\n');
+    //
+    // The re-bake follows the runtime's own authority shape
+    // (`governing`): a declaration that NAMES the axis governs it —
+    // empty included — and its list is what the delta writes,
+    // unconditionally; one that OMITS the axis leaves the base's list
+    // governing, and the delta leaves that alone. The delta builds
+    // FROM the release digest, so the list file that survives without
+    // a copy is the RELEASE's — the old guard compared the declared
+    // list against the baseline DECLARATION instead, an artifact it
+    // was not rewriting, so every delta whose baseline already agreed
+    // with the declaration skipped the bake and the release's list
+    // rode forward through the chain unexamined: a machine whose
+    // declaration dropped an app the release still bakes kept the
+    // release's list in its image, and the drift probe reading that
+    // file reported the release's opinion as the machine's drift.
+    // Unconditional is also free in the unchanged case: the staged
+    // file is byte-identical and podman's cache hands the layer back.
+    //
+    // The presence question is the TEXT's to answer — the defaulted
+    // struct erases it, which is why the opinion is not read off
+    // `declared.packages`.
+    match crate::state::axis_opinion(config_text, crate::state::Axis::Flatpak).map_err(|e| {
+        anyhow::anyhow!("the declaration's flatpak list cannot be read as an opinion: {e}")
+    })? {
+        Some(list) => {
+            let mut list = list.join("\n");
+            if !list.is_empty() {
+                list.push('\n');
+            }
+            let flatpaks = e.stage("flatpaks", list);
+            e.raw("\n");
+            e.copy(&flatpaks, "/usr/lib/kuma/flatpaks");
         }
-        let flatpaks = e.stage("flatpaks", list);
-        e.raw("\n");
-        e.copy(&flatpaks, "/usr/lib/kuma/flatpaks");
+        None => {}
     }
     // The brew machinery's presence is a refusal field (above), so
-    // reaching here the declared and baked flags agree.
+    // reaching here the declared and baked flags agree; a named axis
+    // re-bakes unconditionally, for the same reason as the flatpaks.
     let declared_brew = declared.system.brew || !declared.packages.brew.is_empty();
-    if declared_brew && declared.packages.brew != baked.packages.brew {
-        let mut list = declared.packages.brew.join("\n");
-        if !list.is_empty() {
-            list.push('\n');
+    if declared_brew {
+        match crate::state::axis_opinion(config_text, crate::state::Axis::Brew).map_err(|e| {
+            anyhow::anyhow!("the declaration's brew list cannot be read as an opinion: {e}")
+        })? {
+            Some(list) => {
+                let mut list = list.join("\n");
+                if !list.is_empty() {
+                    list.push('\n');
+                }
+                let brews = e.stage("brews", list);
+                e.raw("\n");
+                e.copy(&brews, "/usr/lib/kuma/brews");
+            }
+            None => {}
         }
-        let brews = e.stage("brews", list);
-        e.raw("\n");
-        e.copy(&brews, "/usr/lib/kuma/brews");
     }
-    if declared.overrides != baked.overrides {
+    {
         // Both stores, always — the base's converger treats absence as
         // "nothing to do", and the same always-both rule applies to a
-        // delta: an emptied override set has keys to take back.
+        // delta: an emptied override set has keys to take back. The
+        // tree is written unconditionally, flatpak/brew-list style:
+        // the tree that survives without a copy is the RELEASE's, and
+        // the old guard (declared against the baseline DECLARATION)
+        // could not see it — the same skip-forever shape the lists
+        // had.
         let mut stores: Vec<(String, Content)> = Vec::new();
         for scope in [config::Scope::System, config::Scope::User] {
             let apps: Vec<(String, Content)> = declared
@@ -671,14 +725,13 @@ pub(crate) fn compile(
 /// because the base image's are newer than anything this kuma could
 /// stage; the declaration is the context's one supplied file.
 pub(crate) fn write_context(
-    config: &Config,
     base_text: &str,
     release: &Release,
     units: BaseUnits,
     config_text: &str,
     dir: &std::path::Path,
 ) -> Result<()> {
-    let plan = compile(config, base_text, release, units)?;
+    let plan = compile(config_text, base_text, release, units)?;
     std::fs::write(dir.join("kuma.toml"), config_text)?;
     std::fs::write(dir.join("Containerfile"), &plan.text)?;
     emit::materialize(&plan.files, dir)
@@ -736,7 +789,7 @@ mod tests {
     }
 
     fn compile_ok(declared_toml: &str, base: &str) -> emit::Plan {
-        compile(&declared(declared_toml), base, &release(), units()).unwrap()
+        compile(declared_toml, base, &release(), units()).unwrap()
     }
 
     #[test]
@@ -760,7 +813,74 @@ mod tests {
         assert!(plan.text.contains("LABEL io.kuma.delta="));
         // The declaration always rides.
         assert!(plan.text.contains("COPY kuma.toml /usr/lib/kuma/kuma.toml"));
-        assert!(plan.files.is_empty());
+        // The converged-list re-bakes follow the runtime's authority
+        // shape: neither side names the flatpak or brew axis, so the
+        // base's lists stand and nothing is staged for them — but the
+        // overrides tree is written unconditionally, and an empty
+        // declaration's empty tree is the content.
+        assert!(!plan.text.contains("COPY flatpaks "));
+        assert!(!plan.text.contains("COPY brews "));
+        assert!(plan.text.contains("COPY overrides /usr/lib/kuma/overrides"));
+        match plan.files.get("overrides") {
+            Some(Content::Tree(stores)) => {
+                assert_eq!(stores.len(), 2);
+                for (scope, content) in stores {
+                    let Content::Tree(apps) = content else {
+                        panic!("the {scope} store is a tree");
+                    };
+                    assert!(apps.is_empty(), "the {scope} store holds {apps:?}");
+                }
+            }
+            other => panic!("the overrides stage is a tree, got {other:?}"),
+        }
+    }
+
+    /// The release's list rode forward through every delta whose
+    /// baseline agreed with the declaration: the old guard compared
+    /// the declared list against the baseline DECLARATION and never
+    /// saw the list file it was deciding for. A declaration that
+    /// names the axis now re-bakes it even when the baseline agrees —
+    /// the file that survives without a copy is the RELEASE's.
+    #[test]
+    fn a_named_axis_rebakes_even_when_the_baseline_agrees() {
+        let toml = "schema_version = 1\n\
+                    [system]\n\
+                    desktop = \"niri\"\n\
+                    [packages]\n\
+                    flatpak = [\"app.zen_browser.zen\"]\n\
+                    [snapshots]\n\
+                    enable = true\n";
+        // The baseline declaration names the same single flatpak: the
+        // old guard read equality here and skipped the bake, and the
+        // release's own list (whatever it held) survived underneath.
+        let baseline = "schema_version = 1\n\
+                        [system]\n\
+                        desktop = \"niri\"\n\
+                        [packages]\n\
+                        flatpak = [\"app.zen_browser.zen\"]\n";
+        let plan = compile_ok(toml, baseline);
+        assert!(plan.text.contains("COPY flatpaks /usr/lib/kuma/flatpaks"));
+        match plan.files.get("flatpaks") {
+            Some(Content::Text(text)) => assert_eq!(text, "app.zen_browser.zen\n"),
+            other => panic!("the flatpaks stage is a text list, got {other:?}"),
+        }
+    }
+
+    /// And the mirror: a declaration that OMITS the axis leaves the
+    /// base's list governing — the release's example is the fallback
+    /// the runtime reads — so the delta stages nothing for it. Absent
+    /// and empty mean different things; the defaulted struct erases
+    /// the difference, which is why the opinion reads from the text.
+    #[test]
+    fn an_omitted_axis_leaves_the_base_list_governing() {
+        let toml = "schema_version = 1\n\
+                    [system]\n\
+                    desktop = \"niri\"\n\
+                    [snapshots]\n\
+                    enable = true\n";
+        let plan = compile_ok(toml, BASE);
+        assert!(!plan.text.contains("COPY flatpaks "));
+        assert!(!plan.text.contains("COPY brews "));
     }
 
     #[test]
@@ -791,15 +911,13 @@ mod tests {
     #[test]
     fn firmware_flips_both_ways_against_a_trimmed_release() {
         let plan = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  shell = \"fish\"\n\
                  firmware = [\"amd-gpu-firmware\"]\n\
                  [snapshots]\n\
                  enable = true\n",
-            ),
             // The release trimmed to one package the declaration does
             // not name, and the declaration names one the release does
             // not carry.
@@ -818,13 +936,11 @@ mod tests {
     #[test]
     fn untrimmed_declaration_reinstalls_a_trimmed_release() {
         let plan = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  [snapshots]\n\
                  enable = true\n",
-            ),
             "schema_version = 1\n\
              [system]\n\
              desktop = \"niri\"\n\
@@ -852,8 +968,7 @@ mod tests {
     #[test]
     fn nostr_flip_writes_a_preset_and_applies_it() {
         let plan = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  [snapshots]\n\
@@ -862,7 +977,6 @@ mod tests {
                  enable = true\n\
                  [nostr.relay]\n\
                  enable = true\n",
-            ),
             BASE,
             &release(),
             units(),
@@ -882,13 +996,11 @@ mod tests {
     #[test]
     fn nostr_off_against_an_armed_base_disarms_explicitly() {
         let plan = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  [snapshots]\n\
                  enable = true\n",
-            ),
             // The base armed both; the declaration (and its defaults)
             // arm neither.
             "schema_version = 1\n\
@@ -912,8 +1024,7 @@ mod tests {
     #[test]
     fn a_custom_relay_set_is_an_execstart_dropin() {
         let plan = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  [snapshots]\n\
@@ -921,7 +1032,6 @@ mod tests {
                  [nostr]\n\
                  enable = true\n\
                  relays = [\"wss://myrelay.example\"]\n",
-            ),
             BASE,
             &release(),
             units(),
@@ -940,13 +1050,11 @@ mod tests {
     #[test]
     fn services_delta_enables_and_disables_both_directions() {
         let plan = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  [services]\n\
                  enable = [\"tailscaled.service\", \"podman.socket\"]\n",
-            ),
             "schema_version = 1\n\
              [system]\n\
              desktop = \"niri\"\n\
@@ -973,14 +1081,12 @@ mod tests {
     #[test]
     fn a_divergent_refusal_field_names_itself_and_the_way_out() {
         let err = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  timezone = \"Europe/Berlin\"\n\
                  [snapshots]\n\
                  enable = true\n",
-            ),
             BASE,
             &release(),
             units(),
@@ -998,14 +1104,12 @@ mod tests {
         // — is image content. Carrying three would leave the prompt
         // speaking the old layout, so the move refuses whole.
         let err = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  keymap = \"de\"\n\
                  [snapshots]\n\
                  enable = true\n",
-            ),
             BASE,
             &release(),
             units(),
@@ -1019,15 +1123,13 @@ mod tests {
     #[test]
     fn a_user_section_refuses_even_when_the_base_has_none() {
         let err = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  [snapshots]\n\
                  enable = true\n\
                  [user]\n\
                  name = \"builder\"\n",
-            ),
             BASE,
             &release(),
             units(),
@@ -1129,8 +1231,7 @@ mod tests {
         // promise convergence the machine would never see.
         let base = format!("{BASE}\n[other_users.ghost]\ngroups = []\n");
         let err = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  shell = \"fish\"\n\
@@ -1138,7 +1239,6 @@ mod tests {
                  rpm = [\"fish\"]\n\
                  [snapshots]\n\
                  enable = true\n",
-            ),
             &base,
             &release(),
             units(),
@@ -1152,8 +1252,7 @@ mod tests {
         // The greeter's own config rides the image: a delta-added
         // account claiming autologin would silently not log in.
         let err = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  shell = \"fish\"\n\
@@ -1163,7 +1262,6 @@ mod tests {
                  enable = true\n\
                  [other_users.deltauser]\n\
                  autologin = true\n",
-            ),
             BASE,
             &release(),
             units(),
@@ -1178,8 +1276,7 @@ mod tests {
         // it carried would sit ignored, the exact silent-disagreement
         // shape the compiler refuses rather than bake.
         let err = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  shell = \"fish\"\n\
@@ -1189,7 +1286,6 @@ mod tests {
                  enable = true\n\
                  [other_users.deltauser]\n\
                  groups = []\n",
-            ),
             BASE,
             &release(),
             BaseUnits {
@@ -1239,13 +1335,11 @@ mod tests {
         // — the compiler would half-read the rest of it. Refusal, not
         // guesswork.
         let err = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  [snapshots]\n\
                  enable = true\n",
-            ),
             "schema_version = 1\n\
              [system]\n\
              desktop = \"niri\"\n\
@@ -1260,7 +1354,7 @@ mod tests {
     #[test]
     fn a_newer_schema_version_refuses() {
         let err = compile(
-            &declared("schema_version = 1\n[system]\ndesktop = \"niri\"\n"),
+            "schema_version = 1\n[system]\ndesktop = \"niri\"\n",
             "schema_version = 2\n[system]\ndesktop = \"niri\"\n",
             &release(),
             units(),
@@ -1274,13 +1368,11 @@ mod tests {
         // [services] gained a key this kuma's type rejects: the section
         // deserialize fails and the compiler says which section moved.
         let err = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  [snapshots]\n\
                  enable = true\n",
-            ),
             "schema_version = 1\n\
              [system]\n\
              desktop = \"niri\"\n\
@@ -1297,14 +1389,12 @@ mod tests {
     #[test]
     fn snapshot_interval_move_reemits_the_timer() {
         let plan = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  [snapshots]\n\
                  enable = true\n\
                  interval = \"daily\"\n",
-            ),
             BASE,
             &release(),
             units(),
@@ -1320,8 +1410,7 @@ mod tests {
     #[test]
     fn flatpak_and_override_lists_rebake_without_installing() {
         let plan = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  [packages]\n\
@@ -1330,7 +1419,6 @@ mod tests {
                  enable = true\n\
                  [overrides.\"org.mozilla.firefox\"]\n\
                  sockets = [\"x11\"]\n",
-            ),
             BASE,
             &release(),
             units(),
@@ -1353,14 +1441,12 @@ mod tests {
     #[test]
     fn brew_machinery_appearance_refuses() {
         let err = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  brew = true\n\
                  [snapshots]\n\
                  enable = true\n",
-            ),
             BASE,
             &release(),
             units(),
@@ -1372,15 +1458,13 @@ mod tests {
     #[test]
     fn an_absent_nostr_layer_in_the_base_refuses_arming() {
         let err = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  [snapshots]\n\
                  enable = true\n\
                  [nostr]\n\
                  enable = true\n",
-            ),
             BASE,
             &release(),
             // A 44.9.0-shaped base: the example never enabled nostr,
@@ -1408,8 +1492,7 @@ mod tests {
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/containerfile/goldens");
         let golden = dir.join("niri-delta.Containerfile");
         let plan = compile(
-            &declared(
-                "schema_version = 1\n\
+            "schema_version = 1\n\
                  [system]\n\
                  desktop = \"niri\"\n\
                  shell = \"fish\"\n\
@@ -1430,7 +1513,6 @@ mod tests {
                  shell = \"fish\"\n\
                  groups = []\n\
                  ssh_keys = [\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest test@kuma\"]\n",
-            ),
             BASE,
             &release(),
             units(),

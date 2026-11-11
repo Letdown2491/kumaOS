@@ -2538,7 +2538,6 @@ fn upgrade_delta_apply(
     if full_compile.is_none() {
         note("Compiling the declaration's deltas...");
         containerfile::delta::write_context(
-            config,
             &baseline_text,
             &release,
             units,

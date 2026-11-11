@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+- **Drift is measured against the authority convergence follows.**
+  The bare `kuma` probe counted drift against the image's baked list
+  file directly — an authority the convergers stopped consulting when
+  the nano-incident ruling moved the answer to the CLI: the machine's
+  own declaration where it names the axis, the baked list otherwise. A
+  machine whose declaration dropped an app the release still bakes
+  read as "drifted" by an app no sync would ever touch, promising work
+  the actor no longer meant to do — the second incident of the
+  summary-reads-one-source class that inventory.rs already records
+  from the brew half. The probe now asks `governing` for the same
+  answer sync acts on; an authority that cannot answer stays quiet,
+  because sync's refusal is the loud path and a guessed baseline was
+  the bug.
+
+- **A delta re-bakes the lists it governs.** The delta compiler's
+  guard compared the declared list against the baseline DECLARATION —
+  an artifact it was not rewriting — so every delta whose baseline
+  already agreed with the declaration skipped the bake, and the
+  release's list file rode forward through the delta chain
+  unexamined: a machine whose declaration dropped a release default
+  kept the release's list in its image for as long as deltas were the
+  upgrade road. The re-bake now follows the runtime's authority shape
+  (a declaration that names the axis governs it, empty included; one
+  that omits it leaves the base's list standing), and the overrides
+  tree is written unconditionally — the full build's own rule, and the
+  same skip-forever shape removed from the lists.
+
+- **Doctor reads identity, not presence, for shadowing binaries.** An
+  unreceipted binary in `~/.local/bin` used to warn for existing;
+  shadowing is the dev-deploy mechanism itself, so presence alone is
+  not the problem. The check now compares bytes against the image's
+  own binary — byte-identical is the kumaui build script's legitimate
+  staging and reads ok; anything else warns naming what it is. Bytes
+  are read, never executed: doctor is root, and root running a
+  user-writable binary is the opinion-refusal rule's business. A new
+  sweep flags cargo-installed kuma binaries in `~/.cargo/bin` — the
+  one deposit no receipt knows and no gate resolves, found masquerading
+  as the CLI for a whole reboot cycle.
+
 - **A dev deploy keeps the daemon's arguments.** `kuma dev install`
   rewrote the daemon's override with the staged binary alone — and the
   image's unit bakes its relay set onto the same ExecStart line, so the

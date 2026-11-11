@@ -12,7 +12,7 @@
 
 use crate::config::Config;
 use crate::host::{host_output, host_output_any};
-use crate::inventory::{short, to_set, List, Machine};
+use crate::inventory::{short, List, Machine};
 use anyhow::Result;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -665,54 +665,59 @@ fn observe_machine() -> MachineFact {
     let machine = Machine::drift();
     let mut drift = Vec::new();
 
-    // The baked lists are what convergence follows, so drift against them
-    // is exactly what the next sync run would change.
+    // Drift is measured against the authority convergence actually
+    // follows: `governing` — the machine's own declaration where it
+    // names the axis, the image's baked list otherwise. This probe read
+    // the baked list file directly, on the strength of "the baked lists
+    // are what convergence follows" — true once, false since the
+    // convergers moved to the CLI's authority answer (the nano
+    // incident's ruling). A machine whose declaration dropped an app
+    // the release still bakes then read as drifted by an app no sync
+    // would ever touch: the summary promised work the actor had stopped
+    // meaning to do. The same authority split — summary reads one
+    // source, actor another — is recorded in inventory.rs from the brew
+    // half; this was its flatpak twin.
     //
-    // Removals are scoped the way convergence scopes them: only apps kuma
-    // installed can be taken back, which is what the record at
-    // /var/lib/kuma/flatpaks-installed is for. Counting every undeclared
-    // app instead described the model kuma had before it stopped removing
-    // things it never installed, so a machine with an app from a store
-    // read as drifted here while `kuma diff` correctly called it yours,
-    // and the summary an agent reads first was the pessimistic one.
-    if let Ok(baked) = std::fs::read_to_string(BAKED_FLATPAKS) {
-        if let Some(installed) = &machine.flatpak_system {
-            let declared = to_set(&baked);
-            count(
-                &mut drift,
-                declared.iter().filter(|app| !installed.contains(**app)).count(),
-                "flatpak(s) to install",
-            );
-            count(
-                &mut drift,
-                installed
-                    .iter()
-                    .filter(|app| machine.convergence_removes(List::Flatpak, app, &declared))
-                    .count(),
-                "flatpak(s) to remove",
-            );
-        }
-    }
-    // Installed brews are Cellar directory names — a filesystem read, not a
-    // multi-second `brew list`. Only ever-declared formulae (the sync state
-    // file) count as removals; ad-hoc installs are the owner's.
-    if let Ok(baked) = std::fs::read_to_string(BAKED_BREWS) {
-        if let Some(installed) = &machine.brew_installed {
-            let declared: BTreeSet<&str> = to_set(&baked).iter().map(|f| short(f)).collect();
-            count(
-                &mut drift,
-                declared.iter().filter(|f| !installed.contains(**f)).count(),
-                "brew formula(e) to install",
-            );
-            count(
-                &mut drift,
-                installed
-                    .iter()
-                    .filter(|f| machine.convergence_removes(List::Brew, f, &declared))
-                    .count(),
-                "brew formula(e) to remove",
-            );
-        }
+    // A governing answer that ERRORS (an unreadable or foreign local
+    // declaration) stays quiet here: an authority that cannot answer is
+    // sync's loud refusal, not a baseline to guess around — inventing
+    // one is the bug this fixes.
+    for (axis, installed) in [
+        (Axis::Flatpak, machine.flatpak_system.as_ref()),
+        (Axis::Brew, machine.brew_installed.as_ref()),
+    ] {
+        let Ok(governs) = governing(axis) else {
+            continue;
+        };
+        let Some(installed) = installed else {
+            continue;
+        };
+        let declared: BTreeSet<&str> = governs.list.iter().map(|f| short(f)).collect();
+        count(
+            &mut drift,
+            declared.iter().filter(|app| !installed.contains(**app)).count(),
+            match axis {
+                Axis::Flatpak => "flatpak(s) to install",
+                Axis::Brew => "brew formula(e) to install",
+            },
+        );
+        count(
+            &mut drift,
+            installed
+                .iter()
+                .filter(|app| {
+                    let list = match axis {
+                        Axis::Flatpak => List::Flatpak,
+                        Axis::Brew => List::Brew,
+                    };
+                    machine.convergence_removes(list, app, &declared)
+                })
+                .count(),
+            match axis {
+                Axis::Flatpak => "flatpak(s) to remove",
+                Axis::Brew => "brew formula(e) to remove",
+            },
+        );
     }
     let deployed_id = std::fs::read_to_string(DEPLOYED_ID_FILE)
         .ok()

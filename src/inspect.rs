@@ -883,6 +883,7 @@ pub fn doctor(json: bool, as_report: bool) -> Result<()> {
         check_keymap(&mut report);
         check_mime_defaults(&mut report);
         check_dev_install(&mut report);
+        check_cargo_bin(&mut report);
     } else if Path::new("/usr/lib/kuma").is_dir() {
         report(
             Grade::Warn,
@@ -2899,6 +2900,22 @@ fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Actio
 /// lease the image has already caught up to — the states where the
 /// receipt says one thing and the machine another, which is the only
 /// lie doctor exists to catch.
+/// The known sibling names — the set `kuma build`'s staging gate
+/// resolves beside the running kuma (kuma itself, the five kumaui
+/// binaries, the nostr road's three). The dev-install check and the
+/// cargo-bin sweep both patrol by these names.
+const DEV_BINARY_NAMES: &[&str] = &[
+    "kuma",
+    "kuma-shell",
+    "kuma-greeter",
+    "kuma-files",
+    "kuma-term",
+    "kuma-monitor",
+    "kuma-nostrd",
+    "kuma-nostr",
+    "nip46-relay",
+];
+
 fn check_dev_install(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
     // Report text is terminal text, and doctor runs under sudo: the
     // strings below come from files a user-level process can write —
@@ -2907,21 +2924,6 @@ fn check_dev_install(report: &mut impl FnMut(Grade, &str, String, Option<Action>
     // root's report. Everything user-controlled is stripped to plain
     // before it is formatted in; `plain` is the one place that rule
     // lives.
-    //
-    // The known sibling names — the set `kuma build`'s staging gate
-    // resolves beside the running kuma (kuma itself, the five kumaui
-    // binaries, the nostr road's three).
-    const KNOWN: &[&str] = &[
-        "kuma",
-        "kuma-shell",
-        "kuma-greeter",
-        "kuma-files",
-        "kuma-term",
-        "kuma-monitor",
-        "kuma-nostrd",
-        "kuma-nostr",
-        "nip46-relay",
-    ];
     let Some(receipt) = crate::dev::Receipt::read() else {
         // No receipt: the default, not an achievement — unless a home
         // binary shadows the image's anyway. A hand-staged copy is
@@ -2929,27 +2931,77 @@ fn check_dev_install(report: &mut impl FnMut(Grade, &str, String, Option<Action>
         // stamp gate cannot interrogate it, the lease cannot retire
         // it, and PATH prefers it over the image's binary.
         if let Some(home) = crate::state::primary_home() {
-            let shadowing: Vec<String> = KNOWN
-                .iter()
-                .filter(|n| home.join(".local/bin").join(n).exists())
-                .map(|n| n.to_string())
-                .collect();
-            if !shadowing.is_empty() {
+            // Shadowing is the dev-deploy mechanism, so presence alone
+            // is not the problem — IDENTITY is. The staging gate at
+            // image build compares sibling stamps; this check borrows
+            // its judgment and reads the bytes instead of running
+            // them: doctor is root, and root executing a
+            // user-writable binary is root consuming an opinion the
+            // refuse-foreign-opinion rule exists to refuse. Byte-equal
+            // to the image's binary is the kumaui build script's
+            // legitimate staging (the five ride beside the running
+            // kuma for the next image build's gate); anything else is
+            // a copy with no story — stale the moment the image moves.
+            use crate::dev::sha256_file;
+            let mut current: Vec<String> = Vec::new();
+            let mut drifted: Vec<String> = Vec::new();
+            let mut unshadowed: Vec<String> = Vec::new();
+            for name in DEV_BINARY_NAMES {
+                let staged = home.join(".local/bin").join(name);
+                if !staged.exists() {
+                    continue;
+                }
+                let image = std::path::PathBuf::from("/usr/bin").join(name);
+                match (sha256_file(&staged).ok(), sha256_file(&image).ok()) {
+                    (Some(staged), Some(image)) if staged == image => current.push((*name).into()),
+                    (Some(_), Some(_)) => drifted.push((*name).into()),
+                    _ => unshadowed.push((*name).into()),
+                }
+            }
+            if !drifted.is_empty() {
                 report(
                     Grade::Warn,
                     "dev install",
                     format!(
-                        "binary/binaries in ~/.local/bin shadow the image's with no receipt \
-                         naming them: {} — `kuma dev install` is the way one gets there \
-                         legitimately, with a record; a hand-staged copy retires never and \
-                         explains itself to nobody",
-                        shadowing.join(", ")
+                        "binary/binaries in ~/.local/bin differ from the image's own: {} — \
+                         staged by hand or built since the last image, and either way the \
+                         bytes PATH resolves first are bytes nothing vouched for",
+                        drifted.join(", ")
+                    ),
+                    Some(Action::new(
+                        "dev install",
+                        "kuma dev install",
+                        "re-stage with a receipt, or remove the copies and run the image's",
+                    )),
+                );
+            }
+            if !unshadowed.is_empty() {
+                report(
+                    Grade::Warn,
+                    "dev install",
+                    format!(
+                        "binary/binaries in ~/.local/bin name nothing the image carries: {} — \
+                         they shadow nothing today, and nothing will flag them the day an \
+                         image ships the name and they go stale silently",
+                        unshadowed.join(", ")
                     ),
                     Some(Action::new(
                         "dev install",
                         "kuma dev install",
                         "receipt the binaries you meant to stage, or remove the ones you didn't",
                     )),
+                );
+            }
+            if !current.is_empty() && drifted.is_empty() && unshadowed.is_empty() {
+                report(
+                    Grade::Ok,
+                    "dev install",
+                    format!(
+                        "unreceipted but byte-identical to the image's own: {} — the build \
+                         script's staging, which the next image build's stamp gate verifies",
+                        current.join(", ")
+                    ),
+                    None,
                 );
             }
         }
@@ -3050,6 +3102,46 @@ fn check_dev_install(report: &mut impl FnMut(Grade, &str, String, Option<Action>
             plain(receipt.version())
         ),
         None,
+    );
+}
+
+/// The relic sweep: kuma's own binary names in `~/.cargo/bin`. The
+/// dev loop's roads are the image's `/usr/bin` and the receipted
+/// staging area in `~/.local/bin`; `cargo install` is a road the
+/// project retired, and its deposits are the one artifact NO other
+/// check can see — the receipt does not know them, the staging gate
+/// does not resolve them, and PATH resolves them ahead of the
+/// image's binary the moment `~/.local/bin` is empty (found 2026-11-10:
+/// a 45.0.0 relic impersonating the CLI for a whole reboot cycle,
+/// prescribing a reboot the machine did not need). Presence is the
+/// warn — a cargo build can never be the image's bytes, so there is
+/// no identity question to ask first.
+fn check_cargo_bin(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
+    let Some(home) = crate::state::primary_home() else {
+        return;
+    };
+    let relics: Vec<String> = DEV_BINARY_NAMES
+        .iter()
+        .filter(|n| home.join(".cargo/bin").join(n).exists())
+        .map(|n| (*n).to_string())
+        .collect();
+    if relics.is_empty() {
+        return;
+    }
+    let paths: Vec<String> = relics.iter().map(|n| format!("~/.cargo/bin/{n}")).collect();
+    report(
+        Grade::Warn,
+        "cargo bin",
+        format!(
+            "cargo-installed kuma binaries in ~/.cargo/bin: {} — PATH resolves them ahead of \
+             the image's binary, and no receipt or gate tells their story",
+            plain(&paths.join(", "))
+        ),
+        Some(Action::new(
+            "remove",
+            format!("rm {}", paths.join(" ")),
+            "the image's binary and the receipted staging area are the only authorities",
+        )),
     );
 }
 

@@ -39,3 +39,5 @@ COPY 10-kuma-nostr-relays.conf /usr/lib/systemd/user/kuma-nostrd.service.d/10-ku
 RUN systemctl enable podman.socket
 
 COPY flatpaks /usr/lib/kuma/flatpaks
+
+COPY overrides /usr/lib/kuma/overrides

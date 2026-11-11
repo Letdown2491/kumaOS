@@ -248,11 +248,7 @@ fn adopt_daemon(receipt: &Receipt) -> Result<Option<String>> {
     // unit BEFORE the override is written: after it, the override's
     // own bare ExecStart is what systemd would answer with.
     let args = unit_execstart_args()?;
-    let args_line = if args.is_empty() {
-        String::new()
-    } else {
-        format!(" {args}")
-    };
+    let args_line = if args.is_empty() { String::new() } else { format!(" {args}") };
     let override_path = daemon_override();
     std::fs::create_dir_all(
         override_path.parent().with_context(|| "the override path has no parent".to_string())?,
@@ -650,9 +646,12 @@ ExecStartPre=+/usr/bin/mkdir -p %h/.local/state/kuma-nostr
 ExecStart=
 ExecStart=/var/home/martin/.local/bin/kuma-nostrd
 ";
-        let args = execstart_args_from_cat(text, &PathBuf::from(
-            "/var/home/martin/.config/systemd/user/kuma-nostrd.service.d/override.conf",
-        ))
+        let args = execstart_args_from_cat(
+            text,
+            &PathBuf::from(
+                "/var/home/martin/.config/systemd/user/kuma-nostrd.service.d/override.conf",
+            ),
+        )
         .expect("the image's ExecStart is in the cat output");
         assert_eq!(
             args, "--relay wss://relay.nip46.com",
