@@ -4594,7 +4594,15 @@ smoke_boot() {
     sandbox_probe airlock
     out=$(ssh "${ssh_opts[@]}" 'unshare -U true' 2>&1) \
         || bad "the guest denies unprivileged user namespaces, which bwrap needs: $out"
-    if refusal=$(guest 'cd && kuma run no-home -- /bin/true' 2>&1); then
+    # The refusal rides STDERR (bail! -> anyhow -> stderr), and guest()
+    # discards stderr — the ssh client's own — so the text can never
+    # reach the grep through it: the check reded every nightly since it
+    # demanded the text (fd1fbbb's vacuous-pass fix), reding the
+    # contract-holding image as an empty refusal. The remote command
+    # merges its own stderr onto stdout, the same road sandbox_probe
+    # took; ssh's own stderr stays discarded, which is what guest's
+    # redirect is for.
+    if refusal=$(guest 'cd && kuma run no-home -- /bin/true 2>&1'); then
         bad "kuma run from the home directory succeeded; the empty home is not guaranteed"
     elif ! printf '%s' "$refusal" | grep -q "refuses to sandbox"; then
         # A failure that is not the refusal — "cannot start", a shell
