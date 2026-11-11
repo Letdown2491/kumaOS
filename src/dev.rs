@@ -181,18 +181,36 @@ fn bounce_daemon() {
 /// listens and never hears a note (the silent afternoon of Nov 10,
 /// found by the note that never sent). The unit's arguments are part
 /// of its posture; the override replaces the binary, not the posture.
-/// The parse behind `unit_execstart_args`: the first `ExecStart=` in
-/// the fragments that are NOT the dev override, minus its binary. Pure
-/// so the test can hold it against the real interleaving `systemctl
-/// cat` prints — the override's own bare ExecStart is last, and taking
-/// the wrong line is exactly the empty-argument bug this exists to
-/// prevent.
+/// The parse behind `unit_execstart_args`: the LAST `ExecStart=` in
+/// the fragments that are NOT the dev override, minus its binary —
+/// systemd applies fragments in printed order and a later non-empty
+/// assignment replaces an earlier one, so the first line was this
+/// bug's twin from the other side: a delta's relay drop-in
+/// (10-kuma-nostr-relays.conf, sorted before override.conf) restates
+/// the declared relay line, and reading the first non-override
+/// assignment adopted the image unit's relays over the declaration's,
+/// silently, on exactly the machines whose declaration had moved.
+/// Pure so the test can hold it against the real interleaving
+/// `systemctl cat` prints — the override's own bare ExecStart is last,
+/// and taking the wrong line is exactly the empty-argument bug this
+/// exists to prevent.
 fn execstart_args_from_cat(text: &str, override_path: &std::path::Path) -> Option<String> {
     let override_fragment = override_path.display().to_string();
     let mut current_is_override = false;
+    let mut last: Option<String> = None;
     for line in text.lines() {
         if let Some(path) = line.strip_prefix("# ") {
-            current_is_override = path == override_fragment;
+            // Only a fragment header — a path — moves which fragment
+            // the lines belong to. A non-path comment (`# Managed by
+            // kuma dev install`, the override's own furniture) must
+            // leave the state alone: flipping on every comment would
+            // read the override's ExecStart back as the unit's and
+            // stage the staged binary as its own argument source.
+            if path == override_fragment {
+                current_is_override = true;
+            } else if path.starts_with('/') {
+                current_is_override = false;
+            }
             continue;
         }
         if current_is_override {
@@ -201,10 +219,10 @@ fn execstart_args_from_cat(text: &str, override_path: &std::path::Path) -> Optio
         if let Some(rest) = line.strip_prefix("ExecStart=") {
             let mut words = rest.split_whitespace();
             let _binary = words.next().unwrap_or_default();
-            return Some(words.collect::<Vec<_>>().join(" "));
+            last = Some(words.collect::<Vec<_>>().join(" "));
         }
     }
-    None
+    last
 }
 
 fn unit_execstart_args() -> Result<String> {
@@ -666,6 +684,57 @@ ExecStart=/var/home/martin/.local/bin/kuma-nostrd
             Some(""),
         );
         assert_eq!(execstart_args_from_cat("[Unit]\n", &PathBuf::from("/no/override.conf")), None);
+
+        // The delta machine's interleaving — the twin this parse
+        // nearly shipped: a delta staging the declaration's relay set
+        // writes a DROP-IN (sorted before the dev override, after the
+        // image's fragment), restating ExecStart with the declared
+        // relays. Taking the FIRST non-override line adopted the
+        // image's relays over the declaration's — silent, on exactly
+        // the machines whose declaration had moved. The LAST
+        // non-override line is the declaration's.
+        let delta = "\
+# /usr/lib/systemd/user/kuma-nostrd.service
+[Service]
+ExecStart=/usr/bin/kuma-nostrd --relay wss://relay.nip46.com
+# /var/home/martin/.config/systemd/user/kuma-nostrd.service.d/10-kuma-nostr-relays.conf
+[Service]
+ExecStart=
+ExecStart=/usr/bin/kuma-nostrd --relay wss://my-share.brainstick.wtf
+# /var/home/martin/.config/systemd/user/kuma-nostrd.service.d/override.conf
+# Managed by `kuma dev install`
+[Service]
+ExecStart=
+ExecStart=/var/home/martin/.local/bin/kuma-nostrd
+";
+        let override_path = PathBuf::from(
+            "/var/home/martin/.config/systemd/user/kuma-nostrd.service.d/override.conf",
+        );
+        let args = execstart_args_from_cat(delta, &override_path)
+            .expect("the drop-in's ExecStart is in the cat output");
+        assert_eq!(
+            args, "--relay wss://my-share.brainstick.wtf",
+            "the declaration's relay drop-in wins over the image's fragment"
+        );
+
+        // And a non-path comment INSIDE the managed override must not
+        // flip the fragment state: the override carries its own
+        // comments, and a flip would read the override's bare
+        // ExecStart back as the unit's — the staged binary standing in
+        // for the arguments, the empty-argument bug by another door.
+        let commented = "\
+# /usr/lib/systemd/user/kuma-nostrd.service
+ExecStart=/usr/bin/kuma-nostrd --relay wss://relay.nip46.com
+# /var/home/martin/.config/systemd/user/kuma-nostrd.service.d/override.conf
+# Managed by `kuma dev install`
+# staged by the dev lease; retired by `kuma dev retire`
+[Service]
+ExecStart=
+ExecStart=/var/home/martin/.local/bin/kuma-nostrd
+";
+        let args = execstart_args_from_cat(commented, &override_path)
+            .expect("the image's ExecStart is in the cat output");
+        assert_eq!(args, "--relay wss://relay.nip46.com");
     }
 
     /// The stamp gate's parsing side. The kuma shape is

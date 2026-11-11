@@ -1525,7 +1525,16 @@ smoke_published() {
     echo "   .. resource lap: boot time, five idle minutes, then the session's budget" >&2
     local boot_userspace
     boot_userspace=$(gsudo "systemd-analyze" 2>/dev/null \
-        | sed -n 's/.*+ \([0-9.]*\)s (userspace).*/\1/p' | head -1)
+        | sed -n 's/.*+ \(.*\) (userspace).*/\1/p' | head -1)
+    # systemd-analyze prints seconds under a minute and "Xmin Y.Zs"
+    # over it; a slow runner day crosses that boundary, so the parse
+    # must read both — the first draft captured [0-9.]* only and the
+    # minute form parsed EMPTY, a false red in exactly the 60-90s band
+    # the ceiling exists to judge.
+    boot_userspace=$(printf '%s' "${boot_userspace:-}" | awk '{
+        if (NF == 2) { s = $1; sub(/min$/, "", s); printf "%.1f", s * 60 + $2 }
+        else if (NF == 1) { sub(/s$/, "", $1); print $1 }
+    }')
     case "${boot_userspace:-}" in
         ""|*[!0-9.]*) bad "systemd-analyze gave no userspace time to judge" ;;
         *)
@@ -1551,7 +1560,7 @@ def snap():
         try:
             with open(p + "/cgroup") as f:
                 cg = f.read()
-            if "user-1000" not in cg and "user.slice" not in cg:
+            if "user-1000" not in cg:
                 continue
             with open(p + "/comm") as f:
                 comm = f.read().strip()

@@ -2861,12 +2861,13 @@ fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Actio
             let mut alive = handlers.split(';').map(str::trim).filter(|h| !h.is_empty());
             let Some(handler) = alive.next() else { continue };
             let alternates = alive.next().is_some();
-            defaults.push((
-                mime.trim().to_string(),
-                handler.to_string(),
-                shown.to_string(),
-                alternates,
-            ));
+            // plain() at the door: every later surface — the report's
+            // named list, the prune Action's sed pattern, the terminal
+            // it prints in — derives from these strings, and a
+            // mimeapps.list is user-writable. Control characters are
+            // stripped once, here, the same rule every other
+            // user-sourced report string lives by.
+            defaults.push((plain(mime.trim()), plain(handler), shown.to_string(), alternates));
         }
     }
     if defaults.is_empty() {
@@ -2897,25 +2898,30 @@ fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Actio
     // baked pin, a line with a live second handler — stays advice: an
     // approximate command is not a fix, and the attribution above now
     // says which file to open.
+    //
+    // The command single-quotes every expression: the BRE's `;` is a
+    // shell separator unquoted, and the fields — though stripped of
+    // control characters and BRE-escaped — are still file text, so
+    // shell metacharacters in it must arrive at sed as data, not as
+    // command structure. sed_bre escapes BRE, not shell.
     let prunable = missing.iter().all(|(mime, handler, src, alternates)| {
-        !alternates && src.starts_with('~') && !mime.is_empty() && !handler.is_empty()
+        !alternates
+            && src.starts_with('~')
+            && !mime.is_empty()
+            && !handler.is_empty()
+            && !mime.contains('\'')
+            && !handler.contains('\'')
     });
-    let action = if prunable {
-        let drops: Vec<String> = missing
-            .iter()
-            .map(|(mime, handler, _, _)| {
-                format!(r"\#^{}={};\?$#d", sed_bre(mime), sed_bre(handler))
-            })
-            .collect();
-        Some(Action::new(
+    let action = prunable.then(|| {
+        let lines: Vec<(String, String)> =
+            missing.iter().map(|(mime, handler, _, _)| (mime.clone(), handler.clone())).collect();
+        Action::new(
             "prune",
-            format!("sed -i -e {} \"~/.config/mimeapps.list\"", drops.join(" -e ")),
+            prune_command(&lines, home.as_deref()),
             "the lines name handlers nothing installs; deleting them lets the \
              desktop's own default answer again",
-        ))
-    } else {
-        None
-    };
+        )
+    });
     report(
         Grade::Warn,
         "defaults",
@@ -2931,6 +2937,25 @@ fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Actio
 /// character that could widen the match beyond the literal line. The
 /// suggested command deletes lines from a user file; a pattern that
 /// could match more than the dead entry has no place in a fix.
+/// The prune Action's command, built and quoted as one pure step so
+/// the test can hold its shape: every `-e` expression single-quoted —
+/// the BRE's `;` is a shell command separator unquoted, and the first
+/// draft's bare pattern made the suggested command fail on EVERY
+/// input (`sed: no input files`, then the shell trying `\?$#d` as a
+/// second command) — and the target an absolute path, because doctor
+/// runs under sudo and a pasted `~` expands to root's home, where the
+/// file does not exist.
+fn prune_command(lines: &[(String, String)], home: Option<&std::path::Path>) -> String {
+    let drops: Vec<String> = lines
+        .iter()
+        .map(|(mime, handler)| format!(r"'\#^{}={};\?$#d'", sed_bre(mime), sed_bre(handler)))
+        .collect();
+    let target = home
+        .map(|h| h.join(".config/mimeapps.list").display().to_string())
+        .unwrap_or_else(|| "~/.config/mimeapps.list".to_string());
+    format!("sed -i -e {} '{}'", drops.join(" -e "), target)
+}
+
 fn sed_bre(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -2965,6 +2990,48 @@ mod mime_tests {
         // The delimiter itself cannot survive unescaped — the address is
         // a \#…# form, and a raw # in the pattern ends it early.
         assert_eq!(sed_bre("we#ird"), r"we\#ird");
+    }
+
+    #[test]
+    fn the_prune_command_survives_the_shell() {
+        // The command is DESIGNED to be pasted into a root terminal, so
+        // its shape is a correctness question, not style: the `;` in
+        // the BRE pattern is a shell command separator unquoted — the
+        // first draft printed the pattern bare and the command failed
+        // on every input (`sed: no input files`, then the shell trying
+        // `\?$#d` as a second command).
+        let cmd = prune_command(
+            &[("text/plain".into(), "org.gnome.Nautilus.desktop".into())],
+            Some(std::path::Path::new("/var/home/martin")),
+        );
+        assert_eq!(
+            cmd,
+            "sed -i -e '\\#^text/plain=org\\.gnome\\.Nautilus\\.desktop;\\?$#d' \
+             '/var/home/martin/.config/mimeapps.list'"
+        );
+        // Two dead lines ride as two -e expressions, one command.
+        let two = prune_command(
+            &[("text/plain".into(), "a.desktop".into()), ("image/png".into(), "b.desktop".into())],
+            None,
+        );
+        assert_eq!(
+            two,
+            "sed -i -e '\\#^text/plain=a\\.desktop;\\?$#d' \
+             -e '\\#^image/png=b\\.desktop;\\?$#d' '~/.config/mimeapps.list'"
+        );
+        // The escape-injection facet: the fields are FILE TEXT from a
+        // user-writable file. Control characters left at plain(), BRE
+        // metacharacters at sed_bre, and shell structure at the single
+        // quotes — a backtick or `$(...)` in a mime type arrives at
+        // sed as data. The one character that could break OUT of the
+        // quotes, a single quote, never reaches the builder: the
+        // prunable gate refuses the Action for any field carrying one,
+        // and that line stays advice.
+        let hostile =
+            prune_command(&[("application/x-`id`.type".into(), "a$(reboot).desktop".into())], None);
+        assert!(hostile.starts_with("sed -i -e '\\#^application/x-`id`"));
+        assert!(hostile.ends_with("'~/.config/mimeapps.list'"));
+        assert_eq!(hostile.matches('\'').count(), 4, "only the two quoting pairs");
     }
 }
 

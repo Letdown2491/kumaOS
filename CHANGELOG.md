@@ -24,6 +24,34 @@
   forms in a GNU BRE; the suggested command could not widen past the
   dead entry).
 
+- **The prune Action's command survives the shell that would run it.**
+  The review caught the first draft's sed printed its BRE pattern
+  UNQUOTED — the pattern's `;` is a shell command separator, so the
+  suggested command failed on every input (`sed: no input files`, then
+  the shell trying `\?$#d` as a second command) and touched no file.
+  Every `-e` expression is single-quoted now and the target an
+  absolute path (doctor runs under sudo; a pasted `~` expands to
+  root's home, where the file does not exist). The line's fields are
+  user-file text: they pass through `plain()` at parse, `sed_bre` in
+  the pattern, and the single quotes at the shell — and a field
+  carrying a single quote refuses the Action entirely, that line
+  staying advice rather than a broken paste.
+
+- **The dev deploy reads the unit's LAST non-override ExecStart — the
+  45.2.1 bug's twin, caught before it bit.** `03094c9` fixed the empty-
+  relay deploy by reading the image fragment's arguments out of
+  `systemctl cat`, and the first draft took the FIRST non-override
+  assignment — on a delta machine, the declaration's relay drop-in
+  (`10-kuma-nostr-relays.conf`) sorts before the dev override and
+  restates ExecStart, so the parse adopted the image's relays over the
+  declaration's, silently, on exactly the machines whose declaration
+  had moved. The parse now takes the LAST non-override assignment
+  (systemd's own rule: a later non-empty assignment replaces an
+  earlier one) and only a real fragment header — a path — may move
+  which fragment a line belongs to, so the override's own comments
+  cannot flip the state and its bare ExecStart is never read back as
+  the argument source. Pinned against the real drop-in interleaving.
+
 - **Drift is measured against the authority convergence follows.**
   The bare `kuma` probe counted drift against the image's baked list
   file directly — an authority the convergers stopped consulting when
