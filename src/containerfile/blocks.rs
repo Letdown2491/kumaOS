@@ -964,6 +964,14 @@ Restart=on-failure
 RestartSec=2min
 CPUWeight=25
 IOWeight=25
+# Measured on a real machine (2026-11-11): the daily's RSS driver is
+# flathub's appstream re-pull and parse, 76M peak; an update-day with
+# nothing pending peaked at 10M; an install-day (a 67M app) rode the
+# same class. The High is ~7x the measured spike — soft, so a multi-GB
+# delta day slows before it ever risks the hard line — and the Max
+# holds the vendor client's worst day well clear of the session.
+MemoryHigh=512M
+MemoryMax=1G
 # The converger's write surface is the flatpak system repo, its own
 # state file, and the gate's marker directory; strict holds the rest
 # of the tree while root runs a vendor's client against it. The same
@@ -1215,6 +1223,17 @@ pub(crate) const CURATED_EXCLUDES: &[&str] =
 /// prune stamps). The reads the job exists for — /var/home, /etc, the
 /// network — stay open, which is the honest limit of what sandboxing
 /// buys a backup.
+/// The measured shape behind these ceilings (2026-11-11, a real home:
+/// 101G, 1.8M files, restic 0.19.1): cold full backup peaked at 7.75G,
+/// the nightly incremental at 853M, a prune of the ~100G repo at 284M.
+/// restic's RAM scales with the FILE COUNT of the source and the index
+/// size of the repo, so the soft High sits just over the measured cold
+/// peak — the one heavy day a ceiling must not throttle into an
+/// all-day thrash — and the hard Max catches the leak, the runaway,
+/// the repo state that answers for memory no run measured. On a
+/// machine whose RAM cannot hold the cold peak, the kernel OOMs the
+/// same job the cap would: the Max is inert where it cannot help and
+/// real protection where it can.
 pub(crate) fn backup_service(config: &Config) -> String {
     format!(
         "[Unit]\nDescription=Copy the newest snapshot to the declared repository\n\
@@ -1226,7 +1245,8 @@ pub(crate) fn backup_service(config: &Config) -> String {
          PrivateMounts=yes\n\
          NoNewPrivileges=yes\nProtectSystem=strict\nPrivateTmp=yes\n\
          ReadWritePaths=/var/lib/kuma /var/cache/restic\n\
-         Restart=on-failure\nRestartSec=2min\nCPUWeight=25\nIOWeight=25\n\n\
+         Restart=on-failure\nRestartSec=2min\nCPUWeight=25\nIOWeight=25\n\
+         MemoryHigh=8G\nMemoryMax=12G\n\n\
          [Install]\nWantedBy=multi-user.target\n",
         secret = config.backup.secret,
     )

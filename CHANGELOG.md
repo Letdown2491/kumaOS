@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **The heavy jobs carry their measured ceilings.** The 45.2 audit gave
+  the session daemons `MemoryMax=256M` and deliberately left the two
+  heavy jobs uncapped until sized — now measured on a real machine
+  (101G, 1.8M files, restic 0.19.1): a cold full backup peaks at 7.75G,
+  the nightly incremental at 853M, a repo prune at 284M, the flatpak
+  daily's appstream re-pull at 76M. `kuma-backup` gets the soft
+  `MemoryHigh=8G` just over its one heavy day and a `MemoryMax=12G`
+  leak line; the flatpak daily gets `MemoryHigh=512M` / `MemoryMax=1G`.
+  A cap below the cold peak would have broken the legitimate backup
+  outright — the sizing is the point.
+
+- **Doctor's mime check attributes and prunes.** A dead mime default
+  used to report as `mime → handler` with no source: the two files it
+  reads have different owners (the image bakes /etc's pin, the user
+  wrote ~/.config's), and the reader could not tell whose fix it was.
+  Each entry now names its file, and when every dead default is the
+  user's own single-handler line, the warning carries a prune Action —
+  a sed that deletes exactly those lines, its pattern escaped for the
+  BRE's any-char dots and bare `+`/`?` (the quantifiers are the ESCAPED
+  forms in a GNU BRE; the suggested command could not widen past the
+  dead entry).
+
 - **Drift is measured against the authority convergence follows.**
   The bare `kuma` probe counted drift against the image's baked list
   file directly — an authority the convergers stopped consulting when

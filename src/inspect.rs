@@ -2838,10 +2838,15 @@ fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Actio
 
     // [Default Applications] entries only: `mime=handler.desktop`, the
     // first handler of a list being the default. Added Associations are
-    // candidates, not answers, and nothing here grades them.
-    let mut defaults: Vec<(String, String)> = Vec::new();
-    for file in &files {
-        let Ok(text) = std::fs::read_to_string(file) else { continue };
+    // candidates, not answers, and nothing here grades them. Each entry
+    // carries its source and whether the line holds alternates past the
+    // default — the source because the two files have different owners
+    // (the image bakes /etc's pin, the user wrote ~/.config's), and the
+    // alternates because a prune that drops a whole line must not take
+    // a live second handler with the dead first.
+    let mut defaults: Vec<(String, String, String, bool)> = Vec::new();
+    for (path, shown) in files.iter().zip(["/etc/xdg/mimeapps.list", "~/.config/mimeapps.list"]) {
+        let Ok(text) = std::fs::read_to_string(path) else { continue };
         let mut in_defaults = false;
         for line in text.lines() {
             let line = line.trim();
@@ -2853,10 +2858,15 @@ fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Actio
                 continue;
             }
             let Some((mime, handlers)) = line.split_once('=') else { continue };
-            let Some(handler) = handlers.split(';').map(str::trim).find(|h| !h.is_empty()) else {
-                continue;
-            };
-            defaults.push((mime.trim().to_string(), handler.to_string()));
+            let mut alive = handlers.split(';').map(str::trim).filter(|h| !h.is_empty());
+            let Some(handler) = alive.next() else { continue };
+            let alternates = alive.next().is_some();
+            defaults.push((
+                mime.trim().to_string(),
+                handler.to_string(),
+                shown.to_string(),
+                alternates,
+            ));
         }
     }
     if defaults.is_empty() {
@@ -2865,8 +2875,8 @@ fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Actio
     let resolves = |handler: &str| -> bool {
         handler.contains('/') || dirs.iter().any(|dir| dir.join(handler).exists())
     };
-    let missing: Vec<(String, String)> =
-        defaults.iter().filter(|(_, handler)| !resolves(handler)).cloned().collect();
+    let missing: Vec<&(String, String, String, bool)> =
+        defaults.iter().filter(|(_, handler, _, _)| !resolves(handler)).collect();
     if missing.is_empty() {
         report(
             Grade::Ok,
@@ -2878,8 +2888,34 @@ fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Actio
     }
     let named: Vec<String> = missing
         .iter()
-        .map(|(mime, handler)| format!("{} → {}", plain(mime), plain(handler)))
+        .map(|(mime, handler, src, _)| format!("{} → {} ({})", plain(mime), plain(handler), src))
         .collect();
+    // The prune Action exists only where a delete is exactly the fix:
+    // every dead default in the user's OWN file, no alternates on any
+    // line (dropping the line then takes nothing alive with it), and
+    // each line a whole-line delete can name. Anything else — /etc's
+    // baked pin, a line with a live second handler — stays advice: an
+    // approximate command is not a fix, and the attribution above now
+    // says which file to open.
+    let prunable = missing.iter().all(|(mime, handler, src, alternates)| {
+        !alternates && src.starts_with('~') && !mime.is_empty() && !handler.is_empty()
+    });
+    let action = if prunable {
+        let drops: Vec<String> = missing
+            .iter()
+            .map(|(mime, handler, _, _)| {
+                format!(r"\#^{}={};\?$#d", sed_bre(mime), sed_bre(handler))
+            })
+            .collect();
+        Some(Action::new(
+            "prune",
+            format!("sed -i -e {} \"~/.config/mimeapps.list\"", drops.join(" -e ")),
+            "the lines name handlers nothing installs; deleting them lets the \
+             desktop's own default answer again",
+        ))
+    } else {
+        None
+    };
     report(
         Grade::Warn,
         "defaults",
@@ -2887,8 +2923,49 @@ fn check_mime_defaults(report: &mut impl FnMut(Grade, &str, String, Option<Actio
             "mime default(s) point at handlers that are not installed — removed by convergence or by hand; pick a new default in your desktop's settings, or declare the app again: {}",
             named.join(", ")
         ),
-        None,
+        action,
     );
+}
+
+/// Escape a string for a BRE used as a `\#…#` sed address: every
+/// character that could widen the match beyond the literal line. The
+/// suggested command deletes lines from a user file; a pattern that
+/// could match more than the dead entry has no place in a fix.
+fn sed_bre(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        // `+` and `?` stay BARE on purpose: in a GNU BRE they are the
+        // quantifiers (\+, \?) and the bare characters are literal —
+        // escaping them would turn a mime type's `+json` into a
+        // quantifier and break the match the pattern exists for.
+        if matches!(c, '\\' | '.' | '*' | '[' | ']' | '^' | '$' | '#') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+#[cfg(test)]
+mod mime_tests {
+    use super::*;
+
+    #[test]
+    fn the_prune_pattern_matches_only_the_literal_line() {
+        // A mime type's dots are literal dots, not the BRE's any-char:
+        // text/plain and textXplain are different lines, and a suggested
+        // delete that could take the wrong one is not a fix.
+        assert_eq!(sed_bre("text/plain"), "text/plain");
+        assert_eq!(sed_bre("org.gnome.Nautilus.desktop"), r"org\.gnome\.Nautilus\.desktop");
+        // The GNU BRE subtlety the escaper exists to navigate: `+` and
+        // `?` are the quantifiers ONLY when escaped — application/vnd.api+json
+        // must ride bare, or the pattern matches something else entirely.
+        assert_eq!(sed_bre("application/vnd.api+json"), r"application/vnd\.api+json");
+        assert_eq!(sed_bre("a+b?c"), "a+b?c");
+        // The delimiter itself cannot survive unescaped — the address is
+        // a \#…# form, and a raw # in the pattern ends it early.
+        assert_eq!(sed_bre("we#ird"), r"we\#ird");
+    }
 }
 
 /// The dev install's lease, graded where the machine can read it.

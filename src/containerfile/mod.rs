@@ -4079,6 +4079,34 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         assert!(BREW_SYNC_SCRIPT.contains("/run/kuma-converge-gate/skip"));
     }
 
+    #[test]
+    fn the_heavy_jobs_carry_their_measured_ceilings() {
+        // Sized from the 2026-11-11 real-machine measurements (the
+        // queue item's own recipe): restic's cold full scan peaked at
+        // 7.75G on a 101G/1.8M-file home, the nightly incremental at
+        // 853M, a repo prune at 284M — so the backup's soft High must
+        // clear the one heavy day, and the hard Max is the leak line.
+        // The flatpak daily's driver is the appstream parse, 76M.
+        assert!(FLATPAK_SYNC_DAILY_SERVICE.contains("MemoryHigh=512M"));
+        assert!(FLATPAK_SYNC_DAILY_SERVICE.contains("MemoryMax=1G"));
+        // The boot unit stays cap-free: it converges the declaration,
+        // a bounded list of installs, not the vendor's whole index.
+        assert!(!FLATPAK_SYNC_SERVICE.contains("MemoryHigh"));
+        // The backup unit is generated per declaration; its content is
+        // a staged FILE, so the assertion reads the staging directory
+        // the way the convergence-units test does.
+        let dir = tempfile::tempdir().unwrap();
+        context(
+            "schema_version = 1\n\
+             [snapshots]\nenable = true\ntarget = \"/var/home\"\n\
+             [backup]\nenable = true\nrepo = \"s3:https://minio.example:9000/kuma\"\n",
+            dir.path(),
+        );
+        let backup_unit = std::fs::read_to_string(dir.path().join("kuma-backup.service")).unwrap();
+        assert!(backup_unit.contains("MemoryHigh=8G"), "{backup_unit}");
+        assert!(backup_unit.contains("MemoryMax=12G"), "{backup_unit}");
+    }
+
     /// The convergers ask the CLI which list to follow — the machine's
     /// own declaration where it speaks, the baked list otherwise — and
     /// never parse TOML themselves: a second parser would be a second

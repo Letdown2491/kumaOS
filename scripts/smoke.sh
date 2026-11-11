@@ -1496,6 +1496,135 @@ smoke_published() {
     gsudo "systemd-analyze blame | head -15" >&2 2>&1 || true
     gsudo "systemd-analyze critical-chain multi-user.target" >&2 2>&1 || true
 
+    # The resource lap. The audit's meta-finding was that "the session is
+    # lean" existed only as a finding, so it decayed silently; the same
+    # move the house already makes for staged bytes (the stamp gate) and
+    # boot health (the laps above) applied to what the session consumes.
+    # Three assertions, ceilings from the 2026-11-11 real-machine
+    # measurement (the queue item's own recipe), each generous enough to
+    # be weather-proof and tight enough that the next feature which
+    # quietly doubles the shell's RSS goes red the same night:
+    #
+    #   boot time: the real machine reached graphical.target in 11.7s of
+    #     userspace; the ceiling is 90s — 7x, which is runner weather's
+    #     whole wardrobe, but a converger that adds MINUTES still reds.
+    #   session RSS: the image-shipped session set (niri, kuma-shell,
+    #     portals, audio, applets) summed ~600M PSS with the user's own
+    #     apps excluded; an idle VM session holds a fraction of that.
+    #     The ceiling is 1G — 1.6x the loaded real machine, so a doubled
+    #     shell reds while a slow runner day does not.
+    #   idle CPU: no single process above 5% averaged over the window.
+    #     The real machine's busiest session process (niri, WITH someone
+    #     driving it) took 3.5%; an idle session's wakers — battery-watch
+    #     among them — sit under 1%.
+    #
+    # The window is the ruling's five idle minutes: the session has been
+    # up since the greeter, the probes above are done, and nothing else
+    # in the lap is mid-flight; what runs in the guest during the window
+    # is what a booted image runs.
+    echo "   .. resource lap: boot time, five idle minutes, then the session's budget" >&2
+    local boot_userspace
+    boot_userspace=$(gsudo "systemd-analyze" 2>/dev/null \
+        | sed -n 's/.*+ \([0-9.]*\)s (userspace).*/\1/p' | head -1)
+    case "${boot_userspace:-}" in
+        ""|*[!0-9.]*) bad "systemd-analyze gave no userspace time to judge" ;;
+        *)
+            awk -v t="$boot_userspace" 'BEGIN { exit !(t < 90) }' \
+                || bad "userspace boot took ${boot_userspace}s (ceiling 90s)"
+            ok "userspace boot ${boot_userspace}s (ceiling 90s)"
+            ;;
+    esac
+
+    # Two guest-side snapshots of /proc, five minutes apart, one python
+    # read of the delta: per-process CPU jiffies, and the PSS of every
+    # process in the session's user slice. Staged as a file — the house
+    # road for multi-line content, `guest cat > file`, stdin crossing
+    # ssh cleanly (gsudo's stdin is the sudo password, so the content
+    # cannot ride it) — run detached under systemd-run, polled: no ssh
+    # hop idles five minutes against a runner's TCP.
+    guest "cat > /tmp/resource.py" <<'PYEOF' || bad "cannot stage the resource lap's reader"
+import os, time, glob
+def snap():
+    procs = {}
+    for p in glob.glob("/proc/[0-9]*"):
+        pid = p.rsplit("/", 1)[1]
+        try:
+            with open(p + "/cgroup") as f:
+                cg = f.read()
+            if "user-1000" not in cg and "user.slice" not in cg:
+                continue
+            with open(p + "/comm") as f:
+                comm = f.read().strip()
+            tail = open(p + "/stat").read().rsplit(") ", 1)[1]
+            u, s = tail.split()[:2]
+            procs[pid] = (int(u), int(s), comm)
+        except (OSError, ValueError, IndexError):
+            continue
+    with open("/proc/stat") as f:
+        cpu = f.readline().split()[1:]
+    return procs, cpu
+a, _ = snap()
+time.sleep(300)
+b, _ = snap()
+hz = os.sysconf("SC_CLK_TCK")
+busy = sorted(
+    (((b[p][0] - a[p][0]) + (b[p][1] - a[p][1])) / hz, p, b[p][2])
+    for p in b if p in a
+)[-5:]
+pss = 0
+for rollup in glob.glob("/proc/[0-9]*/smaps_rollup"):
+    try:
+        pid_dir = rollup.rsplit("/", 1)[0]
+        with open(pid_dir + "/cgroup") as f:
+            if "user-1000" not in f.read():
+                continue
+        for line in open(rollup):
+            if line.startswith("Pss:"):
+                pss += int(line.split()[1])
+                break
+    except (OSError, ValueError):
+        continue
+print(f"RESOURCE pss_kb={pss}")
+for secs, pid, comm in reversed(busy):
+    print("RESOURCE cpu pid=%s comm=%s secs=%.1f" % (pid, comm, secs))
+PYEOF
+    gsudo "systemd-run --unit=kuma-smoke-res --property=RuntimeDirectory=kuma-smoke /bin/sh -c '/usr/bin/python3 /tmp/resource.py > /run/kuma-smoke/res.out 2>&1'" >/dev/null \
+        || bad "the resource lap would not start"
+    local res_wait=0
+    while [ $res_wait -lt 390 ]; do
+        sleep 15
+        res_wait=$((res_wait + 15))
+        gsudo "systemctl is-active --quiet kuma-smoke-res" 2>/dev/null || break
+    done
+    local res_out
+    res_out=$(gsudo "cat /run/kuma-smoke/res.out" 2>/dev/null | grep "^RESOURCE" || true)
+    gsudo "rm -rf /tmp/resource.py /run/kuma-smoke" >/dev/null 2>&1
+    gsudo "systemctl reset-failed kuma-smoke-res 2>/dev/null" >/dev/null 2>&1
+    local pss_kb
+    pss_kb=$(printf '%s\n' "$res_out" | sed -n 's/.*pss_kb=\([0-9]*\).*/\1/p' | head -1)
+    case "${pss_kb:-}" in
+        ""|0)
+            bad "the resource lap read nothing back: no session PSS came off the guest" ;;
+        *)
+            awk -v kb="$pss_kb" 'BEGIN { exit !(kb < 1024 * 1024) }' \
+                || bad "session PSS $((pss_kb / 1024))M (ceiling 1G)"
+            ok "session PSS $((pss_kb / 1024))M (ceiling 1G)"
+            ;;
+    esac
+    local cpu_line over="" secs
+    while IFS= read -r cpu_line; do
+        secs=$(printf '%s\n' "$cpu_line" | sed -n 's/.*secs=\([0-9.]*\).*/\1/p')
+        [ -n "$secs" ] || continue
+        awk -v s="$secs" 'BEGIN { exit !(s > 15) }' && over="$over $cpu_line"
+    done <<EOF
+$res_out
+EOF
+    if [ -n "$over" ]; then
+        bad "idle-session CPU over budget (5% of the 300s window):$over"
+    else
+        ok "no session process above 5% of the idle window"
+    fi
+
     if [ -z "$UPGRADE_TO" ]; then
         if [ "$home_was_subvol" != yes ]; then
             # Say why, not just that. This has come back intermittently on
