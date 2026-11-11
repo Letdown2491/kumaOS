@@ -16,9 +16,16 @@ runs:
   steps:
     - shell: bash
       run: |
-        # The two lines are fallbacks apt tries in order (the runner's
-        # deb822 sources point every suite at the one mirror+file URI),
-        # so both hosts are named: a host that answers serves every
-        # pocket, and one that does not hands the fetch to the next.
-        printf 'archive.ubuntu.com/ubuntu\nsecurity.ubuntu.com/ubuntu\n' \
+        # Full URLs, scheme and all: the mirror method replaces the
+        # mirror+file prefix with each line verbatim, and a line without
+        # its scheme makes apt parse the host as the method ("the method
+        # driver /usr/lib/apt/methods/archive.ubuntu.com/... could not
+        # be found" — the first roll's own death, the azure file's
+        # bare-host shape being schemeful or azure-steered somewhere
+        # else). The two lines are fallbacks apt tries in order (the
+        # runner's deb822 sources point every suite at the one
+        # mirror+file URI), so both hosts are named: a host that answers
+        # serves every pocket, and one that does not hands the fetch to
+        # the next.
+        printf 'http://archive.ubuntu.com/ubuntu\nhttp://security.ubuntu.com/ubuntu\n' \
             | sudo tee /etc/apt/apt-mirrors.txt >/dev/null

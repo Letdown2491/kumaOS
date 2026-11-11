@@ -9,8 +9,11 @@
   source at, dead on the runners while the same name answered from
   off-Azure and the runners' other fetches (rustup, crates) sailed
   through. The new `apt-route` action rewrites the mirror file to
-  `archive.ubuntu.com` / `security.ubuntu.com` — different domains,
-  different DNS — and rides before every apt-get the workflows run.
+  full `http://` URLs on `archive.ubuntu.com` / `security.ubuntu.com` —
+  different domains, different DNS; the first draft's bare-host lines
+  made apt parse the host as the method driver, its own one-roll
+  lesson — and the action rides before every apt-get the workflows
+  run.
   The same class of fix the smoke already applies to Fedora's flapping
   mirrors: the road bends around upstream weather instead of waiting
   in it.
