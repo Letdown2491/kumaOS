@@ -10,8 +10,18 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
+
+/// How long one ask may go unanswered. Every verb this client speaks —
+/// status, connect, apps — is answered from the daemon's memory or one
+/// D-Bus round trip, so a daemon that cannot answer in this window is
+/// wedged, and the wedge is real: the daemon side holds its mutex
+/// across keyring calls whose flakiness its own comments document. The
+/// timeout is what keeps doctor's probe returning — the run that is
+/// supposed to report the hang cannot itself be the hang.
+const ASK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Connect to the daemon at `path`, or at the session's default.
 pub fn connect(path: Option<&Path>) -> Result<Client> {
@@ -21,6 +31,8 @@ pub fn connect(path: Option<&Path>) -> Result<Client> {
     };
     let stream = UnixStream::connect(&resolved)
         .with_context(|| format!("the daemon is not answering on {}", resolved.display()))?;
+    stream.set_read_timeout(Some(ASK_TIMEOUT)).context("cannot bound the socket's read")?;
+    stream.set_write_timeout(Some(ASK_TIMEOUT)).context("cannot bound the socket's write")?;
     Ok(Client { stream })
 }
 

@@ -52,6 +52,24 @@
   cannot flip the state and its bare ExecStart is never read back as
   the argument source. Pinned against the real drop-in interleaving.
 
+- **Doctor reads the wire facts the daemon already reports — the
+  45.2.1 read-side lesson.** The release's signature bug was a signer
+  that ran, listened, and heard nothing: daemon active, vault open,
+  EMPTY relay set — and `kuma doctor` graded it Ok, because the
+  check read two of the four facts the status document carried and
+  the two it skipped were the wire's. Now graded: the daemon's
+  `relays` and `connected` — an empty relay set warns naming the
+  override/drop-in suspect, no live connection warns, and the
+  daemon's set is diffed against the declaration's (the local relay
+  added when the layer arms it) with a mismatch naming
+  `systemctl --user cat kuma-nostrd` as the interrogation. The
+  reachability line stays declarative — the word "answers" belongs
+  to the runtime grades, and 45.2.1 is the proof of why. And the
+  socket client bounds every ask at ten seconds: the daemon side
+  holds its mutex across keyring D-Bus calls, so a wedged daemon
+  used to be able to hang the very probe that should have reported
+  the hang; now it grades a warn.
+
 - **Drift is measured against the authority convergence follows.**
   The bare `kuma` probe counted drift against the image's baked list
   file directly — an authority the convergers stopped consulting when

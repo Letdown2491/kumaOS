@@ -16,7 +16,8 @@ pub(crate) use blocks::{
     registries_d, signature_policy, COSIGN_PUB, KUMA_LAUNCH, NETWORK_CONNECTIONS,
 };
 pub(crate) use blocks::{
-    COSIGN_PUB_PATH, COSMIC_GREETER_CONF, COSMIC_SESSION, FLATHUB_URL, GREETD_CONF, NIRI_SESSION,
+    COSIGN_PUB_PATH, COSMIC_GREETER_CONF, COSMIC_SESSION, FLATHUB_URL, GREETD_CONF,
+    LOCAL_RELAY_URL, NIRI_SESSION,
 };
 // Read by inspect's doctor check, which grades what a niri config that
 // shadows the image's one can still run.

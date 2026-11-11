@@ -3573,6 +3573,27 @@ fn check_nostr(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
                     None,
                 ),
             }
+
+            // The wire, from the same document — the read that would
+            // have caught 45.2.1's silent afternoon. A status with no
+            // wire fields (an older daemon across a dev install) is
+            // not judged: absent facts are not failing ones.
+            let relays = json_strings(&status["vault"]["relays"]);
+            let connected = json_strings(&status["vault"]["connected"]);
+            if let (Some(relays), Some(connected)) = (&relays, &connected) {
+                // The expected set is the declaration's, plus the
+                // local relay the image bakes onto the exec line when
+                // the layer arms it — the exact argv the unit speaks.
+                let mut declared = config.nostr.relays.clone();
+                if config.nostr.relay.enable
+                    && !declared.iter().any(|r| r == crate::containerfile::LOCAL_RELAY_URL)
+                {
+                    declared.push(crate::containerfile::LOCAL_RELAY_URL.to_string());
+                }
+                for (grade, wording) in wire_grades(relays, connected, &declared) {
+                    report(grade, "nostr", wording, None);
+                }
+            }
         }
         Err(e) => report(
             Grade::Warn,
@@ -3622,14 +3643,91 @@ fn trust_warning_wording(trusted: &[String]) -> String {
 /// A ts.net entry in the declared set means the tailnet is a
 /// first-class caller; an empty set means the bunker is this
 /// machine's and the CLI's alone.
+/// One array-of-strings field off the daemon's status document.
+fn json_strings(value: &serde_json::Value) -> Option<Vec<String>> {
+    value.as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+}
+
+/// The wire's grades, from the two facts the doctor skipped when it
+/// graded the 45.2.1 bunker green: a daemon active, a vault open, an
+/// EMPTY relay set — no wire, no error anywhere, and `kuma doctor`
+/// vouching. The status document carried `relays` and `connected` the
+/// whole time; the read took two of the four. Pure so the test can
+/// hold every wording. The daemon's argv is the truth here, and the
+/// declaration is what the diff is judged against: a mismatch is not a
+/// daemon bug but a fingerprint — a dev override's, a delta drop-in's,
+/// an upgrade's — and naming which suspect class to interrogate is the
+/// fix half of the warning.
+fn wire_grades(
+    relays: &[String],
+    connected: &[String],
+    declared: &[String],
+) -> Vec<(Grade, String)> {
+    let mut grades = Vec::new();
+    if relays.is_empty() {
+        grades.push((
+            Grade::Warn,
+            "the daemon runs NO relays — it cannot hear a sign request; the unit's ExecStart \
+             arguments carry the relay set, and an override or drop-in that dropped them is \
+             this state's first suspect"
+                .to_string(),
+        ));
+    } else if connected.is_empty() {
+        grades.push((
+            Grade::Warn,
+            format!(
+                "none of the daemon's {} relay(s) report a live connection — the wire is down, \
+                 or the roads cannot be reached",
+                relays.len()
+            ),
+        ));
+    } else {
+        grades.push((
+            Grade::Ok,
+            format!(
+                "{} of the daemon's {} relay(s) report a live connection",
+                connected.len(),
+                relays.len()
+            ),
+        ));
+    }
+    let missing: Vec<&String> = declared.iter().filter(|r| !relays.contains(r)).collect();
+    let extra: Vec<&String> = relays.iter().filter(|r| !declared.contains(r)).collect();
+    if !missing.is_empty() || !extra.is_empty() {
+        let named = |list: &[&String]| {
+            if list.is_empty() {
+                "none".to_string()
+            } else {
+                list.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+            }
+        };
+        grades.push((
+            Grade::Warn,
+            format!(
+                "the daemon's relay set is not the declaration's: missing {}, unexpected {} — \
+                 a dev override or a delta drop-in is the suspect, and `systemctl --user cat \
+                 kuma-nostrd` names which fragment moved",
+                named(&missing),
+                named(&extra)
+            ),
+        ));
+    }
+    grades
+}
+
 fn reachability_wording(relays: &[String]) -> String {
     let tailnet = relays.iter().any(|relay| relay.contains(".ts.net"));
+    // Declarative by design: this line is the declaration's story, and
+    // "answers" is the daemon's — a word the 45.2.1 release proved this
+    // line must not spend before the socket has spoken. The wire's own
+    // grades, from the status document, are the runtime half.
     if relays.is_empty() {
-        "the bunker is local-only: no relays declared, so only this machine can reach it".into()
+        "the bunker is local-only by declaration: no relays declared, so only this machine can reach it"
+            .into()
     } else if tailnet {
-        "the bunker answers on the tailnet and the declared relays".into()
+        "the declaration serves the bunker on the tailnet and the declared relays".into()
     } else {
-        "the bunker answers through the declared public relays".into()
+        "the declaration points the bunker at the declared public relays".into()
     }
 }
 
@@ -4973,6 +5071,68 @@ mod tests {
         assert!(
             reachability_wording(&["wss://relay.nip46.com".into()]).contains("public relays"),
             "a public set is named as one"
+        );
+        // And the wording stays declarative: this line is the
+        // declaration's story, and "answers" is the daemon's — the
+        // word 45.2.1 proved this line must not spend before the
+        // socket has spoken.
+        assert!(
+            !reachability_wording(&["wss://relay.nip46.com".into()]).contains("answer"),
+            "the declarative line must not assert the runtime fact"
+        );
+    }
+
+    #[test]
+    fn the_wire_grades_read_the_two_facts_the_vault_read_skipped() {
+        // The 45.2.1 shape, and the whole point: a daemon active, a
+        // vault open, an EMPTY relay set graded Ok here for a release.
+        let grades = wire_grades(&[], &[], &["wss://relay.nip46.com".into()]);
+        assert!(grades.iter().any(|(g, w)| *g == Grade::Warn && w.contains("NO relays")));
+
+        // All roads dark with a set configured: a different silent
+        // state with the same green doctor read before this.
+        let grades = wire_grades(
+            &["wss://relay.nip46.com".into(), "ws://127.0.0.1:7777".into()],
+            &[],
+            &["wss://relay.nip46.com".into(), "ws://127.0.0.1:7777".into()],
+        );
+        assert!(grades.iter().any(|(g, w)| *g == Grade::Warn && w.contains("live connection")));
+
+        // Healthy: one Ok line naming the count, no warning.
+        let grades = wire_grades(
+            &["wss://relay.nip46.com".into()],
+            &["wss://relay.nip46.com".into()],
+            &["wss://relay.nip46.com".into()],
+        );
+        assert_eq!(grades.len(), 1);
+        assert_eq!(grades[0].0, Grade::Ok);
+
+        // The diff: the daemon running what the declaration does not
+        // speak for is a fingerprint of an override or a drop-in, and
+        // the warning names both directions and the interrogation.
+        let grades = wire_grades(
+            &["wss://relay.nip46.com".into()],
+            &["wss://relay.nip46.com".into()],
+            &["wss://my-share.brainstick.wtf".into(), "ws://127.0.0.1:7777".into()],
+        );
+        assert!(grades.iter().any(|(g, w)| *g == Grade::Warn
+            && w.contains("not the declaration's")
+            && w.contains("my-share.brainstick.wtf")
+            && w.contains("127.0.0.1:7777")
+            && w.contains("systemctl --user cat")));
+
+        // The local relay the image bakes is part of the expected set
+        // only when the layer arms it — the caller adds it; a
+        // declaration without relay.enable judging its absence would
+        // warn every machine that never chose the relay.
+        let grades = wire_grades(
+            &["wss://relay.nip46.com".into()],
+            &["wss://relay.nip46.com".into()],
+            &["wss://relay.nip46.com".into()],
+        );
+        assert!(
+            grades.iter().all(|(g, _)| *g == Grade::Ok),
+            "no relay.enable, no local-relay warn"
         );
     }
 
