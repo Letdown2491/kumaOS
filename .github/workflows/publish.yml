@@ -351,6 +351,7 @@ jobs:
       # failure's input and confirmed it. Verifying the tag resolves
       # through the registry, so it can only pass if what people pull is
       # what was signed. The staging tag is the tag that exists here.
+      - uses: ./.github/actions/apt-route
       - name: verify the way a stranger would
         if: ${{ !inputs.allow_unsigned }}
         run: |

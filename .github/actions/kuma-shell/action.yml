@@ -40,6 +40,7 @@ inputs:
 runs:
   using: composite
   steps:
+    - uses: ./.github/actions/apt-route
     # What a bare runner needs that the kumaui dev container carries over
     # from the desktop stack it is built on: this list builds and links
     # the shell, and without one of them the build does not get past

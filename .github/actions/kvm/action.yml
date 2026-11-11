@@ -12,6 +12,7 @@ inputs:
 runs:
   using: composite
   steps:
+    - uses: ./.github/actions/apt-route
     - shell: bash
       run: |
         sudo apt-get update -qq

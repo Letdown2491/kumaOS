@@ -1,0 +1,24 @@
+name: route apt around the azure mirror
+description: |
+  The runner image's /etc/apt/apt-mirrors.txt points every apt source at
+  azure.archive.ubuntu.com — a traffic-manager CNAME chain that is its own
+  failure domain, and a sick one: Canonical's 2026-11-11 archive incident
+  killed four CI rolls in ninety minutes with "Temporary failure resolving
+  'azure.archive.ubuntu.com'" while the same name answered from off-Azure
+  and the runners' other fetches (rustup, crates) sailed through. The
+  mirror file is rewritten to the hosts behind the default road's own
+  fallbacks — archive.ubuntu.com and security.ubuntu.com, different
+  domains, different DNS — and apt carries on. Runs before every apt-get
+  in this repo's workflows; a no-op when the azure road is healthy except
+  for the seconds it costs.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        # The two lines are fallbacks apt tries in order (the runner's
+        # deb822 sources point every suite at the one mirror+file URI),
+        # so both hosts are named: a host that answers serves every
+        # pocket, and one that does not hands the fetch to the next.
+        printf 'archive.ubuntu.com/ubuntu\nsecurity.ubuntu.com/ubuntu\n' \
+            | sudo tee /etc/apt/apt-mirrors.txt >/dev/null

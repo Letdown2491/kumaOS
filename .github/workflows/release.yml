@@ -121,6 +121,7 @@ jobs:
       # musl target, and the runner ships gcc without the musl variant.
       # This arrived with the nostr layer's relay port; before it, the
       # tree was pure Rust and this line was not needed.
+      - uses: ./.github/actions/apt-route
       - name: install the musl toolchain
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 

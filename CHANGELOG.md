@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **The CI's apt routes around the azure mirror.** Canonical's 2026-11-11
+  archive incident killed four CI rolls in ninety minutes — all
+  "Temporary failure resolving 'azure.archive.ubuntu.com'", the
+  traffic-manager CNAME chain GitHub's runner image points every apt
+  source at, dead on the runners while the same name answered from
+  off-Azure and the runners' other fetches (rustup, crates) sailed
+  through. The new `apt-route` action rewrites the mirror file to
+  `archive.ubuntu.com` / `security.ubuntu.com` — different domains,
+  different DNS — and rides before every apt-get the workflows run.
+  The same class of fix the smoke already applies to Fedora's flapping
+  mirrors: the road bends around upstream weather instead of waiting
+  in it.
+
 - **The heavy jobs carry their measured ceilings.** The 45.2 audit gave
   the session daemons `MemoryMax=256M` and deliberately left the two
   heavy jobs uncapped until sized — now measured on a real machine
