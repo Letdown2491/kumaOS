@@ -1521,27 +1521,14 @@ smoke_published() {
     #     driving it) took 3.5%; an idle session's wakers — battery-watch
     #     among them — sit under 1%.
     #
-    # The window is the ruling's five idle minutes: the session has been
-    # up since the greeter, the probes above are done, and nothing else
-    # in the lap is mid-flight; what runs in the guest during the window
-    # is what a booted image runs.
-    echo "   .. resource lap: boot time, five idle minutes, then the session's budget" >&2
-    # The lap measures the SESSION's budget, so the session has to
-    # exist: the fourth battery's install lap measured a machine whose
-    # user-1000 slice was EMPTY (pss_kb=0 nproc=0 off the journal) — the
-    # five idle minutes ran on a greeter-only boot, and the lap would
-    # have passed an empty slice as a lean one had the read not failed
-    # beside it. Bound to the same 120s the autologin gate uses; a boot
-    # where no session comes up is exactly the failure class this lap
-    # exists to catch, so it reds loudly rather than measures a ghost.
-    local sess_deadline=$((SECONDS + 120))
-    until guest "loginctl list-sessions --no-legend 2>/dev/null \
-        | grep -qE '^ *[a-z0-9]+ +[0-9]+ +$user +seat0( |$)'" 2>/dev/null; do
-        [ $SECONDS -lt $sess_deadline ] \
-            || bad "no graphical session for $user within 120s of the resource lap: $(guest "loginctl list-sessions --no-legend 2>/dev/null" 2>/dev/null | tr '\n' '; ')"
-        sleep 5
-    done
-    ok "the resource lap's session exists ($user on seat0)"
+    # The session's budget MOVED out of this lap: this boot is the first
+    # one, and only the greeter holds seat0 on it — the fifth battery's
+    # gate caught the slice empty (pss_kb=0 nproc=0) where the third's
+    # ok line had passed "7M across 2 processes", the user manager and
+    # nothing else, as a lean session. The budget measures the session
+    # where the autologin gate has proven one: it rides the autologin
+    # boot's flow below, after the notifications probe.
+    echo "   .. resource lap: boot time on this boot; the session's budget rides the autologin boot below" >&2
     local boot_userspace
     boot_userspace=$(gsudo "systemd-analyze" 2>/dev/null \
         | sed -n 's/.*+ \(.*\) (userspace).*/\1/p' | head -1)
@@ -1569,138 +1556,6 @@ smoke_published() {
             ;;
     esac
 
-    # Two guest-side snapshots of /proc, five minutes apart, one python
-    # read of the delta: per-process CPU jiffies, and the PSS of every
-    # process in the session's user slice. Staged as a file — the house
-    # road for multi-line content, `guest cat > file`, stdin crossing
-    # ssh cleanly (gsudo's stdin is the sudo password, so the content
-    # cannot ride it) — run detached under systemd-run, polled: no ssh
-    # hop idles five minutes against a runner's TCP.
-    guest "cat > /tmp/resource.py" <<'PYEOF' || bad "cannot stage the resource lap's reader"
-import os, time, glob
-def snap():
-    procs = {}
-    for p in glob.glob("/proc/[0-9]*"):
-        pid = p.rsplit("/", 1)[1]
-        try:
-            with open(p + "/cgroup") as f:
-                cg = f.read()
-            if "user-1000" not in cg:
-                continue
-            with open(p + "/comm") as f:
-                comm = f.read().strip()
-            tail = open(p + "/stat").read().rsplit(") ", 1)[1]
-            u, s = tail.split()[:2]
-            procs[pid] = (int(u), int(s), comm)
-        except (OSError, ValueError, IndexError):
-            continue
-    with open("/proc/stat") as f:
-        cpu = f.readline().split()[1:]
-    return procs, cpu
-a, _ = snap()
-time.sleep(300)
-b, _ = snap()
-hz = os.sysconf("SC_CLK_TCK")
-busy = sorted(
-    (((b[p][0] - a[p][0]) + (b[p][1] - a[p][1])) / hz, p, b[p][2])
-    for p in b if p in a
-)[-5:]
-pss = 0
-n = 0
-for rollup in glob.glob("/proc/[0-9]*/smaps_rollup"):
-    try:
-        pid_dir = rollup.rsplit("/", 1)[0]
-        with open(pid_dir + "/cgroup") as f:
-            if "user-1000" not in f.read():
-                continue
-        n += 1
-        for line in open(rollup):
-            if line.startswith("Pss:"):
-                pss += int(line.split()[1])
-                break
-    except (OSError, ValueError):
-        continue
-print(f"RESOURCE pss_kb={pss} nproc={n}")
-for secs, pid, comm in reversed(busy):
-    print("RESOURCE cpu pid=%s comm=%s secs=%.1f" % (pid, comm, secs))
-PYEOF
-    # Run detached under systemd-run, polled: no ssh hop idles five
-    # minutes against a runner's TCP. The unit's stdout lands in the
-    # JOURNAL (systemd's default StandardOutput=) — the second draft
-    # wrote `systemd-run ... > /tmp/res.out`, but the redirect bound to
-    # SYSTEMD-RUN's own stdout, and systemd-run forks the unit off and
-    # exits: the file caught "Running as unit" while the python's
-    # RESOURCE lines went to the journal. The third battery's verdict
-    # said exactly that, read back verbatim by this lap's own bad()
-    # diagnostic — the file is gone and the journal is the read.
-    gsudo "systemd-run --unit=kuma-smoke-res /usr/bin/python3 /tmp/resource.py" >/dev/null \
-        || bad "the resource lap would not start"
-    # Poll for the unit to LEAVE active — but only after it has been
-    # seen in it: is-active answers non-zero for activating too, and
-    # the first poll's activating would have broken the loop before
-    # the python started. A failed unit breaks the loop (it comes
-    # after activating); the read below shows its traceback.
-    local res_wait=0 seen_active=""
-    while [ $res_wait -lt 420 ]; do
-        case "$(gsudo "systemctl is-active kuma-smoke-res" 2>/dev/null || true)" in
-            active|activating) seen_active=yes ;;
-            *) [ -n "$seen_active" ] && break ;;
-        esac
-        sleep 15
-        res_wait=$((res_wait + 15))
-    done
-    [ -n "$seen_active" ] || bad "the resource lap's unit never ran"
-    local res_out res_try=0
-    # Retry the read: the fourth battery proved the flush race — the poll
-    # saw the unit inactive at 07:01:14, a journal read at 07:01:16 came
-    # back EMPTY, and the bad-path's own second read at 07:01:18 caught
-    # the RESOURCE lines — journald commits the unit's stdout a beat
-    # behind the manager's state change. Six tries, five seconds apart:
-    # a read that is still empty after half a minute is a real empty.
-    while [ $res_try -lt 6 ]; do
-        res_out=$(gsudo "journalctl -u kuma-smoke-res --no-pager -o cat" 2>/dev/null | grep "^RESOURCE" || true)
-        [ -n "$res_out" ] && break
-        sleep 5
-        res_try=$((res_try + 1))
-    done
-    local pss_kb nproc
-    pss_kb=$(printf '%s\n' "$res_out" | sed -n 's/.*pss_kb=\([0-9]*\).*/\1/p' | head -1)
-    nproc=$(printf '%s\n' "$res_out" | sed -n 's/.*nproc=\([0-9]*\).*/\1/p' | head -1)
-    case "${pss_kb:-}" in
-        ""|0)
-            # The raw unit output rides the failure: a read that came
-            # back empty must say what the python actually said (its
-            # traceback, or its silence), or the third lap of this
-            # class diagnoses as blindly as the first two.
-            local raw
-            raw=$(gsudo "journalctl -u kuma-smoke-res --no-pager -o cat 2>/dev/null | tail -15" 2>/dev/null || true)
-            bad "the resource lap read nothing back: no session PSS came off the guest; the unit said: ${raw:-nothing at all}" ;;
-        *)
-            awk -v kb="$pss_kb" 'BEGIN { exit !(kb < 1024 * 1024) }' \
-                || bad "session PSS $((pss_kb / 1024))M (ceiling 1G)"
-            # nproc rides the ok line: PSS without its population cannot
-            # be read — the third battery's journal showed pss_kb=7025,
-            # and whether that is one stray process (no session up) or
-            # thirty honest ones is the difference between a pass and a
-            # pass-shaped hole.
-            ok "session PSS $((pss_kb / 1024))M across ${nproc:-?} processes (ceiling 1G)"
-            ;;
-    esac
-    gsudo "rm -f /tmp/resource.py" >/dev/null 2>&1
-    gsudo "systemctl reset-failed kuma-smoke-res 2>/dev/null" >/dev/null 2>&1
-    local cpu_line over="" secs
-    while IFS= read -r cpu_line; do
-        secs=$(printf '%s\n' "$cpu_line" | sed -n 's/.*secs=\([0-9.]*\).*/\1/p')
-        [ -n "$secs" ] || continue
-        awk -v s="$secs" 'BEGIN { exit !(s > 15) }' && over="$over $cpu_line"
-    done <<EOF
-$res_out
-EOF
-    if [ -n "$over" ]; then
-        bad "idle-session CPU over budget (5% of the 300s window):$over"
-    else
-        ok "no session process above 5% of the idle window"
-    fi
 
     if [ -z "$UPGRADE_TO" ]; then
         if [ "$home_was_subvol" != yes ]; then
@@ -2033,6 +1888,155 @@ EOF
                 sleep 5
             done
             ok "the shell owns org.freedesktop.Notifications"
+
+    # ---- the session's budget, measured where the session exists.
+
+    # The resource lap's window: two guest-side snapshots of /proc,
+    # five minutes apart, one python read of the delta: per-process
+    # CPU jiffies, and the PSS of every process in the session's user
+    # slice. It rides HERE, after the notifications probe, not on the
+    # first boot where the resource lap's boot-time half lives: the
+    # fifth battery's gate caught the reason — on the first boot only
+    # the greeter holds seat0 (pss_kb=0 nproc=0 in the fourth's
+    # journal; "7M across 2 processes" in the third's passing ok line,
+    # the user manager and nothing else), and a slice with no session
+    # passes a 1G ceiling as easily as a lean one. The autologin gate
+    # above has proven the session; nothing else in the lap is
+    # mid-flight; what runs in the guest during the window is what a
+    # booted image with a logged-in person runs.
+    # Staged as a file — the house
+    # road for multi-line content, `guest cat > file`, stdin crossing
+    # ssh cleanly (gsudo's stdin is the sudo password, so the content
+    # cannot ride it) — run detached under systemd-run, polled: no ssh
+    # hop idles five minutes against a runner's TCP.
+        guest "cat > /tmp/resource.py" <<'PYEOF' || bad "cannot stage the resource lap's reader"
+import os, time, glob
+def snap():
+    procs = {}
+    for p in glob.glob("/proc/[0-9]*"):
+        pid = p.rsplit("/", 1)[1]
+        try:
+            with open(p + "/cgroup") as f:
+                cg = f.read()
+            if "user-1000" not in cg:
+                continue
+            with open(p + "/comm") as f:
+                comm = f.read().strip()
+            tail = open(p + "/stat").read().rsplit(") ", 1)[1]
+            u, s = tail.split()[:2]
+            procs[pid] = (int(u), int(s), comm)
+        except (OSError, ValueError, IndexError):
+            continue
+    with open("/proc/stat") as f:
+        cpu = f.readline().split()[1:]
+    return procs, cpu
+a, _ = snap()
+time.sleep(300)
+b, _ = snap()
+hz = os.sysconf("SC_CLK_TCK")
+busy = sorted(
+    (((b[p][0] - a[p][0]) + (b[p][1] - a[p][1])) / hz, p, b[p][2])
+    for p in b if p in a
+)[-5:]
+pss = 0
+n = 0
+for rollup in glob.glob("/proc/[0-9]*/smaps_rollup"):
+    try:
+        pid_dir = rollup.rsplit("/", 1)[0]
+        with open(pid_dir + "/cgroup") as f:
+            if "user-1000" not in f.read():
+                continue
+        n += 1
+        for line in open(rollup):
+            if line.startswith("Pss:"):
+                pss += int(line.split()[1])
+                break
+    except (OSError, ValueError):
+        continue
+print(f"RESOURCE pss_kb={pss} nproc={n}")
+for secs, pid, comm in reversed(busy):
+    print("RESOURCE cpu pid=%s comm=%s secs=%.1f" % (pid, comm, secs))
+PYEOF
+            # Run detached under systemd-run, polled: no ssh hop idles five
+            # minutes against a runner's TCP. The unit's stdout lands in the
+            # JOURNAL (systemd's default StandardOutput=) — the second draft
+            # wrote `systemd-run ... > /tmp/res.out`, but the redirect bound to
+            # SYSTEMD-RUN's own stdout, and systemd-run forks the unit off and
+            # exits: the file caught "Running as unit" while the python's
+            # RESOURCE lines went to the journal. The third battery's verdict
+            # said exactly that, read back verbatim by this lap's own bad()
+            # diagnostic — the file is gone and the journal is the read.
+            gsudo "systemd-run --unit=kuma-smoke-res /usr/bin/python3 /tmp/resource.py" >/dev/null \
+                || bad "the resource lap would not start"
+            # Poll for the unit to LEAVE active — but only after it has been
+            # seen in it: is-active answers non-zero for activating too, and
+            # the first poll's activating would have broken the loop before
+            # the python started. A failed unit breaks the loop (it comes
+            # after activating); the read below shows its traceback.
+            local res_wait=0 seen_active=""
+            while [ $res_wait -lt 420 ]; do
+                case "$(gsudo "systemctl is-active kuma-smoke-res" 2>/dev/null || true)" in
+                    active|activating) seen_active=yes ;;
+                    *) [ -n "$seen_active" ] && break ;;
+                esac
+                sleep 15
+                res_wait=$((res_wait + 15))
+            done
+            [ -n "$seen_active" ] || bad "the resource lap's unit never ran"
+            local res_out res_try=0
+            # Retry the read: the fourth battery proved the flush race — the poll
+            # saw the unit inactive at 07:01:14, a journal read at 07:01:16 came
+            # back EMPTY, and the bad-path's own second read at 07:01:18 caught
+            # the RESOURCE lines — journald commits the unit's stdout a beat
+            # behind the manager's state change. Six tries, five seconds apart:
+            # a read that is still empty after half a minute is a real empty.
+            while [ $res_try -lt 6 ]; do
+                res_out=$(gsudo "journalctl -u kuma-smoke-res --no-pager -o cat" 2>/dev/null | grep "^RESOURCE" || true)
+                [ -n "$res_out" ] && break
+                sleep 5
+                res_try=$((res_try + 1))
+            done
+            local pss_kb nproc
+            pss_kb=$(printf '%s\n' "$res_out" | sed -n 's/.*pss_kb=\([0-9]*\).*/\1/p' | head -1)
+            nproc=$(printf '%s\n' "$res_out" | sed -n 's/.*nproc=\([0-9]*\).*/\1/p' | head -1)
+            case "${pss_kb:-}" in
+                ""|0)
+                    # The raw unit output rides the failure: a read that came
+                    # back empty must say what the python actually said (its
+                    # traceback, or its silence), or the third lap of this
+                    # class diagnoses as blindly as the first two. Named
+                    # unit_said, not raw: smoke_published already carries a
+                    # `raw` — the disk's path — and a `local` here would
+                    # clobber it for the whole function's tail.
+                    local unit_said
+                    unit_said=$(gsudo "journalctl -u kuma-smoke-res --no-pager -o cat 2>/dev/null | tail -15" 2>/dev/null || true)
+                    bad "the resource lap read nothing back: no session PSS came off the guest; the unit said: ${unit_said:-nothing at all}" ;;
+                *)
+                    awk -v kb="$pss_kb" 'BEGIN { exit !(kb < 1024 * 1024) }' \
+                        || bad "session PSS $((pss_kb / 1024))M (ceiling 1G)"
+                    # nproc rides the ok line: PSS without its population cannot
+                    # be read — the third battery's journal showed pss_kb=7025,
+                    # and whether that is one stray process (no session up) or
+                    # thirty honest ones is the difference between a pass and a
+                    # pass-shaped hole.
+                    ok "session PSS $((pss_kb / 1024))M across ${nproc:-?} processes (ceiling 1G)"
+                    ;;
+            esac
+            gsudo "rm -f /tmp/resource.py" >/dev/null 2>&1
+            gsudo "systemctl reset-failed kuma-smoke-res 2>/dev/null" >/dev/null 2>&1
+            local cpu_line over="" secs
+            while IFS= read -r cpu_line; do
+                secs=$(printf '%s\n' "$cpu_line" | sed -n 's/.*secs=\([0-9.]*\).*/\1/p')
+                [ -n "$secs" ] || continue
+                awk -v s="$secs" 'BEGIN { exit !(s > 15) }' && over="$over $cpu_line"
+            done <<EOF
+$res_out
+EOF
+            if [ -n "$over" ]; then
+                bad "idle-session CPU over budget (5% of the 300s window):$over"
+            else
+                ok "no session process above 5% of the idle window"
+            fi
 
             # Koguma, launched the way a session would launch it: through
             # the user manager, which niri-session has already imported
