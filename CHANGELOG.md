@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v45.3.0 (2026-11-12)
+
 - **The CI's apt routes around the azure mirror.** Canonical's 2026-11-11
   archive incident killed four CI rolls in ninety minutes — all
   "Temporary failure resolving 'azure.archive.ubuntu.com'", the
