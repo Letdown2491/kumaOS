@@ -1506,8 +1506,10 @@ smoke_published() {
     # quietly doubles the shell's RSS goes red the same night:
     #
     #   boot time: the real machine reached graphical.target in 11.7s of
-    #     userspace; the ceiling is 90s — 7x, which is runner weather's
-    #     whole wardrobe, but a converger that adds MINUTES still reds.
+    #     userspace; the ceiling is 120s — the first battery's two
+    #     runner boots measured 79.1s and 83.4s, so the runner is the
+    #     judge and it needs its own band, while a converger that adds
+    #     MINUTES still reds.
     #   session RSS: the image-shipped session set (niri, kuma-shell,
     #     portals, audio, applets) summed ~600M PSS with the user's own
     #     apps excluded; an idle VM session holds a fraction of that.
@@ -1538,9 +1540,16 @@ smoke_published() {
     case "${boot_userspace:-}" in
         ""|*[!0-9.]*) bad "systemd-analyze gave no userspace time to judge" ;;
         *)
-            awk -v t="$boot_userspace" 'BEGIN { exit !(t < 90) }' \
-                || bad "userspace boot took ${boot_userspace}s (ceiling 90s)"
-            ok "userspace boot ${boot_userspace}s (ceiling 90s)"
+            # 120, not the first draft's 90: the first battery's two
+            # runner boots measured 79.1s and 83.4s — the runner is the
+            # judge, and it sits within 10% of a 90s line, so ordinary
+            # weather false-reds it. The real machine is 11.7s; the
+            # failure this ceiling hunts is a converger adding MINUTES,
+            # and 120 keeps that signal while leaving the runner's own
+            # band room to breathe.
+            awk -v t="$boot_userspace" 'BEGIN { exit !(t < 120) }' \
+                || bad "userspace boot took ${boot_userspace}s (ceiling 120s)"
+            ok "userspace boot ${boot_userspace}s (ceiling 120s)"
             ;;
     esac
 
@@ -1597,29 +1606,51 @@ print(f"RESOURCE pss_kb={pss}")
 for secs, pid, comm in reversed(busy):
     print("RESOURCE cpu pid=%s comm=%s secs=%.1f" % (pid, comm, secs))
 PYEOF
-    gsudo "systemd-run --unit=kuma-smoke-res --property=RuntimeDirectory=kuma-smoke /bin/sh -c '/usr/bin/python3 /tmp/resource.py > /run/kuma-smoke/res.out 2>&1'" >/dev/null \
+    # Run detached, output to /tmp — NOT a RuntimeDirectory: systemd
+    # removes a transient unit's RuntimeDirectory when the oneshot
+    # STOPS, and the first battery's lap died at exactly that — the
+    # poll observed completion, the cat found the directory gone
+    # ("read nothing back" in two laps). /tmp is shared (the unit
+    # carries no PrivateTmp; it read the staged script from there
+    # fine), and a unit-free path survives the stop.
+    gsudo "systemd-run --unit=kuma-smoke-res /usr/bin/python3 /tmp/resource.py > /tmp/kuma-smoke-res.out 2>&1" >/dev/null \
         || bad "the resource lap would not start"
-    local res_wait=0
-    while [ $res_wait -lt 390 ]; do
+    # Poll for the unit to LEAVE active — but only after it has been
+    # seen in it: is-active answers non-zero for activating too, and
+    # the first poll's activating would have broken the loop before
+    # the python started. A failed unit breaks the loop (it comes
+    # after activating); the read below shows its traceback.
+    local res_wait=0 seen_active=""
+    while [ $res_wait -lt 420 ]; do
+        case "$(gsudo "systemctl is-active kuma-smoke-res" 2>/dev/null || true)" in
+            active|activating) seen_active=yes ;;
+            *) [ -n "$seen_active" ] && break ;;
+        esac
         sleep 15
         res_wait=$((res_wait + 15))
-        gsudo "systemctl is-active --quiet kuma-smoke-res" 2>/dev/null || break
     done
+    [ -n "$seen_active" ] || bad "the resource lap's unit never ran"
     local res_out
-    res_out=$(gsudo "cat /run/kuma-smoke/res.out" 2>/dev/null | grep "^RESOURCE" || true)
-    gsudo "rm -rf /tmp/resource.py /run/kuma-smoke" >/dev/null 2>&1
-    gsudo "systemctl reset-failed kuma-smoke-res 2>/dev/null" >/dev/null 2>&1
+    res_out=$(gsudo "cat /tmp/kuma-smoke-res.out" 2>/dev/null | grep "^RESOURCE" || true)
     local pss_kb
     pss_kb=$(printf '%s\n' "$res_out" | sed -n 's/.*pss_kb=\([0-9]*\).*/\1/p' | head -1)
     case "${pss_kb:-}" in
         ""|0)
-            bad "the resource lap read nothing back: no session PSS came off the guest" ;;
+            # The raw unit output rides the failure: a read that came
+            # back empty must say what the python actually said (its
+            # traceback, or its silence), or the third lap of this
+            # class diagnoses as blindly as the first two.
+            local raw
+            raw=$(gsudo "cat /tmp/kuma-smoke-res.out 2>/dev/null; journalctl -u kuma-smoke-res --no-pager -o cat 2>/dev/null | tail -15" 2>/dev/null || true)
+            bad "the resource lap read nothing back: no session PSS came off the guest; the unit said: ${raw:-nothing at all}" ;;
         *)
             awk -v kb="$pss_kb" 'BEGIN { exit !(kb < 1024 * 1024) }' \
                 || bad "session PSS $((pss_kb / 1024))M (ceiling 1G)"
             ok "session PSS $((pss_kb / 1024))M (ceiling 1G)"
             ;;
     esac
+    gsudo "rm -f /tmp/resource.py /tmp/kuma-smoke-res.out" >/dev/null 2>&1
+    gsudo "systemctl reset-failed kuma-smoke-res 2>/dev/null" >/dev/null 2>&1
     local cpu_line over="" secs
     while IFS= read -r cpu_line; do
         secs=$(printf '%s\n' "$cpu_line" | sed -n 's/.*secs=\([0-9.]*\).*/\1/p')
