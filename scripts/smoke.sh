@@ -1526,6 +1526,22 @@ smoke_published() {
     # in the lap is mid-flight; what runs in the guest during the window
     # is what a booted image runs.
     echo "   .. resource lap: boot time, five idle minutes, then the session's budget" >&2
+    # The lap measures the SESSION's budget, so the session has to
+    # exist: the fourth battery's install lap measured a machine whose
+    # user-1000 slice was EMPTY (pss_kb=0 nproc=0 off the journal) — the
+    # five idle minutes ran on a greeter-only boot, and the lap would
+    # have passed an empty slice as a lean one had the read not failed
+    # beside it. Bound to the same 120s the autologin gate uses; a boot
+    # where no session comes up is exactly the failure class this lap
+    # exists to catch, so it reds loudly rather than measures a ghost.
+    local sess_deadline=$((SECONDS + 120))
+    until guest "loginctl list-sessions --no-legend 2>/dev/null \
+        | grep -qE '^ *[a-z0-9]+ +[0-9]+ +$user +seat0( |$)'" 2>/dev/null; do
+        [ $SECONDS -lt $sess_deadline ] \
+            || bad "no graphical session for $user within 120s of the resource lap: $(guest "loginctl list-sessions --no-legend 2>/dev/null" 2>/dev/null | tr '\n' '; ')"
+        sleep 5
+    done
+    ok "the resource lap's session exists ($user on seat0)"
     local boot_userspace
     boot_userspace=$(gsudo "systemd-analyze" 2>/dev/null \
         | sed -n 's/.*+ \(.*\) (userspace).*/\1/p' | head -1)
@@ -1634,8 +1650,19 @@ PYEOF
         res_wait=$((res_wait + 15))
     done
     [ -n "$seen_active" ] || bad "the resource lap's unit never ran"
-    local res_out
-    res_out=$(gsudo "journalctl -u kuma-smoke-res --no-pager -o cat" 2>/dev/null | grep "^RESOURCE" || true)
+    local res_out res_try=0
+    # Retry the read: the fourth battery proved the flush race — the poll
+    # saw the unit inactive at 07:01:14, a journal read at 07:01:16 came
+    # back EMPTY, and the bad-path's own second read at 07:01:18 caught
+    # the RESOURCE lines — journald commits the unit's stdout a beat
+    # behind the manager's state change. Six tries, five seconds apart:
+    # a read that is still empty after half a minute is a real empty.
+    while [ $res_try -lt 6 ]; do
+        res_out=$(gsudo "journalctl -u kuma-smoke-res --no-pager -o cat" 2>/dev/null | grep "^RESOURCE" || true)
+        [ -n "$res_out" ] && break
+        sleep 5
+        res_try=$((res_try + 1))
+    done
     local pss_kb nproc
     pss_kb=$(printf '%s\n' "$res_out" | sed -n 's/.*pss_kb=\([0-9]*\).*/\1/p' | head -1)
     nproc=$(printf '%s\n' "$res_out" | sed -n 's/.*nproc=\([0-9]*\).*/\1/p' | head -1)
