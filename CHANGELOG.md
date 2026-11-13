@@ -4,14 +4,18 @@
 
 - **Battery-watch stopped polling.** The low/critical notifier woke the
   machine every 60 seconds — 1,440 wakeups a day on every machine,
-  battery or none — to read two sysfs files. It now blocks on udev's
-  `power_supply` events and wakes only when the battery actually
-  changes: a laptop's news arrives as events, and a desktop's news
-  never arrives at all. The old poll survives as the fallback for a
-  machine without udevadm, and the first read on start means a boot at
-  12% on battery warns immediately instead of within the minute. The
-  real-battery proof (discharge past both thresholds, replug, re-warn)
-  is #80's remaining half — nothing in a VM ever discharges.
+  battery or none — to read two sysfs files. It now watches udev's
+  `power_supply` events, with a five-minute safety read behind them:
+  the first real battery announced the plug and stayed silent through
+  a whole band of draining, so the monitor's own five-minute lifespan
+  is the floor the threshold can never slip past. A desktop's watch
+  now costs ~288 cheap reads a day instead of 1,440 timer wakeups; a
+  laptop's notice is never more than one cadence behind. The first
+  read on start means a boot at 12% on battery warns immediately.
+  The old poll survives as the fallback for a machine without
+  udevadm. The real-battery proof (discharge past both thresholds,
+  replug, re-warn) is #80's remaining half — nothing in a VM ever
+  discharges.
 
 ## v45.3.0 (2026-11-12)
 

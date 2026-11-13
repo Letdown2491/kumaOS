@@ -2980,13 +2980,16 @@ application/zip=org.gnome.FileRoller.desktop
 
 /// Battery warnings, sent to whatever owns
 /// `org.freedesktop.Notifications`, which on this desktop is the shell.
-/// Watches sysfs by udev — one blocking read per kernel UEVENT on the
-/// power_supply subsystem, not a poll. The old `while sleep 60` woke
-/// 1,440 times a day on every machine, battery or none; the monitor
-/// wakes a desktop (no battery, nothing to announce) never and a
-/// laptop only when its battery actually changes. upower-notifier
-/// tools (poweralertd) aren't in Fedora's repos, which is why this is
-/// a script at all.
+/// Watches sysfs by udev, with a five-minute safety read: the kernel's
+/// power_supply events are the instant news (the plug, the capacity
+/// steps the driver bothers to announce), and the monitor's own
+/// five-minute lifespan is the floor — drivers differ in how loudly
+/// they announce draining, and the first real battery stayed silent
+/// through a whole band of capacity. The old `while sleep 60` woke
+/// 1,440 times a day on every machine, battery or none; this wakes a
+/// desktop (no battery) never and a laptop a few hundred times, only
+/// while the news could matter. upower-notifier tools (poweralertd)
+/// aren't in Fedora's repos, which is why this is a script at all.
 ///
 /// The shell's battery widget shows the state in the bar but warns at
 /// no threshold (its own settings carry no battery section), so this
@@ -3038,17 +3041,24 @@ if ! command -v udevadm >/dev/null; then
     while sleep 60; do check; done
 fi
 while :; do
-    # The monitor is the loop: `change` events are the battery's own
-    # news (capacity steps, the AC plug), the read blocks between
-    # them, and `warned` lives in THIS shell — the process
-    # substitution keeps the state across a monitor's restart, where
-    # a pipe would drop it into a subshell and a restart would
-    # re-warn. The backoff bounds a monitor that dies to five-second
-    # retries, not a spin.
+    # The monitor is the loop, but the loop is not only events: the
+    # first real battery taught why. This driver announces the plug
+    # (the notice fired on the unplug transition) and stays SILENT
+    # through the capacity band — 76 down to 15 percent emitted
+    # nothing, and a pure event loop would have slept through the
+    # threshold it exists to catch. So the monitor lives 300 seconds
+    # and dies of old age: `warned` stays in THIS shell (process
+    # substitution, not a pipe — a pipe would drop the state into a
+    # subshell and re-warn on every respawn), each death falls
+    # through to a safety read of the live sysfs state, and the
+    # respawn IS the poll — 288 wakeups a day instead of 1,440,
+    # with the notice never more than one cadence behind the
+    # threshold. timeout reaps the monitor cleanly; nothing lingers
+    # holding the lock.
     while read -r line; do
         case "$line" in *change*) check ;; esac
-    done < <(udevadm monitor --kernel --subsystem-match=power_supply)
-    sleep 5
+    done < <(timeout 300 udevadm monitor --kernel --subsystem-match=power_supply)
+    check
 done
 "#;
 

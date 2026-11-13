@@ -3523,7 +3523,13 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         // loop (1,440 wakeups a day on every machine, battery or
         // none) cannot ship unnoticed.
         assert!(BATTERY_WATCH.contains("udevadm monitor --kernel --subsystem-match=power_supply"));
-        // And the old poll survives only as the fallback, behind its
+        // And the safety cadence is pinned: the first real battery
+        // stayed silent through a whole capacity band, so the monitor
+        // dies of old age every five minutes and the death IS the
+        // poll — a refactor that trusted events alone would sleep
+        // through the threshold on exactly this machine.
+        assert!(BATTERY_WATCH.contains("timeout 300 udevadm monitor"));
+        // The old poll survives only as the fallback, behind its
         // guard — a missing udevadm degrades to the 60s road, it does
         // not break the watch.
         assert!(BATTERY_WATCH.contains("if ! command -v udevadm >/dev/null; then"));
