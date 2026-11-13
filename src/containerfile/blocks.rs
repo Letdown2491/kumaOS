@@ -3054,10 +3054,14 @@ while :; do
     # respawn IS the poll — 288 wakeups a day instead of 1,440,
     # with the notice never more than one cadence behind the
     # threshold. timeout reaps the monitor cleanly; nothing lingers
-    # holding the lock.
+    # holding the lock. And stdbuf -oL is load-bearing: udevadm's
+    # stdout on a pipe is glibc-full-buffered — 4KB before a line
+    # moves — and a SIGTERM death does not flush it, so without the
+    # line buffering the events never reach the read in real time
+    # and the safety read carries the whole job alone.
     while read -r line; do
         case "$line" in *change*) check ;; esac
-    done < <(timeout 300 udevadm monitor --kernel --subsystem-match=power_supply)
+    done < <(timeout 300 stdbuf -oL udevadm monitor --kernel --subsystem-match=power_supply)
     check
 done
 "#;

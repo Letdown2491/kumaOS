@@ -3527,8 +3527,11 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         // stayed silent through a whole capacity band, so the monitor
         // dies of old age every five minutes and the death IS the
         // poll — a refactor that trusted events alone would sleep
-        // through the threshold on exactly this machine.
-        assert!(BATTERY_WATCH.contains("timeout 300 udevadm monitor"));
+        // through the threshold on exactly this machine. stdbuf is
+        // pinned with it: udevadm on a pipe is full-buffered until
+        // 4KB or death, and death does not flush, so without the
+        // line buffering the event path never fires in real time.
+        assert!(BATTERY_WATCH.contains("timeout 300 stdbuf -oL udevadm monitor"));
         // The old poll survives only as the fallback, behind its
         // guard — a missing udevadm degrades to the 60s road, it does
         // not break the watch.
