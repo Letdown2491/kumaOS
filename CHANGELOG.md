@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Battery-watch stopped polling.** The low/critical notifier woke the
+  machine every 60 seconds — 1,440 wakeups a day on every machine,
+  battery or none — to read two sysfs files. It now blocks on udev's
+  `power_supply` events and wakes only when the battery actually
+  changes: a laptop's news arrives as events, and a desktop's news
+  never arrives at all. The old poll survives as the fallback for a
+  machine without udevadm, and the first read on start means a boot at
+  12% on battery warns immediately instead of within the minute. The
+  real-battery proof (discharge past both thresholds, replug, re-warn)
+  is #80's remaining half — nothing in a VM ever discharges.
+
 ## v45.3.0 (2026-11-12)
 
 - **The CI's apt routes around the azure mirror.** Canonical's 2026-11-11

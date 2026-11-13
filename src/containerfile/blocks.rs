@@ -2980,8 +2980,13 @@ application/zip=org.gnome.FileRoller.desktop
 
 /// Battery warnings, sent to whatever owns
 /// `org.freedesktop.Notifications`, which on this desktop is the shell.
-/// Polls sysfs: upower-notifier tools (poweralertd) aren't in Fedora's
-/// repos. No battery (desktops, VMs) means the loop just idles cheaply.
+/// Watches sysfs by udev — one blocking read per kernel UEVENT on the
+/// power_supply subsystem, not a poll. The old `while sleep 60` woke
+/// 1,440 times a day on every machine, battery or none; the monitor
+/// wakes a desktop (no battery, nothing to announce) never and a
+/// laptop only when its battery actually changes. upower-notifier
+/// tools (poweralertd) aren't in Fedora's repos, which is why this is
+/// a script at all.
 ///
 /// The shell's battery widget shows the state in the bar but warns at
 /// no threshold (its own settings carry no battery section), so this
@@ -3001,15 +3006,20 @@ application/zip=org.gnome.FileRoller.desktop
 /// way.
 pub(crate) const BATTERY_WATCH: &str = r#"#!/usr/bin/bash
 set -u
+# The decision's root is an argument — the converge gate's pattern:
+# `[sysfs]`, defaulting to the real one, is what makes the table below
+# runnable in tests.
+sysfs=${1:-/sys/class/power_supply}
 exec 9>"${XDG_RUNTIME_DIR:?no session runtime directory}/kuma-battery-watch.lock"
 flock -n 9 || exit 0
 warned=""
-while sleep 60; do
-    bat=$(ls /sys/class/power_supply 2>/dev/null | grep -m1 "^BAT" || true)
-    [ -n "$bat" ] || continue
-    cap=$(cat "/sys/class/power_supply/$bat/capacity" 2>/dev/null || echo 100)
-    status=$(cat "/sys/class/power_supply/$bat/status" 2>/dev/null || echo Unknown)
-    if [ "$status" != "Discharging" ]; then warned=""; continue; fi
+check() {
+    local bat cap status
+    bat=$(ls "$sysfs" 2>/dev/null | grep -m1 "^BAT" || true)
+    [ -n "$bat" ] || return
+    cap=$(cat "$sysfs/$bat/capacity" 2>/dev/null || echo 100)
+    status=$(cat "$sysfs/$bat/status" 2>/dev/null || echo Unknown)
+    if [ "$status" != "Discharging" ]; then warned=""; return; fi
     if [ "$cap" -le 5 ] && [ "$warned" != "critical" ]; then
         warned="critical"
         notify-send -u critical "Battery critical: ${cap}%" "Plug in now."
@@ -3017,6 +3027,28 @@ while sleep 60; do
         warned="low"
         notify-send "Battery low: ${cap}%"
     fi
+}
+# The first read is not an event: a boot at 12% on battery warns
+# immediately, not at the next capacity step the driver cares to emit.
+# And a machine without udevadm takes the old road — a poll that
+# cannot exit is the honest floor, and better than a watch that
+# cannot start.
+check
+if ! command -v udevadm >/dev/null; then
+    while sleep 60; do check; done
+fi
+while :; do
+    # The monitor is the loop: `change` events are the battery's own
+    # news (capacity steps, the AC plug), the read blocks between
+    # them, and `warned` lives in THIS shell — the process
+    # substitution keeps the state across a monitor's restart, where
+    # a pipe would drop it into a subshell and a restart would
+    # re-warn. The backoff bounds a monitor that dies to five-second
+    # retries, not a spin.
+    while read -r line; do
+        case "$line" in *change*) check ;; esac
+    done < <(udevadm monitor --kernel --subsystem-match=power_supply)
+    sleep 5
 done
 "#;
 
