@@ -5338,6 +5338,13 @@ fn nostr(e: &mut Emitter<'_>) {
     // extraction RUN is the whole gate — digest verified before a byte
     // lands, both binaries answering --version after. A wrong-arch or
     // re-tarred archive fails the build here, not a user's clone.
+    // tar: the extraction unpacks the archive with it, and a base
+    // composed from Fedora's minimal manifest does not ship it — the
+    // brew block learned this first and this layer pays for its own
+    // tools the same way, because a declaration can arm the nostr
+    // layer without ever arming brew. dnf no-ops when tar is already
+    // present, so a brew-bearing declaration pays nothing extra.
+    e.raw(&dnf_install("tar"));
     let ngit_tarball = e.stage(
         &format!("ngit-v{NGIT_PIN_VERSION}-x86_64-unknown-linux-musl.tar.gz"),
         NGIT_RELEASE_TARBALL,

@@ -223,6 +223,8 @@ COPY --chmod=755 kuma-nostr-preset /usr/libexec/kuma-nostr-preset
 COPY kuma-nostr-preset.service /usr/lib/systemd/system/kuma-nostr-preset.service
 RUN systemctl enable kuma-nostr-preset.service
 RUN /usr/bin/kuma-nostrd --version
+RUN --mount=type=cache,target=/var/cache/libdnf5 \
+    dnf -y install --setopt=keepcache=1 tar
 COPY ngit-v3.0.5-x86_64-unknown-linux-musl.tar.gz /tmp/ngit.tar.gz
 RUN echo "d908fd2e8b818ad3c2427b54245c4dc98e765f4840846a321c98343ff3a773ba  /tmp/ngit.tar.gz" > /tmp/ngit.tar.gz.sha256 \
     && sha256sum -c /tmp/ngit.tar.gz.sha256 \
