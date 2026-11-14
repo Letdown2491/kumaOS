@@ -730,9 +730,27 @@ impl Engine {
             .position(|(prompt_id, _)| prompt_id == id)
             .ok_or_else(|| anyhow!("no prompt {id}"))?;
         let (_, prompt) = inner.prompts.remove(index);
-        if let Some(duration) = remember {
-            let key = remember_key(&prompt.app, &prompt.method);
-            inner.remembered.insert(key, unix_now() + duration.as_secs());
+        // A prompt can outlive its own app's revocation: the ask was
+        // planned while paired, the lock came off for the human's
+        // decision, and a revoke in that window tombstones the app
+        // without draining the queue (#83 lane 4). The gate's own
+        // state vetoes here — an approval answering a dead app's ask
+        // would sign for a revoked app, and a standing grant minted
+        // in the same breath would outlive the tombstone it contradicts.
+        let revoked = inner
+            .apps
+            .iter()
+            .any(|p| p.pubkey == prompt.app.to_string() && p.revoked_at.is_some());
+        let decision = if revoked {
+            Decision::Deny("the app was revoked while this ask waited".into())
+        } else {
+            decision
+        };
+        if matches!(decision, Decision::Allow) {
+            if let Some(duration) = remember {
+                let key = remember_key(&prompt.app, &prompt.method);
+                inner.remembered.insert(key, unix_now() + duration.as_secs());
+            }
         }
         // The channel is the single arbiter of who decides: a send
         // that lands is the decision, and a send that fails means the
@@ -1189,6 +1207,33 @@ mod tests {
         let prompt = engine.prompts().into_iter().next().expect("the ask is queued");
         engine.approve(&prompt.id, None).unwrap();
         assert!(matches!(ask.await.unwrap(), Decision::Allow));
+    }
+
+    /// The revoke's teeth reach an ask that was already on the table
+    /// (#83 lane 4): a prompt planned while paired, still waiting when
+    /// the person revokes its app, and then answered Allow — the one
+    /// decision the gate's own state must veto, because approve's
+    /// answer would otherwise sign for a revoked app. The veto also
+    /// carries the remember: a standing grant must not be minted in
+    /// the same breath that the tombstone drops the old ones.
+    #[tokio::test]
+    async fn an_approval_cannot_outlive_its_own_apps_revocation() {
+        let engine = engine();
+        let app = app();
+        let engine_for_ask = engine.clone();
+        let app_for_ask = app.clone();
+        let ask = tokio::spawn(async move {
+            engine_for_ask.decide(&app_for_ask, &NostrConnectMethod::GetPublicKey, &[]).await
+        });
+        tokio::task::yield_now().await;
+        let prompt = engine.prompts().into_iter().next().expect("the ask is queued");
+        assert!(engine.revoke(&app.to_string()));
+        engine.approve(&prompt.id, Some(Duration::from_secs(60))).unwrap();
+        let decision = ask.await.unwrap();
+        assert!(
+            matches!(decision, Decision::Deny(ref reason) if reason.contains("revoked")),
+            "the gate vetoes an approval whose app died mid-ask: {decision:?}"
+        );
     }
 
     #[tokio::test]
