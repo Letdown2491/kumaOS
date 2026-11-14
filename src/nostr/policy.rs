@@ -737,10 +737,8 @@ impl Engine {
         // state vetoes here — an approval answering a dead app's ask
         // would sign for a revoked app, and a standing grant minted
         // in the same breath would outlive the tombstone it contradicts.
-        let revoked = inner
-            .apps
-            .iter()
-            .any(|p| p.pubkey == prompt.app.to_string() && p.revoked_at.is_some());
+        let revoked =
+            inner.apps.iter().any(|p| p.pubkey == prompt.app.to_string() && p.revoked_at.is_some());
         let decision = if revoked {
             Decision::Deny("the app was revoked while this ask waited".into())
         } else {

@@ -1006,11 +1006,8 @@ impl Bunker {
         } else {
             format!("the method {named} is not supported by this bunker")
         };
-        let message = NostrConnectMessage::Response {
-            id: id.to_string(),
-            result: None,
-            error: Some(reason),
-        };
+        let message =
+            NostrConnectMessage::Response { id: id.to_string(), result: None, error: Some(reason) };
         let Ok(content) = self.keys.nip44_encrypt(&event.pubkey, &message.as_json()) else {
             return Plan::Ignore;
         };

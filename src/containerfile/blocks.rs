@@ -2984,7 +2984,6 @@ audio/webm=io.github.celluloid_player.Celluloid.desktop
 application/zip=org.gnome.FileRoller.desktop
 "#;
 
-
 /// What `Mod+D` becomes.
 ///
 /// Stock niri binds it to plain fuzzel, and the image no longer ships

@@ -172,8 +172,12 @@ impl RelayPool {
         status: SyncSender<RelayStatus>,
         timing: Timing,
     ) -> Self {
-        let mut pool =
-            Self { roads: Vec::new(), own_urls: Vec::new(), app_urls: HashMap::new(), shed: Arc::new(AtomicU64::new(0)) };
+        let mut pool = Self {
+            roads: Vec::new(),
+            own_urls: Vec::new(),
+            app_urls: HashMap::new(),
+            shed: Arc::new(AtomicU64::new(0)),
+        };
         pool.spawn_own(relays, bunker_pubkey, &inbound, &status, timing);
         pool
     }

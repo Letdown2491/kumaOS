@@ -3302,11 +3302,7 @@ fn check_dev_install(report: &mut impl FnMut(Grade, &str, String, Option<Action>
                 "the dev override carries no ExecStart line — a truncated write \
                  or a hand edit; it points the daemon nowhere"
                     .to_string(),
-                Some(Action::new(
-                    "dev install",
-                    "kuma dev install",
-                    "rewrites the override whole",
-                )),
+                Some(Action::new("dev install", "kuma dev install", "rewrites the override whole")),
             );
             return;
         }
@@ -3560,12 +3556,9 @@ fn check_nostr(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
     // made is not a broken machine), and a crash loop names itself.
     if config.nostr.relay.enable {
         match unit_state("nip46-relay.service") {
-            UnitState::Active => report(
-                Grade::Ok,
-                "nostr",
-                "the local relay's unit is active".into(),
-                None,
-            ),
+            UnitState::Active => {
+                report(Grade::Ok, "nostr", "the local relay's unit is active".into(), None)
+            }
             UnitState::Activating => report(
                 Grade::Warn,
                 "nostr",
@@ -3742,7 +3735,7 @@ fn check_nostr(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
                     let (grade, wording) =
                         signer_grade(json_strings(&status["vault"]["connected"]).as_deref());
                     report(grade, "nostr", wording, None);
-                },
+                }
                 (_, Some(false)) => report(
                     Grade::Warn,
                     "nostr",

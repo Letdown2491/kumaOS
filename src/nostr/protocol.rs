@@ -166,32 +166,93 @@ pub struct ErrResponse {
 #[derive(Debug, Serialize)]
 #[serde(tag = "verb", rename_all = "snake_case")]
 pub enum OkResponse {
-    Ping { ok: bool },
+    Ping {
+        ok: bool,
+    },
     /// `shed` is the events the relay pool dropped at its inbound
     /// bound since the daemon's birth (#82's fix shape 1) — the
     /// drop was a requester's timeout with no other trace, and this
     /// field is the trace. A field gained, not a shape changed.
-    Status { ok: bool, vault: VaultFact, shed: u64 },
-    Setup { ok: bool, pubkey: String },
-    Unlock { ok: bool, pubkey: String },
-    Lock { ok: bool },
-    Touch { ok: bool },
-    DestroyDryRun { ok: bool, would: String },
-    Destroy { ok: bool },
-    Export { ok: bool, ncryptsec: String },
-    Prompts { ok: bool, prompts: Vec<super::policy::PromptView> },
-    Log { ok: bool, log: Vec<super::policy::LogEntry> },
-    Approve { ok: bool },
-    Deny { ok: bool },
-    Apps { ok: bool, apps: Vec<super::policy::Paired> },
-    Revoke { ok: bool, removed: bool },
-    Level { ok: bool },
-    Rotate { ok: bool, uri: String },
-    Mint { ok: bool, uri: String },
-    Connect { ok: bool, name: Option<String>, relays: Vec<String> },
-    Unrevoke { ok: bool, cleared: bool },
-    Delete { ok: bool, removed: bool },
-    Label { ok: bool, named: bool },
+    Status {
+        ok: bool,
+        vault: VaultFact,
+        shed: u64,
+    },
+    Setup {
+        ok: bool,
+        pubkey: String,
+    },
+    Unlock {
+        ok: bool,
+        pubkey: String,
+    },
+    Lock {
+        ok: bool,
+    },
+    Touch {
+        ok: bool,
+    },
+    DestroyDryRun {
+        ok: bool,
+        would: String,
+    },
+    Destroy {
+        ok: bool,
+    },
+    Export {
+        ok: bool,
+        ncryptsec: String,
+    },
+    Prompts {
+        ok: bool,
+        prompts: Vec<super::policy::PromptView>,
+    },
+    Log {
+        ok: bool,
+        log: Vec<super::policy::LogEntry>,
+    },
+    Approve {
+        ok: bool,
+    },
+    Deny {
+        ok: bool,
+    },
+    Apps {
+        ok: bool,
+        apps: Vec<super::policy::Paired>,
+    },
+    Revoke {
+        ok: bool,
+        removed: bool,
+    },
+    Level {
+        ok: bool,
+    },
+    Rotate {
+        ok: bool,
+        uri: String,
+    },
+    Mint {
+        ok: bool,
+        uri: String,
+    },
+    Connect {
+        ok: bool,
+        name: Option<String>,
+        relays: Vec<String>,
+    },
+    Unrevoke {
+        ok: bool,
+        cleared: bool,
+    },
+    Delete {
+        ok: bool,
+        removed: bool,
+    },
+    Label {
+        ok: bool,
+        named: bool,
+    },
 }
 
 /// What `status` says, and what `doctor` will grade through it later.

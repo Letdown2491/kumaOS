@@ -172,7 +172,12 @@ pub(crate) fn daemon_override() -> PathBuf {
 /// be.
 fn bounce_daemon() -> Vec<String> {
     let mut failures = Vec::new();
-    if !Command::new("systemctl").args(["--user", "daemon-reload"]).status().map(|s| s.success()).unwrap_or(false) {
+    if !Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
         failures.push("systemctl --user daemon-reload failed".to_string());
     }
     let active = Command::new("systemctl")
