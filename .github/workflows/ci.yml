@@ -490,7 +490,14 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [when, siblings]
     if: needs.when.outputs.heavy == 'true'
-    timeout-minutes: 150
+    # 150 died a fourth ceiling death (43428730502): the fallback compile
+    # measured 117m28s (43228161332), 120m10s (43421627941), then ran past
+    # the ceiling unfinished — the lap is ~25 minutes of setup plus a
+    # ~2-hour in-guest compile, so 150 left the pass to runner variance.
+    # 180 is the number this lap already answered to when the shared
+    # lane carried both halves; the compile trending past IT is the
+    # lap's next problem, and a speed fix, not a taller ceiling.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: smoke (boot + upgrade fallback)
