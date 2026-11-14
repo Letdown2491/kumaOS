@@ -3263,9 +3263,54 @@ fn check_dev_install(report: &mut impl FnMut(Grade, &str, String, Option<Action>
     }
     let Ok(unit_args) = crate::dev::unit_execstart_args() else { return };
     let override_path = crate::dev::daemon_override();
-    let Ok(override_text) = std::fs::read_to_string(&override_path) else { return };
-    let override_args =
-        crate::dev::override_execstart_args(&override_text).unwrap_or_default();
+    let override_text = match std::fs::read_to_string(&override_path) {
+        Ok(text) => text,
+        Err(_) => {
+            // The receipt claims the daemon and retire removes the
+            // override WITH the receipt, never one without the other —
+            // so receipt-without-override is the adopt bail's
+            // half-state (#83 lane 1): a busless session staged the
+            // binaries, wrote the receipt, and could not adopt. The
+            // daemon runs the image's binary under a receipt that
+            // claims otherwise.
+            report(
+                Grade::Warn,
+                "dev install",
+                "the receipt names the nostr daemon but no dev override exists — \
+                 the daemon runs the image's binary, not the staged one"
+                    .to_string(),
+                Some(Action::new(
+                    "dev install",
+                    "kuma dev install",
+                    "re-runs the adopt the busless session could not",
+                )),
+            );
+            return;
+        }
+    };
+    let override_args = match crate::dev::override_execstart_args(&override_text) {
+        Some(args) => args,
+        None => {
+            // An override with no ExecStart line at all is a
+            // truncated write or a hand edit — a FACT to grade, not
+            // an empty answer to diff (an unwrap_or_default here
+            // grades a corrupt override green on an arg-less unit,
+            // lane 1 finding 3).
+            report(
+                Grade::Warn,
+                "dev install",
+                "the dev override carries no ExecStart line — a truncated write \
+                 or a hand edit; it points the daemon nowhere"
+                    .to_string(),
+                Some(Action::new(
+                    "dev install",
+                    "kuma dev install",
+                    "rewrites the override whole",
+                )),
+            );
+            return;
+        }
+    };
     if override_args != unit_args {
         report(
             Grade::Warn,
@@ -3913,11 +3958,6 @@ fn human_secs(secs: u64) -> String {
 /// Whether the bunker's user unit is active, as `Some(active)` — `None`
 /// when systemd could not be asked, which the caller renders as its
 /// own warn rather than as a unit verdict.
-fn unit_active() -> Option<bool> {
-    let out = host_output(&["systemctl", "--user", "is-active", "kuma-nostrd.service"]).ok()?;
-    Some(out.trim() == "active")
-}
-
 /// A user unit's state, as `systemctl --user is-active` names it. The
 /// string, not a boolean: `activating` is the crash loop's state, and
 /// the old `Option<bool>` mapped it onto "stopped" — whose fix action
@@ -3935,13 +3975,22 @@ enum UnitState {
 }
 
 fn unit_state(unit: &str) -> UnitState {
-    match host_output(&["systemctl", "--user", "is-active", unit]) {
-        Ok(out) => match out.trim() {
-            "active" => UnitState::Active,
-            "activating" => UnitState::Activating,
-            _ => UnitState::Inactive,
-        },
+    // host_output_any, not host_output: is-active reports its state
+    // through stdout AND its exit status (inactive exits 3, not-found
+    // 4, active 0), and host_output bails on every non-zero exit —
+    // which mapped every down state onto Unknown and made this enum's
+    // warn arms dead code, the false-green lane 1 of #83 caught.
+    match host_output_any(&["systemctl", "--user", "is-active", unit]) {
+        Ok(out) => unit_state_from(&out),
         Err(_) => UnitState::Unknown,
+    }
+}
+
+fn unit_state_from(answer: &str) -> UnitState {
+    match answer.trim() {
+        "active" => UnitState::Active,
+        "activating" => UnitState::Activating,
+        _ => UnitState::Inactive,
     }
 }
 
@@ -5346,6 +5395,22 @@ mod tests {
         // install): absent facts are not failing ones — Ok, silent.
         let (grade, _) = signer_grade(None);
         assert_eq!(grade, Grade::Ok);
+    }
+
+    /// The unit question's four answers (#83 lane 1): is-active speaks
+    /// its state on stdout and carries its opinion on the exit status
+    /// too, so the reader must be one that survives the exit code —
+    /// and the state's own words are what the enum pins.
+    #[test]
+    fn the_unit_state_reads_the_words_is_active_prints() {
+        assert_eq!(unit_state_from("active"), UnitState::Active);
+        assert_eq!(unit_state_from("activating"), UnitState::Activating);
+        assert_eq!(unit_state_from("inactive"), UnitState::Inactive);
+        assert_eq!(unit_state_from("failed"), UnitState::Inactive);
+        // is-active's answer for a unit that is not a unit at all.
+        assert_eq!(unit_state_from("unknown"), UnitState::Inactive);
+        // And whitespace rides along on the real answer.
+        assert_eq!(unit_state_from("activating\n"), UnitState::Activating);
     }
 
     #[test]
