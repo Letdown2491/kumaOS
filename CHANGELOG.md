@@ -4,6 +4,20 @@
 
 ## v45.4.0 (2026-11-13)
 
+- **The shell rides with its battery notifier.** The kumaui pin moves
+  to v0.9.0, the release that grows threshold battery notifications
+  into kuma-shell itself: low at 15%, critical at 5%, warned once per
+  band through the shell's own notification road, re-armed by any
+  non-Discharging status.
+
+- **The image's battery-watch script retires.** The shell's notifier
+  is the superset of what `/usr/libexec/kuma-battery-watch` did, so
+  the script, its niri spawn line, and its 300-second monitor leave
+  the image: one battery state announced by two programs in two
+  styles was the shape the blueman retirement exists to undo. Every
+  login stops respawning a second watcher that says what the shell
+  already says. (#80)
+
 - **The image's git speaks `nostr://`.** The nostr git transport rides
   in every image now: ngit and its `git-remote-nostr` launcher, baked
   from the pinned upstream release (v3.0.5, verbatim musl archive —

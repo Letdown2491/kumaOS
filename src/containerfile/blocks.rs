@@ -2475,7 +2475,6 @@ spawn-at-startup "udiskie"
 // lock-before-suspend. When it died, nothing restarted it and nothing
 // said so, and the next lid close suspended the machine with an
 // unlocked session inside it.
-spawn-at-startup "/usr/libexec/kuma-battery-watch"
 
 // Kuma look: rounded windows, quiet neutral focus ring. Window rules are
 // additive, so this themes every window without touching the stock layout.
@@ -2985,98 +2984,6 @@ audio/webm=io.github.celluloid_player.Celluloid.desktop
 application/zip=org.gnome.FileRoller.desktop
 "#;
 
-/// Battery warnings, sent to whatever owns
-/// `org.freedesktop.Notifications`, which on this desktop is the shell.
-/// Watches sysfs by udev, with a five-minute safety read: the kernel's
-/// power_supply events are the instant news (the plug, the capacity
-/// steps the driver bothers to announce), and the monitor's own
-/// five-minute lifespan is the floor — drivers differ in how loudly
-/// they announce draining, and the first real battery stayed silent
-/// through a whole band of capacity. The old `while sleep 60` woke
-/// 1,440 times a day on every machine, battery or none; this wakes
-/// every machine ~288 times a day (the monitor lives 300 seconds and
-/// dies of old age into a safety read, and the respawn IS the poll) —
-/// a laptop a few hundred times, only while the news could matter, a
-/// desktop the same cheap reads with no news to act on. upower-notifier
-/// tools (poweralertd) aren't in Fedora's repos, which is why this is a
-/// script at all.
-///
-/// The shell's battery widget shows the state in the bar but warns at
-/// no threshold (its own settings carry no battery section), so this
-/// script remains the only low-and-critical notice a laptop gets. The
-/// decision of record (kumaOS#80, 2026-11-13): the shell WILL grow
-/// threshold notifications, and when it does this script retires
-/// entirely — one state announced by two programs in two styles is the
-/// shape `DCONF_BLUEMAN` above exists to undo, and the monitor is this
-/// script's last improvement, not the first of a series. Removing this
-/// needs a battery to prove, because nothing in a VM ever discharges.
-///
-/// One watcher per account, by flock. niri re-runs `spawn-at-startup`
-/// when its config reloads, and a session's end never reaches this
-/// loop, so an unguarded start adds another warning source on every
-/// reload and re-login — four was measured on one machine. The lock
-/// file lives in the user's runtime directory: it dies with the user
-/// manager, and oldest-wins is the right way to be wrong, because the
-/// survivor is a working watcher writing to the same user bus either
-/// way.
-pub(crate) const BATTERY_WATCH: &str = r#"#!/usr/bin/bash
-set -u
-# The decision's root is an argument — the converge gate's pattern:
-# `[sysfs]`, defaulting to the real one, is what makes the table below
-# runnable in tests.
-sysfs=${1:-/sys/class/power_supply}
-exec 9>"${XDG_RUNTIME_DIR:?no session runtime directory}/kuma-battery-watch.lock"
-flock -n 9 || exit 0
-warned=""
-check() {
-    local bat cap status
-    bat=$(ls "$sysfs" 2>/dev/null | grep -m1 "^BAT" || true)
-    [ -n "$bat" ] || return
-    cap=$(cat "$sysfs/$bat/capacity" 2>/dev/null || echo 100)
-    status=$(cat "$sysfs/$bat/status" 2>/dev/null || echo Unknown)
-    if [ "$status" != "Discharging" ]; then warned=""; return; fi
-    if [ "$cap" -le 5 ] && [ "$warned" != "critical" ]; then
-        warned="critical"
-        notify-send -u critical "Battery critical: ${cap}%" "Plug in now."
-    elif [ "$cap" -le 15 ] && [ -z "$warned" ]; then
-        warned="low"
-        notify-send "Battery low: ${cap}%"
-    fi
-}
-# The first read is not an event: a boot at 12% on battery warns
-# immediately, not at the next capacity step the driver cares to emit.
-# And a machine without udevadm takes the old road — a poll that
-# cannot exit is the honest floor, and better than a watch that
-# cannot start.
-check
-if ! command -v udevadm >/dev/null; then
-    while sleep 60; do check; done
-fi
-while :; do
-    # The monitor is the loop, but the loop is not only events: the
-    # first real battery taught why. This driver announces the plug
-    # (the notice fired on the unplug transition) and stays SILENT
-    # through the capacity band — 76 down to 15 percent emitted
-    # nothing, and a pure event loop would have slept through the
-    # threshold it exists to catch. So the monitor lives 300 seconds
-    # and dies of old age: `warned` stays in THIS shell (process
-    # substitution, not a pipe — a pipe would drop the state into a
-    # subshell and re-warn on every respawn), each death falls
-    # through to a safety read of the live sysfs state, and the
-    # respawn IS the poll — 288 wakeups a day instead of 1,440,
-    # with the notice never more than one cadence behind the
-    # threshold. timeout reaps the monitor cleanly; nothing lingers
-    # holding the lock. And stdbuf -oL is load-bearing: udevadm's
-    # stdout on a pipe is glibc-full-buffered — 4KB before a line
-    # moves — and a SIGTERM death does not flush it, so without the
-    # line buffering the events never reach the read in real time
-    # and the safety read carries the whole job alone.
-    while read -r line; do
-        case "$line" in *change*) check ;; esac
-    done < <(timeout 300 stdbuf -oL udevadm monitor --kernel --subsystem-match=power_supply)
-    check
-done
-"#;
 
 /// What `Mod+D` becomes.
 ///
@@ -3722,7 +3629,6 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     };
     let mimeapps = e.stage("mimeapps.list", mimeapps_text);
     let record = e.stage("kuma-record", RECORD_SCRIPT);
-    let battery = e.stage("kuma-battery-watch", BATTERY_WATCH);
     let shell = e.stage("kuma-shell.service", SHELL_SERVICE);
     let pam_lock = e.stage("kuma-lock", KUMA_LOCK_PAM);
     let guard_service = e.stage("kuma-sleep-guard.service", SLEEP_GUARD_SERVICE);
@@ -3865,7 +3771,6 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     e.copy(&xsettingsd, "/usr/lib/kuma/xsettingsd.conf");
     e.copy(&binds, "/usr/lib/kuma/niri-binds.kdl");
     e.copy_exec(&record, "/usr/libexec/kuma-record");
-    e.copy_exec(&battery, "/usr/libexec/kuma-battery-watch");
     // The shell as a supervised unit, and the guard that refuses to
     // sleep without it. `--global` because the shell is a user unit
     // and every account on this image should get it; the sleep guard

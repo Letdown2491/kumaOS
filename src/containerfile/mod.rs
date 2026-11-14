@@ -645,7 +645,7 @@ mod tests {
         // same deal the goldens are on.
         assert_eq!(
             kumaui_pin(),
-            Some(("e333d6ec45c3d62062d05779a69b37b81fbdc51b".to_string(), "0.8.0".to_string()))
+            Some(("ea73d8abba1b2e1b17317de2af32eb814a502302".to_string(), "0.9.0".to_string()))
         );
     }
 
@@ -3546,33 +3546,15 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
     }
 
     #[test]
-    fn session_polish_ships_battery_watch_and_media_verb_binds() {
+    fn session_polish_ships_media_verb_binds() {
         // Locking, screen-off and lock-before-suspend were swayidle
         // arguments, then noctalia config keys; they are the shell's
         // compiled defaults now (kuma-shell's own tests pin the
         // numbers), so there is no image-side config left to assert.
-        // What the image still owns is the wiring: the battery watch
-        // rides the session, and the media keys reach the shell.
-        assert!(NIRI_EXTRAS.contains("kuma-battery-watch"));
-        // The watch is a monitor now, not a poll — the shape the
-        // behavior test below drives through stubs, pinned here as
-        // text so a refactor that silently fell back to the 60s wake
-        // loop (1,440 wakeups a day on every machine, battery or
-        // none) cannot ship unnoticed.
-        assert!(BATTERY_WATCH.contains("udevadm monitor --kernel --subsystem-match=power_supply"));
-        // And the safety cadence is pinned: the first real battery
-        // stayed silent through a whole capacity band, so the monitor
-        // dies of old age every five minutes and the death IS the
-        // poll — a refactor that trusted events alone would sleep
-        // through the threshold on exactly this machine. stdbuf is
-        // pinned with it: udevadm on a pipe is full-buffered until
-        // 4KB or death, and death does not flush, so without the
-        // line buffering the event path never fires in real time.
-        assert!(BATTERY_WATCH.contains("timeout 300 stdbuf -oL udevadm monitor"));
-        // The old poll survives only as the fallback, behind its
-        // guard — a missing udevadm degrades to the 60s road, it does
-        // not break the watch.
-        assert!(BATTERY_WATCH.contains("if ! command -v udevadm >/dev/null; then"));
+        // The battery watch retired with the shell's threshold
+        // notifications (kumaOS#80's end state): one battery state
+        // announced by two programs in two styles was the shape
+        // DCONF_BLUEMAN exists to undo.
         // Both X11 helpers wait for a DISPLAY that does not exist yet
         // when they are spawned. They share one copy of that wait, so
         // this asks the rendered scripts rather than the const: a
@@ -3936,84 +3918,6 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
     fn no_brew_by_default() {
         let out = generate(&config("schema_version = 1"));
         assert!(!out.contains("brew"));
-    }
-
-    /// The watcher's decision table, run for real: a stub sysfs, a
-    /// stub notify-send that records its calls, and a stub udevadm
-    /// that emits one change event and blocks. The timeout is the
-    /// test's exit for a process whose whole job is to never exit;
-    /// the recorded calls are the assertion.
-    #[test]
-    fn the_battery_watch_warns_exactly_the_low_states() {
-        use std::process::Command;
-
-        let dir = tempfile::tempdir().unwrap();
-        let watch = dir.path().join("kuma-battery-watch");
-        std::fs::write(&watch, BATTERY_WATCH).unwrap();
-        std::fs::set_permissions(&watch, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
-
-        let stubs = dir.path().join("bin");
-        std::fs::create_dir(&stubs).unwrap();
-        // One change event, then quiet: the initial check runs before
-        // any event, so one is enough to prove the event path fires.
-        let udevadm = concat!(
-            "#!/bin/sh\n",
-            "printf 'KERNEL[1.0] change  /devices/power_supply/BAT1 (power_supply)\\n'\n",
-            "sleep 30\n",
-        );
-        std::fs::write(stubs.join("udevadm"), udevadm).unwrap();
-        let notify = "#!/bin/sh\necho \"$*\" >> \"$STUB_LOG\"\n";
-        std::fs::write(stubs.join("notify-send"), notify).unwrap();
-        for name in ["udevadm", "notify-send"] {
-            std::fs::set_permissions(
-                stubs.join(name),
-                std::os::unix::fs::PermissionsExt::from_mode(0o755),
-            )
-            .unwrap();
-        }
-
-        let battery = |status: &str, capacity: &str| -> std::path::PathBuf {
-            let sysfs = dir.path().join("sys").join(format!("{status}-{capacity}"));
-            let bat = sysfs.join("BAT1");
-            std::fs::create_dir_all(&bat).unwrap();
-            std::fs::write(bat.join("status"), status).unwrap();
-            std::fs::write(bat.join("capacity"), capacity).unwrap();
-            sysfs
-        };
-
-        let run = |sysfs: &std::path::Path| {
-            let log =
-                dir.path().join(format!("log-{}", sysfs.file_name().unwrap().to_str().unwrap()));
-            Command::new("timeout")
-                .arg("5")
-                .arg(&watch)
-                .arg(sysfs)
-                .env("PATH", format!("{}:{}", stubs.display(), std::env::var("PATH").unwrap()))
-                .env("XDG_RUNTIME_DIR", dir.path())
-                .env("STUB_LOG", &log)
-                .output()
-                .unwrap();
-            std::fs::read_to_string(&log).unwrap_or_default()
-        };
-
-        // Discharging at the low threshold: one warning, exactly once —
-        // the initial read fires it, and the event's re-check holds it
-        // (warned=low silences the second read of the same state).
-        assert_eq!(run(&battery("Discharging", "10")), "Battery low: 10%\n");
-        // Below the critical threshold: the critical notice, not the
-        // low one — the table stops at the first matching branch.
-        assert_eq!(
-            run(&battery("Discharging", "3")),
-            "-u critical Battery critical: 3% Plug in now.\n"
-        );
-        // The wall's answer: charging, full, and no battery at all
-        // warn at nothing, whatever the capacity says.
-        assert_eq!(run(&battery("Charging", "10")), "");
-        assert_eq!(run(&battery("Full", "80")), "");
-        let none = dir.path().join("sys").join("none");
-        std::fs::create_dir_all(&none).unwrap();
-        assert_eq!(run(&none), "");
     }
 
     /// The gate's whole decision table, run for real: a stub sysfs tree

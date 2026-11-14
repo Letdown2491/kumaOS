@@ -57,7 +57,6 @@ COPY --chmod=755 kuma-xsettings /usr/libexec/kuma-xsettings
 COPY xsettingsd.conf /usr/lib/kuma/xsettingsd.conf
 COPY niri-binds.kdl /usr/lib/kuma/niri-binds.kdl
 COPY --chmod=755 kuma-record /usr/libexec/kuma-record
-COPY --chmod=755 kuma-battery-watch /usr/libexec/kuma-battery-watch
 COPY kuma-shell.service /usr/lib/systemd/user/kuma-shell.service
 COPY kuma-sleep-guard.service /usr/lib/systemd/system/kuma-sleep-guard.service
 COPY --chmod=755 kuma-sleep-guard /usr/libexec/kuma-sleep-guard
