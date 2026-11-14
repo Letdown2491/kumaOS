@@ -579,10 +579,24 @@ fn set_executable(path: &Path) -> Result<()> {
 /// compares it: the staged bytes must still be the bytes the receipt
 /// vouched for. `pub(crate)` because the doctor check is the other
 /// reader.
+///
+/// Two refusals the audit asked for (#78): a SYMLINK at a vouched name
+/// is followed by the hasher, and the hash would describe bytes the
+/// name does not own — `symlink_metadata` reads the name itself, and
+/// a link is refused outright. And the hasher is named absolutely: a
+/// `sha256sum` resolved by PATH as root is the one substitution a
+/// hostile PATH controls. Benign as staged (the readers compare and
+/// report, they execute nothing user-owned), but the read's own story
+/// should be honest.
 pub(crate) fn sha256_file(path: &Path) -> Result<String> {
+    let meta = std::fs::symlink_metadata(path)
+        .with_context(|| format!("cannot read {} to hash it", path.display()))?;
+    if meta.file_type().is_symlink() {
+        bail!("{} is a symlink; the hash's read refuses to follow it", path.display());
+    }
     // sha256sum is on every machine this verb can run on: it is the
     // same tool the image's verification story names.
-    let out = Command::new("sha256sum").arg(path).output()?;
+    let out = Command::new("/usr/bin/sha256sum").arg(path).output()?;
     if !out.status.success() {
         bail!("sha256sum failed for {}", path.display());
     }
