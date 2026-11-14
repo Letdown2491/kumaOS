@@ -721,8 +721,11 @@ cannot read. What they can see is the shape of your traffic: how much
 you store, how often, and when.
 
 Excludes are additive on top of a set you cannot remove: `linuxbrew`,
-`~/.cache`, `~/.local/share/containers`. Every one is a tree this same
-declaration rebuilds.
+`~/.cache`, `~/.local/share/containers`. The first two are trees this
+same declaration rebuilds. The third is not: rootless podman's named
+volumes and container state live under it, and no declaration spelling
+rebuilds those — if you keep data in a podman volume, back that volume
+up on its own road, because kuma's backup will not carry it.
 
 One thing outside home matters more than anything inside it, and it is
 **off by default**:

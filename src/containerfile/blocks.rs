@@ -1142,6 +1142,13 @@ install -d -m 0700 /var/cache/restic
 probe=$(timeout 30 restic cat config 2>&1) || {
     if printf '%s' "$probe" | grep -qiE 'does not exist|is there a repository'; then
         echo "no repository at $RESTIC_REPOSITORY yet; seed it once with 'kuma backup --init'"
+    elif printf '%s' "$probe" | grep -qiE 'wrong password|decrypt'; then
+        # A credential that does not open the repository is a
+        # misconfiguration, not a transient: the freshness net would
+        # call it "stale" only after days, which is discovery at
+        # restore time (#83's backup lane). Fail the unit and say so.
+        echo "the repository at $RESTIC_REPOSITORY refused this machine's credential (wrong password?); fix the secret, do not wait for freshness to notice"
+        exit 1
     else
         echo "cannot reach $RESTIC_REPOSITORY within 30s; nothing copied this run"
     fi

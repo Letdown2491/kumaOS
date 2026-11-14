@@ -217,4 +217,7 @@ this machine or the next.
 
 Destroy itself stays unrecoverable by design, and its warning means
 what it says. The export is how you walk through the point of no return
-on purpose.
+on purpose. `kuma-nostr import` brings the file back — on this machine
+or the next — but it reads the ncryptsec from standard input with the
+passphrase on the next line, not from a filename: pipe it in
+(`kuma-nostr import < backup.ncryptsec` still asks for the passphrase).

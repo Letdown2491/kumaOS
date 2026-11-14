@@ -286,14 +286,31 @@ fn seed(config: &Config, json: bool) -> Result<()> {
     say("");
     say("Now making the first copy. This is the whole of your data rather than");
     say("the difference since yesterday, so it takes as long as it takes.");
+    // The stamp is the verdict, not the exit status: the service unit
+    // exits 0 on three not-ready states (no credential loaded, no
+    // snapshot yet, repository unreachable — the probe's own
+    // classification), so a start job that succeeded is none of
+    // those things' proof. A seed that prints "Done" over an empty
+    // repository is the worst-day command lying; the stamp is written
+    // only when a copy actually completed (#83's backup lane).
+    let stamp_before = std::fs::metadata(STAMP).ok().map(|m| m.modified().ok());
     run_host(&["sudo", "systemctl", "start", "kuma-backup.service"])?;
+    let seeded = std::fs::metadata(STAMP).ok().map(|m| m.modified().ok()) != stamp_before;
     if json {
         response::Response::new()
             .field("repo", repo.as_str())
-            .field("seeded", true)
+            .field("seeded", seeded)
             .field("stamp", STAMP)
             .print(true, "");
-    } else {
+    }
+    if !seeded {
+        bail!(
+            "the backup service started but completed no copy — no credential loaded, \
+             no snapshot yet, or the repository is unreachable. `kuma backup --list` \
+             and `kuma doctor` name which."
+        );
+    }
+    if !json {
         say("");
         say("Done. `kuma doctor` grades how fresh it stays from here.");
     }
