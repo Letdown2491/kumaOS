@@ -587,11 +587,31 @@ impl Bunker {
             return self.plan_raw(event, plain);
         }
         let Ok(message) = NostrConnectMessage::from_json(&plaintext) else {
-            return Plan::Ignore;
+            // The spec's one MUST the typed parse cannot see: "Requests
+            // made with unknown or unsupported methods MUST be replied
+            // with an error" — silence would leave a client that
+            // speaks a method this tree predates retrying forever
+            // against a dead airwave. A known method that failed the
+            // typed parse is malformed; it gets the same answer with
+            // the same honesty, because an id rode the request.
+            return self.plan_unsupported(event, plain);
         };
         let (id, method, params) = match message {
             NostrConnectMessage::Request { id, method, params } => (id, method, params),
-            NostrConnectMessage::Response { .. } => return Plan::Ignore,
+            NostrConnectMessage::Response { .. } => {
+                // A request whose method the crate's enum does not
+                // know parses as a typed *response* — every field
+                // optional but the id, and serde silently drops the
+                // `method` field it has no name for. The plaintext's
+                // own word is the tell: a payload that said `method`
+                // was a request, and it gets the error answer the
+                // spec demands, not the silence of a misparsed
+                // response nobody asked for.
+                if plain["method"].as_str().is_some() {
+                    return self.plan_unsupported(event, plain);
+                }
+                return Plan::Ignore;
+            }
         };
         let response = match method {
             NostrConnectMethod::Connect => {
@@ -966,6 +986,43 @@ impl Bunker {
         }
     }
 
+    /// The spec's MUST the typed parse cannot see: a request whose
+    /// method this tree does not know — or a known method whose
+    /// envelope failed the typed parse — is answered with an error,
+    /// never silence ("unknown or unsupported methods MUST be replied
+    /// with an error"). The id comes from the plaintext, the same
+    /// correlation the request carried; a payload with no id is the
+    /// old noise rule, where there is nothing to correlate and a
+    /// refusal naming nothing helps nobody.
+    fn plan_unsupported(&self, event: &Event, plain: serde_json::Value) -> Plan {
+        let Some(id) = plain["id"].as_str() else { return Plan::Ignore };
+        // The reply answers a *request*; a payload that named no
+        // method was never one — a malformed response or stray JSON
+        // is the old noise rule, whatever id it carries.
+        let Some(named) = plain["method"].as_str() else { return Plan::Ignore };
+        let known = named.parse::<NostrConnectMethod>().is_ok();
+        let reason = if known {
+            format!("the {named} request was malformed and this bunker could not run it")
+        } else {
+            format!("the method {named} is not supported by this bunker")
+        };
+        let message = NostrConnectMessage::Response {
+            id: id.to_string(),
+            result: None,
+            error: Some(reason),
+        };
+        let Ok(content) = self.keys.nip44_encrypt(&event.pubkey, &message.as_json()) else {
+            return Plan::Ignore;
+        };
+        match EventBuilder::new(Kind::from_u16(24133), content)
+            .tag(Tag::public_key(event.pubkey))
+            .finalize(&self.keys)
+        {
+            Ok(answer) => Plan::Answer(answer),
+            Err(_) => Plan::Ignore,
+        }
+    }
+
     /// The same wrap as [`Bunker::response_event`], for an answer the
     /// typed response enum cannot carry: a result the method defined
     /// after this tree's types did — a relay list is a JSON array, an
@@ -1219,6 +1276,62 @@ mod tests {
             let plaintext = self.keys.nip44_decrypt(&response.pubkey, &response.content).unwrap();
             NostrConnectMessage::from_json(&plaintext).unwrap()
         }
+    }
+
+    #[tokio::test]
+    async fn an_unknown_method_is_answered_with_an_error_not_silence() {
+        let (mut bunker, _secret) = bunker_for_tests();
+        let app = App::new();
+        let bunker_pubkey = bunker.public_key();
+
+        // A method this tree's types predate: a well-shaped request
+        // whose method the crate's enum has no arm for. The spec's
+        // MUST: an error comes back — the id echoed, the refusal
+        // naming the method — because silence is a client retrying
+        // forever against a dead airwave.
+        let request = app.request_event_raw(
+            &bunker_pubkey,
+            r#"{"id":"from-the-future","method":"summarize_profile","params":[]}"#,
+        );
+        match bunker.plan(&request) {
+            Plan::Answer(response) => match app.decrypt_response(&response) {
+                NostrConnectMessage::Response { id, result, error } => {
+                    assert_eq!(id, "from-the-future");
+                    assert_eq!(result, None);
+                    assert!(
+                        error.as_deref().unwrap_or("").contains("summarize_profile"),
+                        "the refusal names the method: {error:?}"
+                    );
+                }
+                other => panic!("an error response came back: {other:?}"),
+            },
+            other => panic!("an unknown method is answered, not silenced: {other:?}"),
+        }
+
+        // A known method whose envelope cannot parse is answered the
+        // same way — named as malformed, not dropped on the floor.
+        let broken = app.request_event_raw(
+            &bunker_pubkey,
+            r#"{"id":"broken","method":"sign_event","params":"not-an-array"}"#,
+        );
+        match bunker.plan(&broken) {
+            Plan::Answer(response) => match app.decrypt_response(&response) {
+                NostrConnectMessage::Response { id, error, .. } => {
+                    assert_eq!(id, "broken");
+                    assert!(
+                        error.as_deref().unwrap_or("").contains("malformed"),
+                        "the refusal says what failed: {error:?}"
+                    );
+                }
+                other => panic!("an error response came back: {other:?}"),
+            },
+            other => panic!("a malformed request is answered, not silenced: {other:?}"),
+        }
+
+        // A payload that named no method was never a request: the old
+        // noise rule stands, whatever id it carries.
+        let stray = app.request_event_raw(&bunker_pubkey, r#"{"id":"no-method"}"#);
+        assert!(matches!(bunker.plan(&stray), Plan::Ignore));
     }
 
     #[tokio::test]
