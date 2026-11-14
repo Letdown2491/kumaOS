@@ -45,6 +45,7 @@
 //! the same question of whatever is new.
 
 use crate::config::Config;
+use crate::containerfile::NGIT_PIN_VERSION;
 use crate::hibernate;
 use crate::host::{host_output, host_output_any};
 use crate::inventory::{observe, to_set, List, Machine};
@@ -3428,6 +3429,45 @@ fn check_nostr(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
             None,
         ),
         None => {}
+    }
+
+    // The git transport's ride, presence and identity (#79): the pair
+    // is baked from the pinned upstream archive, and the doctor reads
+    // the versions back rather than trusting the layer's presence — a
+    // machine on an image that predates the pair grades a warn with
+    // its next move, instead of a `git clone nostr://…` dying later in
+    // git's own bare transport error.
+    let transport = match host_output(&["/usr/bin/ngit", "--version"]) {
+        Ok(out) if out.contains(NGIT_PIN_VERSION) => {
+            match host_output(&["/usr/bin/git-remote-nostr", "--version"]) {
+                Ok(out) if out.contains(NGIT_PIN_VERSION) => None,
+                Ok(_) => Some("git-remote-nostr is not the pinned build".to_string()),
+                Err(_) => Some("git-remote-nostr is not in this image".to_string()),
+            }
+        }
+        Ok(_) => Some("ngit is not the pinned build".to_string()),
+        Err(_) => Some("ngit is not in this image".to_string()),
+    };
+    match transport {
+        Some(detail) => report(
+            Grade::Warn,
+            "nostr",
+            format!("{detail}; the pinned pair arrives with the image"),
+            Some(Action::new(
+                "update",
+                "kuma update",
+                "rebuild on the release that ships the nostr git transport",
+            )),
+        ),
+        None => report(
+            Grade::Ok,
+            "nostr",
+            format!(
+                "the nostr git transport rides (ngit {NGIT_PIN_VERSION}); \
+                 `git clone nostr://…` works"
+            ),
+            None,
+        ),
     }
 
     // The tailnet exposure, graded against the declaration: the baked

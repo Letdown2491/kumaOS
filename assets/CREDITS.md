@@ -64,4 +64,27 @@ Google's **Noto Color Emoji** face, the CBDT/CBLC bitmap build from the
   face at `/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf` beside the
   packaged faces, which stay for every renderer that is not swash-based.
 
+## ngit/ (nostr git transport)
+
+**ngit** and **git-remote-nostr**, Dan Conway's NIP-34/GRASP git-over-nostr
+tooling, from the [ngit-cli](https://github.com/DanConwayDev/ngit-cli)
+repository.
+
+- Source: <https://github.com/DanConwayDev/ngit-cli/tree/v3.0.5>
+- Vendored at upstream tag `v3.0.5` (2026-10-28) as the verbatim release
+  archive `ngit-v3.0.5-x86_64-unknown-linux-musl.tar.gz`, sha256
+  `d908fd2e8b818ad3c2427b54245c4dc98e765f4840846a321c98343ff3a773ba` — the
+  digest upstream's release page publishes. Unmodified; the archive is the
+  vendored unit because its two binaries install together
+  (`git-remote-nostr` is a launcher that re-executes `ngit` beside it).
+- License: [MIT](https://opensource.org/license/mit), whose full text ships
+  beside the archive (`ngit/LICENSE.md`). The binaries are data copied into
+  images kuma builds, which keeps the licenses side by side rather than
+  combined.
+- Why vendored at all: the nostr layer ships git-over-nostr out of the box
+  (`git clone nostr://…` works with no manual install), and the image build
+  carries no Rust toolchain — binaries arrive complete, so the pinned
+  upstream archive is the road that keeps provenance exact. Inert by
+  default: nothing runs until git meets a `nostr://` URL.
+
 ## The rest

@@ -3282,6 +3282,44 @@ pub(crate) const PLYMOUTH_THEME_DIR: &str = "spinner_alt";
 pub(crate) const NOTO_COLOR_EMOJI: &[u8] =
     include_bytes!("../../assets/noto-emoji/NotoColorEmoji.ttf");
 
+/// The nostr git transport, vendored the same way the emoji face is:
+/// no Fedora package ships it, and the layer's whole point is that
+/// plain git speaks the protocol kuma's daemon already serves. Two
+/// statically-linked musl binaries ride in one upstream release
+/// archive — `ngit`, the NIP-34/GRASP CLI, and `git-remote-nostr`, the
+/// launcher git discovers by filename whenever it meets a `nostr://`
+/// URL (the launcher contains almost nothing; it re-executes `ngit`
+/// beside it on a hidden internal command, which is why both names
+/// must install together, and why the archive is the vendored unit).
+///
+/// Upstream v3.0.5, tagged 2026-10-28, release archive
+/// `ngit-v3.0.5-x86_64-unknown-linux-musl.tar.gz`, sha256
+/// `d908fd2e8b818ad3c2427b54245c4dc98e765f4840846a321c98343ff3a773ba`
+/// (the digest upstream's release page publishes itself). The archive
+/// is vendored VERBATIM — never re-tarred — so the pin and upstream's
+/// digest are one number; the build extracts it and the doctor reads
+/// the versions back. Inert by default: no daemon, no unit, no keys —
+/// the helper only runs when a human gives git a `nostr://` URL, so
+/// the pair's attack surface while unused is zero. See
+/// assets/ngit/LICENSE.md for the license record; re-vendor by
+/// diffing against the pinned upstream tag.
+///
+/// The musl archive is x86_64-only, and that is fine until kuma ships
+/// an aarch64 image: the extraction RUN's `--version` gates fail the
+/// build loudly there — the same cost-at-build shape the nostrd
+/// version guard carries — rather than baking binaries that cannot run.
+pub(crate) const NGIT_RELEASE_TARBALL: &[u8] =
+    include_bytes!("../../assets/ngit/ngit-v3.0.5-x86_64-unknown-linux-musl.tar.gz");
+
+/// The vendored archive's upstream version, and the sha256 the build
+/// verifies it against before extraction. One const pair so the pin
+/// test, the Containerfile's extraction RUN, and the doctor's identity
+/// check all read the same two numbers — a re-vendor moves them in one
+/// commit or the tree refuses to agree with itself.
+pub(crate) const NGIT_PIN_VERSION: &str = "3.0.5";
+pub(crate) const NGIT_TARBALL_SHA256: &str =
+    "d908fd2e8b818ad3c2427b54245c4dc98e765f4840846a321c98343ff3a773ba";
+
 /// Rebrand the OS identity: kumaOS, not Fedora. ID_LIKE=fedora keeps tools
 /// that sniff os-release (toolbox, distrobox, dnf COPR, …) working. Runs
 /// last so every dnf layer before it still sees stock Fedora metadata.
@@ -5378,6 +5416,26 @@ fn nostr(e: &mut Emitter<'_>) {
     // a musl-host binary on a glibc base shows up here, at build, where
     // it costs a build, not at boot, where it costs the session.
     e.raw("RUN /usr/bin/kuma-nostrd --version\n");
+
+    // The nostr git transport rides the layer (#79): the pinned
+    // upstream archive extracts both binaries into /usr/bin, and the
+    // extraction RUN is the whole gate — digest verified before a byte
+    // lands, both binaries answering --version after. A wrong-arch or
+    // re-tarred archive fails the build here, not a user's clone.
+    let ngit_tarball = e.stage(
+        &format!("ngit-v{NGIT_PIN_VERSION}-x86_64-unknown-linux-musl.tar.gz"),
+        NGIT_RELEASE_TARBALL,
+    );
+    let ngit_archive_name = "ngit.tar.gz";
+    e.copy(&ngit_tarball, &format!("/tmp/{ngit_archive_name}"));
+    e.raw(&format!(
+        "RUN echo \"{NGIT_TARBALL_SHA256}  /tmp/{ngit_archive_name}\" > /tmp/{ngit_archive_name}.sha256 \
+        \\\n    && sha256sum -c /tmp/{ngit_archive_name}.sha256 \
+        \\\n    && tar -xzf /tmp/{ngit_archive_name} -C /usr/bin \
+        \\\n    && rm /tmp/{ngit_archive_name} /tmp/{ngit_archive_name}.sha256 \
+        \\\n    && /usr/bin/ngit --version \
+        \\\n    && /usr/bin/git-remote-nostr --version\n"
+    ));
 
     // The scheme handler wires a nostrconnect:// link to the shell's
     // panel — the panel itself lives in kuma-shell, which this block

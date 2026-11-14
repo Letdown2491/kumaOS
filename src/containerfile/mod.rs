@@ -19,6 +19,10 @@ pub(crate) use blocks::{
     COSIGN_PUB_PATH, COSMIC_GREETER_CONF, COSMIC_SESSION, FLATHUB_URL, GREETD_CONF,
     LOCAL_RELAY_URL, NIRI_SESSION,
 };
+// The nostr git transport's pin, read by the doctor's identity check:
+// the image bakes the pinned pair, and the doctor reads the versions
+// back against the same number the build extracted with.
+pub(crate) use blocks::NGIT_PIN_VERSION;
 // Read by inspect's doctor check, which grades what a niri config that
 // shadows the image's one can still run.
 #[cfg(test)]
@@ -1044,6 +1048,39 @@ mod tests {
             "assets/noto-emoji/NotoColorEmoji.ttf is not the pinned upstream \
              build: re-vendor deliberately and move this pin in the same commit"
         );
+    }
+
+    /// The vendored nostr git transport is the pinned upstream archive,
+    /// verbatim: never re-tarred, so the digest is one number here, in
+    /// the extraction RUN, and on upstream's own release page. A
+    /// changed archive without its pin moving is exactly the blob
+    /// nobody can vouch for.
+    #[test]
+    fn the_vendored_ngit_archive_is_the_pinned_upstream_build() {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(NGIT_RELEASE_TARBALL);
+        assert_eq!(
+            hex(&hash),
+            NGIT_TARBALL_SHA256,
+            "assets/ngit/ is not the pinned upstream archive: re-vendor \
+             deliberately and move the pin in the same commit"
+        );
+    }
+
+    /// The ngit pair the image extracts answers for the pin: the
+    /// archive carries both binaries, and the versions the doctor
+    /// reads back are the ones the build verified the digest against.
+    #[test]
+    fn the_image_extracts_the_ngit_pair_and_gates_it() {
+        let out = generate(&config("schema_version = 1"));
+        assert!(out.contains(&format!(
+            "COPY ngit-v{NGIT_PIN_VERSION}-x86_64-unknown-linux-musl.tar.gz /tmp/ngit.tar.gz"
+        )));
+        assert!(out.contains(
+            "sha256sum -c /tmp/ngit.tar.gz.sha256 \\\n    && tar -xzf /tmp/ngit.tar.gz -C /usr/bin"
+        ));
+        assert!(out.contains("&& /usr/bin/ngit --version"));
+        assert!(out.contains("&& /usr/bin/git-remote-nostr --version"));
     }
 
     /// The declaration, the units, and the helpers all shipped while the
