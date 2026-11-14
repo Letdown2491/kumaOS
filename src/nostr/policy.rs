@@ -1219,7 +1219,7 @@ mod tests {
         let engine = engine();
         let app = app();
         let engine_for_ask = engine.clone();
-        let app_for_ask = app.clone();
+        let app_for_ask = app;
         let ask = tokio::spawn(async move {
             engine_for_ask.decide(&app_for_ask, &NostrConnectMethod::GetPublicKey, &[]).await
         });

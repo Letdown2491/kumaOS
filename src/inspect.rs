@@ -3904,7 +3904,7 @@ fn wire_grades(
 /// Pure, so the test can pin all three shapes.
 fn signer_grade(connected: Option<&[String]>) -> (Grade, String) {
     match connected {
-        Some(c) if c.is_empty() => (
+        Some([]) => (
             Grade::Warn,
             "the vault is open and the daemon answers, but no relay reports a \
              connection — the bunker signs nothing over a dead wire"

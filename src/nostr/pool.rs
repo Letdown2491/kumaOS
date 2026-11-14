@@ -209,16 +209,16 @@ impl RelayPool {
             let shed = self.shed.clone();
             let thread_url = url.clone();
             move || {
-                one_relay(
-                    thread_url,
+                one_relay(RelayWiring {
+                    url: thread_url,
                     bunker_pubkey,
                     inbound,
                     status,
-                    outbound_rx,
+                    outbound: outbound_rx,
                     stop,
                     timing,
                     shed,
-                );
+                });
             }
         });
         // The road keeps the url beside the thread: what drop_app
@@ -369,10 +369,11 @@ impl RelayPool {
     }
 }
 
-/// One relay's whole life: connect, subscribe, serve, die, retry. Never
-/// panics and never gives up until `stop` — a relay that comes back has
-/// to find the bunker waiting.
-fn one_relay(
+/// The wiring one relay thread serves for its whole life, and what
+/// `connect_and_serve` borrows per attempt. One struct, not eight
+/// parameters: the arguments really do travel as one bundle, and the
+/// arity gate is the referee that said so.
+struct RelayWiring {
     url: String,
     bunker_pubkey: PublicKey,
     inbound: SyncSender<Event>,
@@ -381,33 +382,30 @@ fn one_relay(
     stop: Arc<AtomicBool>,
     timing: Timing,
     shed: Arc<AtomicU64>,
-) {
+}
+
+/// One relay's whole life: connect, subscribe, serve, die, retry. Never
+/// panics and never gives up until `stop` — a relay that comes back has
+/// to find the bunker waiting.
+fn one_relay(w: RelayWiring) {
     let mut backoff = BACKOFF_START;
     loop {
-        if stop.load(Ordering::SeqCst) {
+        if w.stop.load(Ordering::SeqCst) {
             return;
         }
         let connected = std::time::Instant::now();
-        match connect_and_serve(
-            &url,
-            bunker_pubkey,
-            &inbound,
-            &status,
-            &outbound,
-            &stop,
-            timing,
-            &shed,
-        ) {
+        match connect_and_serve(&w) {
             Ok(()) => return,
             Err(e) => {
-                let _ = status
-                    .try_send(RelayStatus { url: url.clone(), state: RelayState::Disconnected });
-                if stop.load(Ordering::SeqCst) {
+                let _ = w
+                    .status
+                    .try_send(RelayStatus { url: w.url.clone(), state: RelayState::Disconnected });
+                if w.stop.load(Ordering::SeqCst) {
                     return;
                 }
                 // The reason goes to stderr, where the unit's journal
                 // holds it; the status channel is what surfaces read.
-                eprintln!("kuma-nostrd: {url}: {e:#}");
+                eprintln!("kuma-nostrd: {}: {e:#}", w.url);
                 // A connection that held longer than the ceiling's own
                 // reach was a healthy road, not the retry of a dying
                 // one: its next reconnect goes from the floor again.
@@ -424,16 +422,8 @@ fn one_relay(
     }
 }
 
-fn connect_and_serve(
-    url: &str,
-    bunker_pubkey: PublicKey,
-    inbound: &SyncSender<Event>,
-    status: &SyncSender<RelayStatus>,
-    outbound: &Receiver<(Event, Fan)>,
-    stop: &AtomicBool,
-    timing: Timing,
-    shed: &AtomicU64,
-) -> Result<()> {
+fn connect_and_serve(w: &RelayWiring) -> Result<()> {
+    let url = &w.url;
     let (mut socket, _response) =
         tungstenite::connect(url).with_context(|| format!("connecting to {url}"))?;
     set_read_timeout(&mut socket, Some(Duration::from_secs(1)))?;
@@ -441,10 +431,10 @@ fn connect_and_serve(
 
     let filter = serde_json::json!({
         "kinds": [24133],
-        "#p": [bunker_pubkey.to_string()],
+        "#p": [w.bunker_pubkey.to_string()],
     });
     socket.send(Message::text(serde_json::json!(["REQ", SUBSCRIPTION_ID, filter]).to_string()))?;
-    let _ = status.try_send(RelayStatus { url: url.to_string(), state: RelayState::Connected });
+    let _ = w.status.try_send(RelayStatus { url: url.to_string(), state: RelayState::Connected });
 
     // The probe's books: the beat counter since the last ping, and the
     // pings sent with no inbound frame between them. Any frame at all
@@ -461,7 +451,7 @@ fn connect_and_serve(
     let mut suppressed: u64 = 0;
 
     loop {
-        if stop.load(Ordering::SeqCst) {
+        if w.stop.load(Ordering::SeqCst) {
             let _ = socket.close(None);
             return Ok(());
         }
@@ -472,7 +462,7 @@ fn connect_and_serve(
         // The road's own queue: everything in it is the road's to
         // carry — the fan-out decided that at send time.
         let mut drained = Vec::new();
-        while let Ok((event, _fan)) = outbound.try_recv() {
+        while let Ok((event, _fan)) = w.outbound.try_recv() {
             drained.push(event);
         }
         for event in drained {
@@ -511,8 +501,8 @@ fn connect_and_serve(
                     // queue would give it, without the RSS. The shed
                     // is counted now, so the silence has a number
                     // (#82's fix shape 1).
-                    if inbound.try_send(event).is_err() {
-                        shed.fetch_add(1, Ordering::Relaxed);
+                    if w.inbound.try_send(event).is_err() {
+                        w.shed.fetch_add(1, Ordering::Relaxed);
                     }
                 }
             }
@@ -536,10 +526,10 @@ fn connect_and_serve(
                 // connection dead and the backoff outside reconnects
                 // it.
                 beats_since_ping += 1;
-                if beats_since_ping >= timing.beats_per_ping {
+                if beats_since_ping >= w.timing.beats_per_ping {
                     beats_since_ping = 0;
                     unanswered += 1;
-                    if unanswered > timing.max_unanswered {
+                    if unanswered > w.timing.max_unanswered {
                         return Err(anyhow!(
                             "the relay went quiet: {unanswered} pings with no answer"
                         ));
