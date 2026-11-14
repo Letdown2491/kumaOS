@@ -1536,10 +1536,23 @@ smoke_published() {
     # over it; a slow runner day crosses that boundary, so the parse
     # must read both — the first draft captured [0-9.]* only and the
     # minute form parsed EMPTY, a false red in exactly the 60-90s band
-    # the ceiling exists to judge.
+    # the ceiling exists to judge. The minute form's sub-second part
+    # comes in TWO spellings: "1min 53.900s" (seconds decimals) and
+    # "1min 985ms" (milliseconds) — and the v45.4.0 publish road ate
+    # the second one, coercing 985ms to 985 SECONDS and reddening a
+    # 61-second boot at 1045.0s against a 180s ceiling. Both forms
+    # parse now, and so does a bare "985ms" under a minute.
     boot_userspace=$(printf '%s' "${boot_userspace:-}" | awk '{
-        if (NF == 2) { s = $1; sub(/min$/, "", s); printf "%.1f", s * 60 + $2 }
-        else if (NF == 1) { sub(/s$/, "", $1); print $1 }
+        if (NF == 2) {
+            s = $1; sub(/min$/, "", s); t = $2
+            if (t ~ /ms$/) { sub(/ms$/, "", t); printf "%.3f", s * 60 + t / 1000 }
+            else { sub(/s$/, "", t); printf "%.1f", s * 60 + t }
+        }
+        else if (NF == 1) {
+            t = $1
+            if (t ~ /ms$/) { sub(/ms$/, "", t); printf "%.3f", t / 1000 }
+            else { sub(/s$/, "", t); print t }
+        }
     }')
     case "${boot_userspace:-}" in
         ""|*[!0-9.]*) bad "systemd-analyze gave no userspace time to judge" ;;
