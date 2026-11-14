@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- **The image's git speaks `nostr://`.** The nostr git transport rides
+  in every image now: ngit and its `git-remote-nostr` launcher, baked
+  from the pinned upstream release (v3.0.5, verbatim musl archive —
+  the emoji-font precedent), verified by hash at build and gated on
+  their own `--version` before the layer can claim it shipped.
+  `git clone nostr://…` works on a fresh machine. The doctor reads the
+  pair's versions back rather than trusting the layer's presence: an
+  image that predates the transport grades a warn whose fix is
+  `kuma update`, instead of git dying later in its own bare transport
+  error. (#79)
+
+- **Doctor grades the wire under the signer.** The 45.2.1 lesson's
+  read side, closed: the vault line now grades the conjunction — an
+  open vault answering over no connected relay is a warn that names
+  the dead wire, not an Ok that vouches for it; the local relay's
+  unit gets a liveness check when the declaration arms it (a relay
+  that cannot stay up was silent while every other grade read green);
+  and a unit stuck `activating` is called a crash loop, with the
+  journal as the fix, instead of being told to `start`. The dev road
+  stopped swallowing its own failures in the same breath: a bounce
+  that fails is noted loudly at both call sites (the install print
+  says the daemon is *pointed at* the staged binary — what a
+  swallowed restart actually achieved), an adopt that finds a session
+  bus missing bails instead of staging silently, and the dev override
+  is audited — its ExecStart arguments drift when the image's unit
+  moves, and the audit's fix is re-running `kuma dev install`. (#77)
+
+- **The fallback lap's ceiling fits its work.** The upgrade-fallback
+  job's in-guest fallback compile measured 117–120 minutes against a
+  150-minute job ceiling that one runner shutdown and one unfinished
+  lap proved was runner-weather roulette: the ceiling is 180 now. (#81)
+
 - **Battery-watch stopped polling.** The low/critical notifier woke the
   machine every 60 seconds — 1,440 wakeups a day on every machine,
   battery or none — to read two sysfs files. It now watches udev's
