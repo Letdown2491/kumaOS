@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v45.4.0 (2026-11-13)
+
 - **The image's git speaks `nostr://`.** The nostr git transport rides
   in every image now: ngit and its `git-remote-nostr` launcher, baked
   from the pinned upstream release (v3.0.5, verbatim musl archive —
