@@ -242,14 +242,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(SOCKET_NAME);
         let listener = bind(&path).unwrap();
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let (daemon, inbound_rx) =
             Daemon::new(Vault::new(MemoryStore::default()), vec![stub.url.clone()], None);
         let engine = daemon.engine();
         let daemon = Arc::new(Mutex::new(daemon));
         std::thread::spawn({
             let daemon = daemon.clone();
-            let handle = runtime.handle().clone();
             move || loop {
                 let Ok(event) = inbound_rx.recv() else {
                     return;
@@ -261,15 +259,10 @@ mod tests {
                     crate::nostr::bunker::Plan::Answer(answer) => {
                         let _ = daemon.lock().unwrap().publish(&answer);
                     }
-                    crate::nostr::bunker::Plan::Ask { ref request, method, ref params, .. } => {
-                        use crate::nostr::bunker::Gate;
-                        let decision =
-                            handle.block_on(engine.decide(&request.pubkey, &method, params));
-                        let answer =
-                            { daemon.lock().unwrap().execute_bunker_event(plan, decision) };
-                        if let Some(answer) = answer {
-                            let _ = daemon.lock().unwrap().publish(&answer);
-                        }
+                    crate::nostr::bunker::Plan::Ask { .. } => {
+                        // The ask rides the production road: decide,
+                        // execute, publish off the worker (#82).
+                        Daemon::spawn_ask(&daemon, engine.clone(), plan);
                     }
                     crate::nostr::bunker::Plan::Paired { .. }
                     | crate::nostr::bunker::Plan::RelaysServed { .. }
@@ -538,6 +531,174 @@ mod tests {
         });
     }
 
+    /// #82's win, end to end: two apps' asks pending at the same
+    /// moment — each parked on its own person — while the daemon's
+    /// lock stays free enough for the socket verbs to answer, and
+    /// each approval publishes its own answer to its own app, in the
+    /// order the person chose, not the order the wire chose. The old
+    /// single worker could not have this: one ask parked the planner,
+    /// the second app's request never became a prompt, and at the
+    /// bound it shed instead.
+    #[test]
+    fn two_apps_asks_pend_at_once_and_each_answer_carries_its_own_id() {
+        use crate::nostr::test_relay::{wait_for, StubRelay};
+        use nostr::nips::nip46::{NostrConnectMessage, NostrConnectMethod};
+
+        let stub = StubRelay::start(Vec::new());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SOCKET_NAME);
+        let listener = bind(&path).unwrap();
+        let (daemon, inbound_rx) =
+            Daemon::new(Vault::new(MemoryStore::default()), vec![stub.url.clone()], None);
+        let engine = daemon.engine();
+        let daemon = Arc::new(Mutex::new(daemon));
+        // The worker, in the shape nostrd runs: plan only. Asks ride
+        // the production road.
+        std::thread::spawn({
+            let daemon = daemon.clone();
+            move || loop {
+                let Ok(event) = inbound_rx.recv() else {
+                    return;
+                };
+                let plan = { daemon.lock().unwrap().plan_bunker_event(&event) };
+                let Some(plan) = plan else { continue };
+                match plan {
+                    crate::nostr::bunker::Plan::Ignore
+                    | crate::nostr::bunker::Plan::Paired { .. }
+                    | crate::nostr::bunker::Plan::RelaysServed { .. }
+                    | crate::nostr::bunker::Plan::Ended { .. }
+                    | crate::nostr::bunker::Plan::Shed { .. } => continue,
+                    crate::nostr::bunker::Plan::Answer(answer) => {
+                        let _ = daemon.lock().unwrap().publish(&answer);
+                    }
+                    crate::nostr::bunker::Plan::Ask { .. } => {
+                        Daemon::spawn_ask(&daemon, engine.clone(), plan);
+                    }
+                }
+            }
+        });
+        std::thread::spawn({
+            let daemon = daemon.clone();
+            move || serve(listener, daemon)
+        });
+
+        let mut client = UnixStream::connect(&path).unwrap();
+        let ask = |mut client: &UnixStream, line: &str| -> String {
+            client.write_all(line.as_bytes()).unwrap();
+            client.write_all(b"\n").unwrap();
+            let mut answer = String::new();
+            BufReader::new(client.try_clone().unwrap()).read_line(&mut answer).unwrap();
+            answer
+        };
+        ask(&mut client, r#"{"cmd":"setup","mode":{"how":"generate"}}"#);
+
+        // Two apps pair by paste, the road a person runs twice.
+        let relay_encoded = stub.url.replace(':', "%3A").replace('/', "%2F");
+        let mut apps = Vec::new();
+        for (name, id) in [("PasterA", "ask-a"), ("PasterB", "ask-b")] {
+            let app = Keys::generate();
+            let uri = format!(
+                "nostrconnect://{}?relay={}&secret={name}-secret&name={name}",
+                app.public_key(),
+                relay_encoded
+            );
+            let paired = ask(&mut client, &format!(r#"{{"cmd":"connect","uri":"{uri}"}}"#));
+            assert!(paired.contains("\"ok\":true"), "{name} paired: {paired}");
+            apps.push((app, id));
+        }
+
+        // Both apps ask at once — injected back to back, before any
+        // person has answered either. The bunker's identity is the
+        // handshake's author, the way the client learns it.
+        wait_for("the two handshakes to go out", 100, || {
+            stub.received().iter().filter(|f| f.contains(":24133")).count() >= 2
+        });
+        let frames: Vec<String> =
+            stub.received().into_iter().filter(|f| f.contains(":24133")).collect();
+        let parsed: serde_json::Value = serde_json::from_str(&frames[0]).unwrap();
+        let handshake: Event = serde_json::from_value(parsed[1].clone()).unwrap();
+        let bunker_pubkey = handshake.pubkey;
+        for (app, id) in &apps {
+            // The id is the test's own — the correlation the answer
+            // must echo back.
+            let message = NostrConnectMessage::Request {
+                id: id.to_string(),
+                method: NostrConnectMethod::GetPublicKey,
+                params: vec![],
+            };
+            let content = app.nip44_encrypt(&bunker_pubkey, &message.as_json()).unwrap();
+            let request = EventBuilder::new(Kind::NostrConnect, content)
+                .tag(Tag::public_key(bunker_pubkey))
+                .finalize(app)
+                .unwrap();
+            stub.inject(&request);
+        }
+
+        // BOTH prompts exist at the same moment — the planner never
+        // parked on either person. The socket verbs answer while the
+        // asks wait, which is the lock story the fix promises.
+        wait_for("both prompts to exist at once", 100, || {
+            let prompts: serde_json::Value =
+                serde_json::from_str(ask(&mut client, r#"{"cmd":"prompts"}"#).trim()).unwrap();
+            prompts["prompts"].as_array().map(|a| a.len()) == Some(2)
+        });
+
+        // The person answers in the REVERSE order the wire brought:
+        // B first, then A. Each prompt's card names its app, so the
+        // approval aims by id, not by arrival.
+        let prompts: serde_json::Value =
+            serde_json::from_str(ask(&mut client, r#"{"cmd":"prompts"}"#).trim()).unwrap();
+        let id_for = |app_hex: &str| -> String {
+            prompts["prompts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["app"].as_str() == Some(app_hex))
+                .expect("each app has its own card")["id"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        for (app, _) in apps.iter().rev() {
+            let prompt_id = id_for(&app.public_key().to_string());
+            let approved = ask(
+                &mut client,
+                &format!(r#"{{"cmd":"approve","id":"{prompt_id}","remember_hours":null}}"#),
+            );
+            assert!(approved.contains("\"ok\":true"), "{approved}");
+        }
+
+        // Two answers on the wire, and the correlation is each app's
+        // own: A's id to A's key, B's id to B's key — encrypted to the
+        // one app, so only its key opens it.
+        wait_for("both answers to come back", 100, || {
+            let frames: Vec<String> =
+                stub.received().into_iter().filter(|f| f.contains(":24133")).collect();
+            frames.len() >= 4 // two handshakes + two answers
+        });
+        for (app, id) in &apps {
+            let frame = stub
+                .received()
+                .into_iter()
+                .filter(|f| f.contains(":24133"))
+                .find_map(|f| {
+                    let parsed: serde_json::Value = serde_json::from_str(&f).unwrap();
+                    let event: Event = serde_json::from_value(parsed[1].clone()).ok()?;
+                    let plaintext = app.nip44_decrypt(&event.pubkey, &event.content).ok()?;
+                    match NostrConnectMessage::from_json(&plaintext).ok()? {
+                        NostrConnectMessage::Response { id: rid, result, .. }
+                            if result.as_deref() == Some(&bunker_pubkey.to_string()) =>
+                        {
+                            Some(rid)
+                        }
+                        _ => None,
+                    }
+                })
+                .unwrap_or_else(|| panic!("an answer came back encrypted to {id}"));
+            assert_eq!(&frame, id, "the answer is the app's own ask, by id");
+        }
+    }
+
     /// The layer's crown test, and the reason the stub relay exists:
     /// a daemon serving its unix socket, armed by the socket verb
     /// itself, whose bunker answers an app's request across a real
@@ -545,7 +706,6 @@ mod tests {
     /// Every hop is real; only the keyring is a stand-in.
     #[test]
     fn a_request_reaches_the_bunker_and_its_answer_comes_back() {
-        use crate::nostr::bunker::Gate;
         use crate::nostr::test_relay::StubRelay;
         use nostr::nips::nip46::{NostrConnectMessage, NostrConnectMethod, NostrConnectRequest};
 
@@ -556,18 +716,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(SOCKET_NAME);
         let listener = bind(&path).unwrap();
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let (daemon, inbound_rx) =
             Daemon::new(Vault::new(MemoryStore::default()), vec![stub.url.clone()], None);
         let engine = daemon.engine();
         let daemon = Arc::new(Mutex::new(daemon));
         // The worker, in the shape nostrd runs: plan under the lock,
-        // decide with the lock released (an Ask may wait on a person
-        // whose answer arrives through the socket), execute under it
-        // again, publish after. Answers and asks both end at the relay.
+        // in queue order — and nothing else. Asks hand their waits to
+        // per-task threads (spawn_ask), pairing burns theirs to the
+        // completion task, and answers publish straight off the
+        // worker. Answers and asks both end at the relay.
         std::thread::spawn({
             let daemon = daemon.clone();
-            let handle = runtime.handle().clone();
             move || loop {
                 let Ok(event) = inbound_rx.recv() else {
                     return;
@@ -589,10 +748,14 @@ mod tests {
                             perms,
                             metadata.as_ref().and_then(|m| m.url.clone()),
                         );
-                        if let Some(burned) = burned {
-                            let _ = handle.block_on(daemon.lock().unwrap().burn(&burned.secret));
+                        match burned {
+                            Some(burned) => {
+                                Daemon::spawn_paired_completion(&daemon, answer, burned);
+                            }
+                            None => {
+                                let _ = daemon.lock().unwrap().publish(&answer);
+                            }
                         }
-                        let _ = daemon.lock().unwrap().publish(&answer);
                     }
                     crate::nostr::bunker::Plan::Answer(answer) => {
                         let _ = daemon.lock().unwrap().publish(&answer);
@@ -618,14 +781,8 @@ mod tests {
                         engine.logout(&app.to_string());
                         let _ = daemon.lock().unwrap().publish(&answer);
                     }
-                    crate::nostr::bunker::Plan::Ask { ref request, method, ref params, .. } => {
-                        let decision =
-                            handle.block_on(engine.decide(&request.pubkey, &method, params));
-                        let answer =
-                            { daemon.lock().unwrap().execute_bunker_event(plan, decision) };
-                        if let Some(answer) = answer {
-                            let _ = daemon.lock().unwrap().publish(&answer);
-                        }
+                    crate::nostr::bunker::Plan::Ask { .. } => {
+                        Daemon::spawn_ask(&daemon, engine.clone(), plan);
                     }
                 }
             }

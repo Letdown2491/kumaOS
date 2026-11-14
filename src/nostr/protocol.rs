@@ -392,6 +392,97 @@ impl<S: super::vault::SecretStore> Daemon<S> {
         }))
     }
 
+    /// One ask's whole life, off the worker: decide (the wait on a
+    /// person, up to the prompt TTL, with no daemon lock held — the
+    /// person's approve arrives through a socket verb that needs the
+    /// lock free), then execute under the lock, then publish. The
+    /// worker stays the sole planner — admission, the replay gates,
+    /// the rate buckets, all of it stays queue-ordered — but a
+    /// person's think-time now parks a per-ask thread instead of the
+    /// transport: every other app's asks plan, decide, and answer
+    /// while one card waits (#82). The FIFO answer order the single
+    /// worker gave for free is gone — NIP-46 clients correlate by id,
+    /// the spec requires no ordering, and nothing in-tree consumed
+    /// it. The prompt cap and the per-sender buckets, not the worker,
+    /// are the bounds now; both were already concurrency-correct.
+    pub fn spawn_ask(
+        daemon: &std::sync::Arc<std::sync::Mutex<Self>>,
+        engine: super::policy::Engine,
+        ask: super::bunker::Plan,
+    ) -> Option<std::thread::JoinHandle<()>>
+    where
+        S: std::marker::Send + 'static,
+    {
+        // Only an Ask rides this road; every other plan is the
+        // worker's straight-line business.
+        if !matches!(ask, super::bunker::Plan::Ask { .. }) {
+            return None;
+        }
+        let daemon = std::sync::Arc::clone(daemon);
+        Some(std::thread::spawn(move || {
+            // The runtime is the ask's own, for the reason the socket
+            // connection's is: the vault's futures are un-`Send`, and
+            // a current-thread runtime polls what it spawned only
+            // while its own thread is inside `block_on`. An ask of
+            // one's own parks a thread of one's own — that is the
+            // point.
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("building the ask runtime");
+            use crate::nostr::bunker::Gate;
+            let decision = match &ask {
+                super::bunker::Plan::Ask { request, method, params, .. } => {
+                    runtime.block_on(engine.decide(&request.pubkey, method, params))
+                }
+                // spawn_ask guarded the shape above; the match only
+                // lets the borrow see the fields.
+                _ => unreachable!("spawn_ask only spawns an Ask"),
+            };
+            let answer =
+                daemon.lock().expect("the daemon lock").execute_bunker_event(ask, decision);
+            if let Some(answer) = answer {
+                if let Err(e) = daemon.lock().expect("the daemon lock").publish(&answer) {
+                    eprintln!("kuma-nostrd: the answer was not published: {e:#}");
+                }
+            }
+        }))
+    }
+
+    /// A pairing's completion, off the worker: the connect's secret
+    /// burns into the keyring — a D-Bus write, and the 51.x storm's
+    /// own stage — and only then does the ack publish. The remove
+    /// already happened in `plan` under the daemon lock; what this
+    /// task owns is burn → publish, in that order, for its one
+    /// secret. Two pairings burning two secrets are independent: the
+    /// vault's burn is keyed by value, and no ordering between
+    /// distinct secrets' burns is relied on anywhere.
+    pub fn spawn_paired_completion(
+        daemon: &std::sync::Arc<std::sync::Mutex<Self>>,
+        answer: Event,
+        burned: super::bunker::Outstanding,
+    ) -> std::thread::JoinHandle<()>
+    where
+        S: std::marker::Send + 'static,
+    {
+        let daemon = std::sync::Arc::clone(daemon);
+        std::thread::spawn(move || {
+            // The ask runtime's own rationale, one pairing wide.
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("building the burn runtime");
+            if let Err(e) =
+                runtime.block_on(daemon.lock().expect("the daemon lock").burn(&burned.secret))
+            {
+                eprintln!("kuma-nostrd: the burned secret did not persist: {e:#}");
+            }
+            if let Err(e) = daemon.lock().expect("the daemon lock").publish(&answer) {
+                eprintln!("kuma-nostrd: the answer was not published: {e:#}");
+            }
+        })
+    }
+
     pub async fn handle(&mut self, request: Request) -> Response {
         match request {
             Request::Ping => Response::Ok(OkResponse::Ping { ok: true }),

@@ -126,28 +126,26 @@ fn main() -> anyhow::Result<()> {
     Daemon::spawn_inactivity_watchdog(&daemon, std::time::Duration::from_secs(60));
 
     // The bunker worker: relay-delivered events in, answers published
-    // out. The three beats are the lock story: plan under the lock,
-    // decide with the lock released (an Ask waits on a person, and the
-    // person's approve arrives through a socket verb that needs this
-    // lock free), execute under it again, publish after. It lives for
-    // the process; a lock just makes its answers None until the next
-    // unlock.
+    // out. The worker is the planner — plan under the lock, in queue
+    // order — and nothing else: asks and pairing burns hand their
+    // waits to per-task threads, because a person's think-time and a
+    // keyring's D-Bus round trip are nobody else's head of line. It
+    // lives for the process; a lock just makes the bunker's answers
+    // None until the next unlock.
     let worker = daemon.clone();
     std::thread::spawn(move || {
-        // The worker's runtime is its own, built on the thread that
-        // drives it. The main thread's runtime parked the moment serve()
-        // took that thread: a future borrowed through its handle that
-        // wanted the I/O or timer driver waited on a poll that never
-        // came. The burn beat — a keyring write taken under the daemon
-        // lock, on the first URI connect to arrive by relay — hung the
-        // daemon whole, and an ask's five-minute fuse never burned
-        // either. A runtime this thread block_on's is polled for
-        // exactly the life of the worker, which is the life these
-        // futures need.
-        let worker_runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("building the worker runtime");
+        // The worker is the sole planner: admission, the replay
+        // gates, the rate buckets — everything that decides whether a
+        // request counts — happens here, in queue order, under the
+        // daemon lock. What it no longer does is wait: an ask's
+        // decide/execute/publish and a pairing's burn ride per-task
+        // threads with runtimes of their own (spawn_ask,
+        // spawn_paired_completion), because a person's think-time and
+        // a keyring's D-Bus round trip are nobody else's head of
+        // line. That is what the old single-thread loop was: one app's
+        // five-minute card parked every other app's every request
+        // behind it, and at the inbound bound the shed dropped them
+        // silently (#82).
         loop {
             let Ok(event) = inbound_rx.recv() else {
                 return;
@@ -177,15 +175,23 @@ fn main() -> anyhow::Result<()> {
                         perms,
                         metadata.as_ref().and_then(|m| m.url.clone()),
                     );
-                    if let Some(burned) = burned {
-                        if let Err(e) = worker_runtime
-                            .block_on(worker.lock().expect("the daemon lock").burn(&burned.secret))
-                        {
-                            eprintln!("kuma-nostrd: the burned secret did not persist: {e:#}");
+                    match burned {
+                        Some(burned) => {
+                            // The burn is a keyring write — D-Bus, and
+                            // the 51.x storm's own stage. Off the
+                            // worker it goes (#82's road): a first
+                            // URI connect no longer parks the whole
+                            // transport on a D-Bus round trip, and
+                            // the ack publishes when the burn says
+                            // its word, not before.
+                            Daemon::spawn_paired_completion(&worker, answer, burned);
                         }
-                    }
-                    if let Err(e) = worker.lock().expect("the daemon lock").publish(&answer) {
-                        eprintln!("kuma-nostrd: the answer was not published: {e:#}");
+                        None => {
+                            if let Err(e) = worker.lock().expect("the daemon lock").publish(&answer)
+                            {
+                                eprintln!("kuma-nostrd: the answer was not published: {e:#}");
+                            }
+                        }
                     }
                 }
                 kuma::nostr::bunker::Plan::Answer(answer) => {
@@ -213,18 +219,15 @@ fn main() -> anyhow::Result<()> {
                         eprintln!("kuma-nostrd: the answer was not published: {e:#}");
                     }
                 }
-                kuma::nostr::bunker::Plan::Ask { ref request, method, ref params, .. } => {
-                    use kuma::nostr::bunker::Gate;
-                    let decision =
-                        worker_runtime.block_on(engine.decide(&request.pubkey, &method, params));
-                    let answer = {
-                        worker.lock().expect("the daemon lock").execute_bunker_event(plan, decision)
-                    };
-                    if let Some(answer) = answer {
-                        if let Err(e) = worker.lock().expect("the daemon lock").publish(&answer) {
-                            eprintln!("kuma-nostrd: the answer was not published: {e:#}");
-                        }
-                    }
+                kuma::nostr::bunker::Plan::Ask { .. } => {
+                    // The ask's whole life off the worker: decide (the
+                    // wait on a person, up to the prompt TTL) parks a
+                    // per-ask thread, not the transport — every other
+                    // app's asks plan, decide, and answer while one
+                    // card waits (#82). The worker keeps planning; the
+                    // prompt cap and the per-sender buckets are the
+                    // bounds, and both were already concurrency-safe.
+                    Daemon::spawn_ask(&worker, engine.clone(), plan);
                 }
             }
         }
