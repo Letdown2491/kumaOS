@@ -116,7 +116,9 @@ impl Receipt {
             if std::fs::remove_file(&override_path).is_ok() {
                 retired.push(override_path.display().to_string());
             }
-            bounce_daemon();
+            for failure in bounce_daemon() {
+                note(&failure);
+            }
         }
         let _ = std::fs::remove_file(receipt_path());
         retired
@@ -148,7 +150,7 @@ fn bin_home() -> PathBuf {
 /// image's binary.
 const DAEMON_UNIT: &str = "kuma-nostrd.service";
 
-fn daemon_override() -> PathBuf {
+pub(crate) fn daemon_override() -> PathBuf {
     std::env::var_os("HOME")
         .map(|home| {
             PathBuf::from(home).join(".config/systemd/user/kuma-nostrd.service.d/override.conf")
@@ -162,16 +164,35 @@ fn daemon_override() -> PathBuf {
 /// daemon stays stopped: a dev install adopts the daemon, retirement
 /// reverts it, and neither one starts a unit the machine had
 /// deliberately down.
-fn bounce_daemon() {
-    let _ = Command::new("systemctl").args(["--user", "daemon-reload"]).status();
+///
+/// The failure stories come back to the caller — the 45.2.1 lesson at
+/// this call site: a swallowed restart left the OLD daemon on the
+/// image's binary while install's own print claimed the staged one
+/// (#77 finding 8). Silence is the one thing a failed bounce may not
+/// be.
+fn bounce_daemon() -> Vec<String> {
+    let mut failures = Vec::new();
+    if !Command::new("systemctl").args(["--user", "daemon-reload"]).status().map(|s| s.success()).unwrap_or(false) {
+        failures.push("systemctl --user daemon-reload failed".to_string());
+    }
     let active = Command::new("systemctl")
         .args(["--user", "is-active", "--quiet", DAEMON_UNIT])
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
-    if active {
-        let _ = Command::new("systemctl").args(["--user", "restart", DAEMON_UNIT]).status();
+    if active
+        && !Command::new("systemctl")
+            .args(["--user", "restart", DAEMON_UNIT])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    {
+        failures.push(format!(
+            "systemctl --user restart {DAEMON_UNIT} failed — the daemon may still \
+             run the image's binary until it is restarted for real"
+        ));
     }
+    failures
 }
 
 /// The arguments the image's unit bakes onto the daemon's ExecStart —
@@ -225,7 +246,19 @@ fn execstart_args_from_cat(text: &str, override_path: &std::path::Path) -> Optio
     last
 }
 
-fn unit_execstart_args() -> Result<String> {
+/// The arguments the dev override itself carries: the same parser,
+/// with the override path unmatched, so every line counts and the
+/// LAST ExecStart is the live one. Pure, and pinned by the same test
+/// suite that holds the fragment interleavings.
+pub(crate) fn override_execstart_args(text: &str) -> Option<String> {
+    execstart_args_from_cat(text, std::path::Path::new("/not/the/override.conf"))
+}
+
+/// The unit's current ExecStart arguments (everything after the
+/// binary, from the non-override fragments). pub(crate) because the
+/// doctor's override audit diffs them against the override's own —
+/// the 45.2.1 shape at the override itself (#77 fix shape 3).
+pub(crate) fn unit_execstart_args() -> Result<String> {
     let out = Command::new("systemctl")
         .args(["--user", "cat", DAEMON_UNIT])
         .output()
@@ -256,6 +289,24 @@ fn adopt_daemon(receipt: &Receipt) -> Result<Option<String>> {
         .status()
         .with_context(|| format!("cannot ask systemd about {DAEMON_UNIT}"))?;
     if !unit.success() {
+        // Two stories hide behind that failure, and they used to share
+        // one silent exit (finding 9, #77): the unit is not on this
+        // machine (no nostr layer — nothing to adopt, the quiet
+        // Ok(None) is right), and systemctl --user could not be asked
+        // at all (no session bus over SSH — the binaries stage, the
+        // receipt claims the daemon, and the daemon was never
+        // adopted). The unit FILE disambiguates: the image bakes it,
+        // so its presence behind a failed ask is the interrogation's
+        // failure, and loud.
+        let baked = std::path::PathBuf::from("/usr/lib/systemd/user").join(DAEMON_UNIT);
+        if baked.exists() {
+            bail!(
+                "the nostr layer is on this machine ({DAEMON_UNIT} is baked), but \
+                 systemctl --user could not be asked — is there a session bus? \
+                 The daemon was NOT adopted: the override is unwritten and the \
+                 staged binary is not running"
+            );
+        }
         // No nostr layer on this machine: the daemon stages for an
         // image that may carry it, and there is nothing here to adopt.
         return Ok(None);
@@ -281,7 +332,9 @@ fn adopt_daemon(receipt: &Receipt) -> Result<Option<String>> {
         ),
     )
     .with_context(|| format!("cannot write {}", override_path.display()))?;
-    bounce_daemon();
+    for failure in bounce_daemon() {
+        note(&failure);
+    }
     Ok(Some(override_path.display().to_string()))
 }
 
@@ -354,7 +407,7 @@ pub fn install(checkouts: &[PathBuf], json: bool) -> Result<()> {
     }
     if let Some(path) = &daemon {
         println!(
-            "\nThe nostr daemon runs the staged binary (override at {path}; \
+            "\nThe nostr daemon is pointed at the staged binary (override at {path}; \
              a stopped unit stays stopped)."
         );
     }
@@ -735,6 +788,33 @@ ExecStart=/var/home/myuser/.local/bin/kuma-nostrd
         let args = execstart_args_from_cat(commented, &override_path)
             .expect("the image's ExecStart is in the cat output");
         assert_eq!(args, "--relay wss://relay.nip46.com");
+    }
+
+    /// The override audit's own read (#77 fix shape 3): the override's
+    /// LAST ExecStart minus the binary, from the override file's text
+    /// alone. The doctor diffs this against the unit's current
+    /// non-override arguments — install-time args surviving an image
+    /// whose unit moved is the 45.2.1 shape at the override itself.
+    #[test]
+    fn the_override_audit_reads_the_overrides_own_arguments() {
+        let override_text = "\
+# Managed by `kuma dev install` — removed when the lease retires,
+# so the daemon reverts to the image's binary.
+[Service]
+ExecStart=
+ExecStart=/var/home/myuser/.local/bin/kuma-nostrd --relay wss://stale.example
+";
+        assert_eq!(
+            override_execstart_args(override_text).as_deref(),
+            Some("--relay wss://stale.example"),
+            "the override's own arguments, whatever the unit says now"
+        );
+        // An override written when the unit carried no arguments reads
+        // back empty — which is a FACT to diff, not an absence.
+        let bare = "ExecStart=\nExecStart=/var/home/myuser/.local/bin/kuma-nostrd\n";
+        assert_eq!(override_execstart_args(bare).as_deref(), Some(""));
+        // And an unparseable override names the gap.
+        assert_eq!(override_execstart_args("[Unit]\n"), None);
     }
 
     /// The stamp gate's parsing side. The kuma shape is

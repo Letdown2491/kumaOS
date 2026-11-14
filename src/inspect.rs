@@ -3248,6 +3248,42 @@ fn check_dev_install(report: &mut impl FnMut(Grade, &str, String, Option<Action>
         ),
         None,
     );
+    // The override audit (fix shape 3, #77): a non-lapsed override
+    // holds the arguments of the image install that wrote it, and
+    // nothing re-reads them when the image's unit moves — the daemon
+    // runs the stale relay set while the override's own words are the
+    // only story any check reads. The audit diffs the override's
+    // ExecStart arguments against the unit's current non-override
+    // ones; either direction of drift is the same stale story, and
+    // the re-run is the fix — install reads the unit's args fresh.
+    // Unaskable is silent: the unit questions need a session bus, and
+    // a check that could not be made is not a broken machine.
+    if !receipt.binaries.iter().any(|b| b.name == "kuma-nostrd") {
+        return;
+    }
+    let Ok(unit_args) = crate::dev::unit_execstart_args() else { return };
+    let override_path = crate::dev::daemon_override();
+    let Ok(override_text) = std::fs::read_to_string(&override_path) else { return };
+    let override_args =
+        crate::dev::override_execstart_args(&override_text).unwrap_or_default();
+    if override_args != unit_args {
+        report(
+            Grade::Warn,
+            "dev install",
+            format!(
+                "the dev override's arguments are not the unit's current ones — written at \
+                 install time, and the image's unit has since moved. The daemon runs the \
+                 stale set (the relay set is the one that hurts); override says {}, the unit says {}",
+                if override_args.is_empty() { "nothing".to_string() } else { plain(&override_args) },
+                if unit_args.is_empty() { "nothing".to_string() } else { plain(&unit_args) }
+            ),
+            Some(Action::new(
+                "dev install",
+                "kuma dev install",
+                "re-stages and re-reads the unit's arguments onto the override",
+            )),
+        );
+    }
 }
 
 /// The relic sweep: kuma's own binary names in `~/.cargo/bin`. The
@@ -3470,6 +3506,49 @@ fn check_nostr(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
         ),
     }
 
+    // The local relay's liveness (fix shape 4, #77): the declaration
+    // arming the relay is what the preset arms the unit from, and the
+    // daemon's first subscription dying is silent today — the pool
+    // retries forever, stderr only, while the bunker hears nothing and
+    // every other check reads green. The unit is asked the same way
+    // the daemon's is; unaskable is silent (a check that could not be
+    // made is not a broken machine), and a crash loop names itself.
+    if config.nostr.relay.enable {
+        match unit_state("nip46-relay.service") {
+            UnitState::Active => report(
+                Grade::Ok,
+                "nostr",
+                "the local relay's unit is active".into(),
+                None,
+            ),
+            UnitState::Activating => report(
+                Grade::Warn,
+                "nostr",
+                "the local relay's unit is crash-looping — systemd reports activating, \
+                 and a relay that cannot stay up is a wire the bunker cannot take"
+                    .into(),
+                Some(Action::new(
+                    "read the journal",
+                    "journalctl --user -u nip46-relay.service -n 50".to_string(),
+                    "a unit that cannot stay up names its own reason here",
+                )),
+            ),
+            UnitState::Inactive => report(
+                Grade::Warn,
+                "nostr",
+                "the declaration arms the local relay, but its unit is not running — \
+                 the bunker's first subscription has nothing to subscribe to"
+                    .into(),
+                Some(Action::new(
+                    "start",
+                    "systemctl --user start nip46-relay.service".to_string(),
+                    "the unit is installed; the preset arms it at login",
+                )),
+            ),
+            UnitState::Unknown => {}
+        }
+    }
+
     // The tailnet exposure, graded against the declaration: the baked
     // unit exists exactly when the declaration said serve, so the
     // question is whether tailscale's own state agrees. Asking it can
@@ -3546,8 +3625,8 @@ fn check_nostr(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
     let mut client = match kuma::nostr::client::connect(None) {
         Ok(client) => client,
         Err(_) => {
-            let (grade, detail, fix) = match unit_active() {
-                Some(false) => (
+            let (grade, detail, fix) = match unit_state("kuma-nostrd.service") {
+                UnitState::Inactive => (
                     Grade::Warn,
                     "the bunker's daemon is not running".to_string(),
                     Some(Action::new(
@@ -3556,7 +3635,18 @@ fn check_nostr(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
                         "the unit is installed and enabled; it just is not running",
                     )),
                 ),
-                _ => (
+                UnitState::Activating => (
+                    Grade::Warn,
+                    "the bunker's daemon is crash-looping — systemd reports activating, \
+                     which is start-after-death, not a start that works"
+                        .to_string(),
+                    Some(Action::new(
+                        "read the journal",
+                        "journalctl --user -u kuma-nostrd.service -n 50".to_string(),
+                        "a unit that cannot stay up names its own reason here",
+                    )),
+                ),
+                UnitState::Active => (
                     Grade::Warn,
                     "the bunker's daemon is not answering on its socket".to_string(),
                     Some(Action::new(
@@ -3564,6 +3654,11 @@ fn check_nostr(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
                         "systemctl --user restart kuma-nostrd.service".to_string(),
                         "a daemon that is running but not answering is one to restart",
                     )),
+                ),
+                UnitState::Unknown => (
+                    Grade::Warn,
+                    "the bunker's daemon is not answering on its socket".to_string(),
+                    None,
                 ),
             };
             report(grade, "nostr", detail, fix);
@@ -3590,12 +3685,19 @@ fn check_nostr(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
                         "it asks which road; `kuma-nostr import` brings a key you already hold",
                     )),
                 ),
-                (_, Some(true)) => report(
-                    Grade::Ok,
-                    "nostr",
-                    "the vault is open and the bunker answers".into(),
-                    None,
-                ),
+                (_, Some(true)) => {
+                    // The conjunction (fix shape 5, #77): "the signer
+                    // works" is the AND of unit active, socket
+                    // answering, vault unlocked, and a wire. The first
+                    // two are the road that reached this line, so the
+                    // vault line claims the pair only when a wire is
+                    // under it — an open vault on a dead wire is the
+                    // 45.2.1 afternoon in one grade, and the wire's
+                    // own detail carries the diagnosis below.
+                    let (grade, wording) =
+                        signer_grade(json_strings(&status["vault"]["connected"]).as_deref());
+                    report(grade, "nostr", wording, None);
+                },
                 (_, Some(false)) => report(
                     Grade::Warn,
                     "nostr",
@@ -3755,6 +3857,25 @@ fn wire_grades(
     grades
 }
 
+/// The conjunction the nostr section grades toward (fix shape 5,
+/// #77): "the signer works" is the AND of unit active, socket
+/// answering, vault unlocked, and a wire. The first two are the road
+/// that reached the vault read, so this grades the last pair. A
+/// status document with no connected field (an older daemon across a
+/// dev install) is not judged: absent facts are not failing ones.
+/// Pure, so the test can pin all three shapes.
+fn signer_grade(connected: Option<&[String]>) -> (Grade, String) {
+    match connected {
+        Some(c) if c.is_empty() => (
+            Grade::Warn,
+            "the vault is open and the daemon answers, but no relay reports a \
+             connection — the bunker signs nothing over a dead wire"
+                .to_string(),
+        ),
+        _ => (Grade::Ok, "the vault is open and the bunker answers".to_string()),
+    }
+}
+
 fn reachability_wording(relays: &[String]) -> String {
     let tailnet = relays.iter().any(|relay| relay.contains(".ts.net"));
     // Declarative by design: this line is the declaration's story, and
@@ -3795,6 +3916,33 @@ fn human_secs(secs: u64) -> String {
 fn unit_active() -> Option<bool> {
     let out = host_output(&["systemctl", "--user", "is-active", "kuma-nostrd.service"]).ok()?;
     Some(out.trim() == "active")
+}
+
+/// A user unit's state, as `systemctl --user is-active` names it. The
+/// string, not a boolean: `activating` is the crash loop's state, and
+/// the old `Option<bool>` mapped it onto "stopped" — whose fix action
+/// (`systemctl start`) cannot help a unit that keeps dying and hides
+/// the loop it is in (#77 finding 10).
+#[derive(Debug, PartialEq)]
+enum UnitState {
+    Active,
+    /// Starting or auto-restarting — the crash loop's own name.
+    Activating,
+    /// inactive, failed, anything else that is not mid-flight.
+    Inactive,
+    /// systemctl itself could not be asked (no session bus over ssh).
+    Unknown,
+}
+
+fn unit_state(unit: &str) -> UnitState {
+    match host_output(&["systemctl", "--user", "is-active", unit]) {
+        Ok(out) => match out.trim() {
+            "active" => UnitState::Active,
+            "activating" => UnitState::Activating,
+            _ => UnitState::Inactive,
+        },
+        Err(_) => UnitState::Unknown,
+    }
 }
 
 /// The apps holding Trust, named — the standing grants, by npub. A
@@ -5174,6 +5322,30 @@ mod tests {
             grades.iter().all(|(g, _)| *g == Grade::Ok),
             "no relay.enable, no local-relay warn"
         );
+    }
+
+    /// The vault line's conjunction (fix shape 5, #77): the connected
+    /// list is the wire's last word, and the three shapes are all it
+    /// can see. The 45.2.1 release graded the middle shape Ok — an
+    /// open vault answering over no wire at all.
+    #[test]
+    fn the_vault_grade_reads_the_wire_under_it() {
+        // Status present, connected empty: the daemon answers and
+        // signs nothing — Warn, not Ok.
+        let (grade, wording) = signer_grade(Some(&[]));
+        assert_eq!(grade, Grade::Warn);
+        assert!(wording.contains("no relay reports a connection"));
+
+        // A live connection: the old Ok line, unchanged for the good
+        // case — the wording is a pinned story.
+        let (grade, wording) = signer_grade(Some(&["wss://relay.nip46.com".into()]));
+        assert_eq!(grade, Grade::Ok);
+        assert_eq!(wording, "the vault is open and the bunker answers");
+
+        // No connected field at all (an older daemon across a dev
+        // install): absent facts are not failing ones — Ok, silent.
+        let (grade, _) = signer_grade(None);
+        assert_eq!(grade, Grade::Ok);
     }
 
     #[test]
