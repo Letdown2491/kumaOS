@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 use std::io::ErrorKind;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::time::Duration;
@@ -140,6 +140,13 @@ pub struct RelayPool {
     /// The nostrconnect apps' relays, by the client pubkey that
     /// presented its URI.
     app_urls: HashMap<PublicKey, Vec<String>>,
+    /// Events the roads SHED at the inbound bound since the pool's
+    /// birth, across every road and every reconnect (#82's fix shape
+    /// 1): the shed was a silent `let _` — a dropped sign request's
+    /// only symptom was a client timeout, the journal said nothing,
+    /// and nothing downstream could see the drop at all. The counter
+    /// is the fact; what grades it rides the status document.
+    shed: Arc<AtomicU64>,
 }
 
 impl RelayPool {
@@ -165,9 +172,17 @@ impl RelayPool {
         status: SyncSender<RelayStatus>,
         timing: Timing,
     ) -> Self {
-        let mut pool = Self { roads: Vec::new(), own_urls: Vec::new(), app_urls: HashMap::new() };
+        let mut pool =
+            Self { roads: Vec::new(), own_urls: Vec::new(), app_urls: HashMap::new(), shed: Arc::new(AtomicU64::new(0)) };
         pool.spawn_own(relays, bunker_pubkey, &inbound, &status, timing);
         pool
+    }
+
+    /// Events shed at the inbound bound since the pool's birth —
+    /// across every road and every reconnect. Zero on a healthy
+    /// machine; anything else is a sign request's timeout explained.
+    pub fn shed(&self) -> u64 {
+        self.shed.load(Ordering::Relaxed)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -187,9 +202,19 @@ impl RelayPool {
             let stop = stop.clone();
             let inbound = inbound.clone();
             let status = status.clone();
+            let shed = self.shed.clone();
             let thread_url = url.clone();
             move || {
-                one_relay(thread_url, bunker_pubkey, inbound, status, outbound_rx, stop, timing);
+                one_relay(
+                    thread_url,
+                    bunker_pubkey,
+                    inbound,
+                    status,
+                    outbound_rx,
+                    stop,
+                    timing,
+                    shed,
+                );
             }
         });
         // The road keeps the url beside the thread: what drop_app
@@ -351,6 +376,7 @@ fn one_relay(
     outbound: Receiver<(Event, Fan)>,
     stop: Arc<AtomicBool>,
     timing: Timing,
+    shed: Arc<AtomicU64>,
 ) {
     let mut backoff = BACKOFF_START;
     loop {
@@ -358,7 +384,16 @@ fn one_relay(
             return;
         }
         let connected = std::time::Instant::now();
-        match connect_and_serve(&url, bunker_pubkey, &inbound, &status, &outbound, &stop, timing) {
+        match connect_and_serve(
+            &url,
+            bunker_pubkey,
+            &inbound,
+            &status,
+            &outbound,
+            &stop,
+            timing,
+            &shed,
+        ) {
             Ok(()) => return,
             Err(e) => {
                 let _ = status
@@ -393,6 +428,7 @@ fn connect_and_serve(
     outbound: &Receiver<(Event, Fan)>,
     stop: &AtomicBool,
     timing: Timing,
+    shed: &AtomicU64,
 ) -> Result<()> {
     let (mut socket, _response) =
         tungstenite::connect(url).with_context(|| format!("connecting to {url}"))?;
@@ -468,8 +504,12 @@ fn connect_and_serve(
                     // the worker plans them, and the channel's bound
                     // is where the flood stops. A shed event is a
                     // requester's timeout — the same end a jammed
-                    // queue would give it, without the RSS.
-                    let _ = inbound.try_send(event);
+                    // queue would give it, without the RSS. The shed
+                    // is counted now, so the silence has a number
+                    // (#82's fix shape 1).
+                    if inbound.try_send(event).is_err() {
+                        shed.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             }
             Ok(Message::Ping(payload)) => {
@@ -583,6 +623,36 @@ mod tests {
     use crate::nostr::test_relay::{wait_for, StubRelay};
     use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc::sync_channel;
+
+    #[test]
+    fn a_flood_beyond_the_bound_is_counted_not_silent() {
+        let signer = Keys::generate();
+        let app = Keys::generate();
+        let bunker_pubkey = signer.public_key();
+
+        // A bound of one, never drained: the first event fills it and
+        // every event after sheds. The channel's cap, not the pool's
+        // INBOUND_CAP constant, is what the test squeezes — the cap is
+        // the daemon's choice, the counting is the pool's behavior at
+        // any bound (#82's fix shape 1).
+        let (inbound_tx, _inbound_rx) = sync_channel::<Event>(1);
+        let (status_tx, _status_rx) = sync_channel::<RelayStatus>(STATUS_CAP);
+        let flood: Vec<Event> = (0..8)
+            .map(|i| {
+                EventBuilder::new(Kind::NostrConnect, format!("flood {i}"))
+                    .tag(Tag::public_key(bunker_pubkey))
+                    .finalize(&app)
+                    .unwrap()
+            })
+            .collect();
+        let stub = StubRelay::start(flood);
+        let pool = RelayPool::spawn(vec![stub.url.clone()], bunker_pubkey, inbound_tx, status_tx);
+
+        // Seven of the eight have nowhere to land: the receiver holds
+        // its one slot forever. The counter is what turns that from a
+        // requester's unexplained timeout into a fact.
+        wait_for("the shed to count the flood", 100, || pool.shed() >= 7);
+    }
 
     #[test]
     fn drop_app_returns_the_urls_nobody_serves_anymore() {

@@ -167,7 +167,11 @@ pub struct ErrResponse {
 #[serde(tag = "verb", rename_all = "snake_case")]
 pub enum OkResponse {
     Ping { ok: bool },
-    Status { ok: bool, vault: VaultFact },
+    /// `shed` is the events the relay pool dropped at its inbound
+    /// bound since the daemon's birth (#82's fix shape 1) — the
+    /// drop was a requester's timeout with no other trace, and this
+    /// field is the trace. A field gained, not a shape changed.
+    Status { ok: bool, vault: VaultFact, shed: u64 },
     Setup { ok: bool, pubkey: String },
     Unlock { ok: bool, pubkey: String },
     Lock { ok: bool },
@@ -430,6 +434,7 @@ impl<S: super::vault::SecretStore> Daemon<S> {
                                 uri,
                                 inactivity: self.inactivity_fact(),
                             },
+                            shed: self.pool.as_ref().map(|p| p.shed()).unwrap_or(0),
                         })
                     }
                     Err(e) => err_response(anyhow!("cannot read the vault: {e}")),
@@ -1458,6 +1463,19 @@ mod tests {
         daemon.handle(decode(r#"{"cmd":"unlock"}"#).unwrap()).await;
         let status = daemon.handle(decode(r#"{"cmd":"status"}"#).unwrap()).await;
         assert!(encode(&status).contains("\"unlocked\":true"));
+    }
+
+    #[tokio::test]
+    async fn the_status_document_counts_its_sheds() {
+        // The shed counter rides the status document as a gained field:
+        // zero on a daemon whose pool dropped nothing, and a number a
+        // surface or a doctor can grade when the wire outran the worker.
+        // The pool-side flood test proves the count itself; this pins
+        // the wire shape (#82's fix shape 1).
+        let mut daemon = daemon().await;
+        let line = encode(&daemon.handle(decode(r#"{"cmd":"status"}"#).unwrap()).await);
+        let doc: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(doc["shed"].as_u64(), Some(0), "a fresh daemon has shed nothing: {line}");
     }
 
     #[tokio::test]
