@@ -2986,18 +2986,23 @@ application/zip=org.gnome.FileRoller.desktop
 /// five-minute lifespan is the floor — drivers differ in how loudly
 /// they announce draining, and the first real battery stayed silent
 /// through a whole band of capacity. The old `while sleep 60` woke
-/// 1,440 times a day on every machine, battery or none; this wakes a
-/// desktop (no battery) never and a laptop a few hundred times, only
-/// while the news could matter. upower-notifier tools (poweralertd)
-/// aren't in Fedora's repos, which is why this is a script at all.
+/// 1,440 times a day on every machine, battery or none; this wakes
+/// every machine ~288 times a day (the monitor lives 300 seconds and
+/// dies of old age into a safety read, and the respawn IS the poll) —
+/// a laptop a few hundred times, only while the news could matter, a
+/// desktop the same cheap reads with no news to act on. upower-notifier
+/// tools (poweralertd) aren't in Fedora's repos, which is why this is a
+/// script at all.
 ///
 /// The shell's battery widget shows the state in the bar but warns at
 /// no threshold (its own settings carry no battery section), so this
-/// script remains the only low-and-critical notice a laptop gets. If
-/// the shell grows threshold notifications, this is the first thing to
-/// go — one state announced by two programs in two styles is the shape
-/// `DCONF_BLUEMAN` above exists to undo. Removing this needs a battery
-/// to prove, because nothing in a VM ever discharges.
+/// script remains the only low-and-critical notice a laptop gets. The
+/// decision of record (kumaOS#80, 2026-11-13): the shell WILL grow
+/// threshold notifications, and when it does this script retires
+/// entirely — one state announced by two programs in two styles is the
+/// shape `DCONF_BLUEMAN` above exists to undo, and the monitor is this
+/// script's last improvement, not the first of a series. Removing this
+/// needs a battery to prove, because nothing in a VM ever discharges.
 ///
 /// One watcher per account, by flock. niri re-runs `spawn-at-startup`
 /// when its config reloads, and a session's end never reaches this

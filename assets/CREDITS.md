@@ -86,5 +86,14 @@ repository.
   carries no Rust toolchain — binaries arrive complete, so the pinned
   upstream archive is the road that keeps provenance exact. Inert by
   default: nothing runs until git meets a `nostr://` URL.
+- Re-vendoring a NEW version (the one unguarded moment, per the 45.4.0
+  audit's supply-chain lane): the digest pin proves self-consistency, not
+  provenance — a fresh fetch over HTTPS and a pin taken from the same
+  page trust that page alone. Before moving the pin, verify the upstream
+  git tag itself (`git fetch && git verify-tag v<version>` in a clone of
+  ngit-cli, or at minimum download the archive a second time from a
+  different network and diff), and eyeball the `--version` output the
+  extraction RUN prints — the build gate checks exit status, the doctor
+  checks the printed string, and both assume the words carry the version.
 
 ## The rest

@@ -28,6 +28,13 @@ update or a re-enable finds everything where it was left.
 
 The binaries and units ride in **every** image, enabled or not — the
 declaration's switch decides a systemd preset, not what gets shipped.
+The image also bakes the nostr git transport: `git clone nostr://…`
+(ngit and its `git-remote-nostr` launcher, pinned to the upstream
+release the image was built from) works out of the box on any machine
+carrying the layer, no manual install. The transport is inert until git
+meets a `nostr://` URL, and the doctor grades the pinned pair's
+presence and identity, so an image that predates it says so with the
+fix attached.
 That is what keeps "off" honest: a disabled layer is a preset pointing
 at units that exist, not an image that was built without them, and
 turning the switch on is a declaration change rather than a different
