@@ -1207,29 +1207,58 @@ enable = []
 disable = []
 "#;
 
-/// `--config` wins untouched. Otherwise ./kuma.toml, falling back to the
-/// XDG config dir when the current directory has none — a home for
-/// declarations that don't live in a project checkout. Never creates
-/// anything; when neither exists, the local name is returned so error
-/// messages point somewhere sensible.
+/// `--config` wins untouched. Otherwise the XDG declaration when one
+/// exists, with ./kuma.toml behind it — the home file outranks the
+/// working directory, because the working directory is the one place a
+/// checkout kuma was pointed at can plant a file it should not get to
+/// volunteer: everything a declaration names, from packages.rpm down,
+/// ends up running as root in the image build. When both exist the
+/// choice is announced on stderr, naming both files, so "I edited
+/// kuma.toml and nothing changed" still has two files behind it but now
+/// has a message too, and --config takes the other one explicitly.
+/// Never creates anything; when neither exists, the local name is
+/// returned so error messages point somewhere sensible.
 fn resolve_config(explicit: Option<PathBuf>) -> PathBuf {
-    if let Some(path) = explicit {
-        return path;
-    }
-    let local = PathBuf::from("kuma.toml");
-    if local.exists() {
-        return local;
-    }
-    let base = std::env::var_os("XDG_CONFIG_HOME")
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
-    if let Some(base) = base {
-        let xdg = base.join("kuma/kuma.toml");
-        if xdg.exists() {
-            return xdg;
-        }
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .map(|base| base.join("kuma/kuma.toml"));
+    let (resolved, shadowed) = resolve_config_against(explicit, &cwd, xdg);
+    if let Some(shadowed) = shadowed {
+        eprintln!(
+            "note: two declarations are visible: using {}, ignoring {}. \
+             Point --config at {} to work on the other one.",
+            resolved.display(),
+            shadowed.display(),
+            shadowed.display()
+        );
     }
-    local
+    resolved
+}
+
+/// The resolution with the environment handed in, so the precedence has
+/// tests that do not have to move this process's working directory or
+/// rewrite its environment mid-run. Returns the path that wins and —
+/// when both a home and a working-directory declaration exist — the one
+/// that lost, for the caller to announce.
+fn resolve_config_against(
+    explicit: Option<PathBuf>,
+    cwd: &Path,
+    xdg: Option<PathBuf>,
+) -> (PathBuf, Option<PathBuf>) {
+    if let Some(path) = explicit {
+        return (path, None);
+    }
+    let local = cwd.join("kuma.toml");
+    let xdg = xdg.filter(|path| path.exists());
+    match xdg {
+        Some(home) => {
+            let shadowed = local.exists().then_some(local);
+            (home, shadowed)
+        }
+        None => (local, None),
+    }
 }
 
 /// Read-only consumers (generate, diff, update) can work straight from
@@ -5335,6 +5364,87 @@ fn path_str(path: &Path) -> Result<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The resolution is the one place an untrusted directory could
+    /// volunteer a declaration, so its precedence table gets the same
+    /// treatment the routing table gets below: every row held by a
+    /// test, against a pure function that takes the environment as
+    /// arguments rather than reading it mid-run.
+    #[test]
+    fn an_explicit_config_wins_untouched_even_when_it_does_not_exist() {
+        // An explicit path that does not exist is read_config_path's and
+        // the command's error to give, not the resolver's to preempt.
+        let dir = tempfile::tempdir().unwrap();
+        let explicit = dir.path().join("elsewhere/kuma.toml");
+        let (path, shadowed) =
+            resolve_config_against(Some(explicit.clone()), dir.path(), None);
+        assert_eq!(path, explicit);
+        assert_eq!(shadowed, None);
+    }
+
+    #[test]
+    fn the_home_declaration_outranks_the_working_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let xdg = dir.path().join("xdg/kuma/kuma.toml");
+        std::fs::create_dir_all(xdg.parent().unwrap()).unwrap();
+        std::fs::write(&xdg, "schema_version = 1\n").unwrap();
+        let (path, shadowed) = resolve_config_against(None, dir.path(), Some(xdg.clone()));
+        assert_eq!(path, xdg);
+        assert_eq!(shadowed, None, "only one declaration, nothing to announce");
+    }
+
+    #[test]
+    fn the_working_directory_declaration_is_used_when_the_home_has_none() {
+        // The documented project-checkout shape keeps working: the
+        // precedence moved, not the fallback.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("kuma.toml"), "schema_version = 1\n").unwrap();
+        let (path, shadowed) =
+            resolve_config_against(None, dir.path(), Some(dir.path().join("xdg/kuma/kuma.toml")));
+        assert_eq!(path, dir.path().join("kuma.toml"));
+        assert_eq!(shadowed, None);
+    }
+
+    #[test]
+    fn two_visible_declarations_resolve_to_the_home_and_name_the_loser() {
+        // The untrusted-checkout case, held directly: ./kuma.toml does
+        // not outrank the home file, and the loser comes back so the
+        // caller announces it instead of ignoring it silently.
+        let dir = tempfile::tempdir().unwrap();
+        let xdg = dir.path().join("xdg/kuma/kuma.toml");
+        std::fs::create_dir_all(xdg.parent().unwrap()).unwrap();
+        std::fs::write(&xdg, "schema_version = 1\n").unwrap();
+        let local = dir.path().join("kuma.toml");
+        std::fs::write(&local, "schema_version = 1\n").unwrap();
+        let (path, shadowed) = resolve_config_against(None, dir.path(), Some(xdg));
+        assert_eq!(path, dir.path().join("xdg/kuma/kuma.toml"));
+        assert_eq!(shadowed.as_deref(), Some(local.as_path()));
+    }
+
+    #[test]
+    fn neither_declaration_resolves_to_the_local_name_for_the_errors_sake() {
+        // "run kuma init to start one here" points at the file the
+        // person is standing in front of, not at a path they never wrote.
+        let dir = tempfile::tempdir().unwrap();
+        let (path, shadowed) =
+            resolve_config_against(None, dir.path(), Some(dir.path().join("xdg/kuma/kuma.toml")));
+        assert_eq!(path, dir.path().join("kuma.toml"));
+        assert_eq!(shadowed, None);
+    }
+
+    #[test]
+    fn an_xdg_base_without_a_declaration_changes_nothing() {
+        // The directory existing is not the file existing: the old
+        // resolver only ever asked about the joined file, and that is
+        // still the only question.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("xdg/kuma")).unwrap();
+        std::fs::write(dir.path().join("kuma.toml"), "schema_version = 1\n").unwrap();
+        let (path, shadowed) =
+            resolve_config_against(None, dir.path(), Some(dir.path().join("xdg/kuma/kuma.toml")));
+        assert_eq!(path, dir.path().join("kuma.toml"));
+        assert_eq!(shadowed, None);
+    }
 
     /// The routing is the verb's whole contract on paper: the same
     /// machine, pointed at a different origin, takes a different lane.
