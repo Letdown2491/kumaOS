@@ -34,7 +34,8 @@
 //! bunker is dead when it is not.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -284,17 +285,38 @@ pub struct Engine {
 /// either way, and a successful write clears the flag it served. A
 /// memory-only engine (no state dir) persists nothing and its flags
 /// stay set, which costs nothing: there is nothing to flush into.
+/// The one writer for state under the state dir: write-then-rename at
+/// 0600, the accounts heal's shape. The pairing list and the activity
+/// log are who-signed-what history — metadata rather than keys, but
+/// they are one account's private record, and a bare `std::fs::write`
+/// lands at whatever the umask leaves open: 0644, readable by every
+/// other account on the machine and by anything running as one. The
+/// tmp sibling means a crash mid-write leaves no half file behind, and
+/// the rename means a concurrent reader never sees one either.
+fn write_private(file: &Path, text: &str) -> std::io::Result<()> {
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("state");
+    let tmp = file.with_file_name(format!(".{name}.kuma-tmp"));
+    std::fs::write(&tmp, text)?;
+    let result = (|| {
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::rename(&tmp, file)
+    })();
+    if result.is_err() {
+        // The tmp file is this call's own; leaving it behind would be a
+        // second writer's confusion, so a failed rename cleans it up.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 fn persist_log_at(state_path: &Option<PathBuf>, inner: &mut Inner) {
     let Some(file) = state_path.as_ref().map(|dir| dir.join("log.json")) else { return };
-    if let Some(parent) = file.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!("kuma-nostrd: cannot create {parent:?}: {e}");
-            return;
-        }
-    }
     match serde_json::to_string_pretty(&inner.log) {
         Ok(text) => {
-            if let Err(e) = std::fs::write(&file, text) {
+            if let Err(e) = write_private(&file, &text) {
                 eprintln!("kuma-nostrd: cannot write {file:?}: {e}");
             } else {
                 inner.log_dirty = false;
@@ -306,15 +328,9 @@ fn persist_log_at(state_path: &Option<PathBuf>, inner: &mut Inner) {
 
 fn persist_apps_at(state_path: &Option<PathBuf>, inner: &mut Inner) {
     let Some(file) = state_path.as_ref().map(|dir| dir.join("apps.json")) else { return };
-    if let Some(parent) = file.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!("kuma-nostrd: cannot create {parent:?}: {e}");
-            return;
-        }
-    }
     match serde_json::to_string_pretty(&inner.apps) {
         Ok(text) => {
-            if let Err(e) = std::fs::write(&file, text) {
+            if let Err(e) = write_private(&file, &text) {
                 eprintln!("kuma-nostrd: cannot write {file:?}: {e}");
             } else {
                 inner.apps_dirty = false;
@@ -333,6 +349,7 @@ impl Engine {
         };
         engine.load_apps();
         engine.load_log();
+        engine.tighten_legacy_state();
         // The batched writes' clock. Spawned only when there is a state
         // dir to flush into, so the memory-only engines of the offline
         // tests spawn nothing. A kill can cost the last few seconds of
@@ -370,6 +387,20 @@ impl Engine {
     /// The state file the pairings persist to, if this engine persists.
     fn apps_file(&self) -> Option<PathBuf> {
         self.state_path.as_ref().map(|dir| dir.join("apps.json"))
+    }
+
+    /// State files this daemon wrote before the private write existed
+    /// are 0644 on disk, and a machine whose pairing never changes
+    /// never rewrites them, so startup tightens what it finds. The
+    /// metadata is the same either way; the mode should be too.
+    /// Failures are ignored: a file a concurrent reader holds open is
+    /// a benign loss, and the next flush replaces it at 0600.
+    fn tighten_legacy_state(&self) {
+        for file in [self.apps_file(), self.log_file()].into_iter().flatten() {
+            if file.exists() {
+                let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
+            }
+        }
     }
 
     /// The activity log's file, beside the pairings. Newest last, so a
@@ -1116,6 +1147,46 @@ mod tests {
 
     fn app() -> PublicKey {
         nostr::key::Keys::generate().public_key()
+    }
+
+    /// The pairing list and the activity log are one account's record
+    /// of who signed what. Sitting under the user's own home is not a
+    /// permission: these two hold the mode the daemon's own writes
+    /// produce, and the migration for files an older daemon left at
+    /// 0644.
+    #[test]
+    fn persisted_state_files_are_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine =
+            Engine::with_prompt_ttl(Some(dir.path().to_path_buf()), Duration::from_secs(1));
+        engine.pair_with_metadata(&app(), Some("a client".into()), None, None, None);
+        engine.noted(&app().to_string(), "GetPublicKey", "asked".to_string(), "served");
+        engine.flush();
+        for file in ["apps.json", "log.json"] {
+            let path = dir.path().join(file);
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{file} must be 0600: the pairing history is one account's, and the umask is nobody's guarantee");
+        }
+    }
+
+    #[test]
+    fn legacy_world_readable_state_is_tightened_on_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        // What a daemon from before the private write left behind: both
+        // files, world-readable, valid content the loader must still
+        // parse after tightening.
+        for (file, body) in [("apps.json", "[]"), ("log.json", "[]")] {
+            let path = dir.path().join(file);
+            std::fs::write(&path, body).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let _engine =
+            Engine::with_prompt_ttl(Some(dir.path().to_path_buf()), Duration::from_secs(1));
+        for file in ["apps.json", "log.json"] {
+            let path = dir.path().join(file);
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "startup tightens legacy {file}");
+        }
     }
 
     fn everyday(method: &NostrConnectMethod) -> Vec<String> {
