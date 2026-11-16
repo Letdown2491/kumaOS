@@ -377,7 +377,7 @@ jobs:
           ```console
           $ cosign verify-blob \
               --bundle ${{ steps.pkg.outputs.name }}.bundle \
-              --certificate-identity-regexp '^${{ github.server_url }}/${{ github.repository }}/.+@refs/tags/' \
+              --certificate-identity '${{ github.server_url }}/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
               ${{ steps.pkg.outputs.name }}
           ```
@@ -411,7 +411,7 @@ jobs:
           ```console
           $ cosign verify-blob \
               --bundle kuma-x86_64.iso.bundle \
-              --certificate-identity-regexp '^${{ github.server_url }}/${{ github.repository }}/.+@refs/tags/' \
+              --certificate-identity '${{ github.server_url }}/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
               kuma-x86_64.iso
           ```
