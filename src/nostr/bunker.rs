@@ -161,6 +161,18 @@ pub fn parse_nostrconnect_uri(uri: &str) -> Result<NostrConnectParts> {
         // declaration that runs the bunker — plaintext kind 24133
         // traffic to a non-loopback host announces which app talks to
         // which bunker, and that is not kuma's to leak.
+        //
+        // The alphabet is narrowed the same way: an invited relay
+        // rides the same roads a declared one rides — argv on the
+        // next delta's drop-in, the journal, the panel, the pairing
+        // list — and validation happens after the percent-decoding
+        // above, which is the side a `%20` smuggles through.
+        for ch in relay.chars() {
+            if !(ch.is_ascii_alphanumeric() || ":/.-_~?#[]@!$&*+,;=".contains(ch)) {
+                bail!("relay {relay:?} contains {ch:?}; a relay is scheme, host, port and \
+                       path, and this character rides the daemon's argv in a systemd unit");
+            }
+        }
         let (scheme, rest) = relay.split_once("://").ok_or_else(|| {
             anyhow!("relay {relay:?} has no scheme; relays are wss:// or ws:// to loopback")
         })?;
@@ -2156,6 +2168,36 @@ mod tests {
         let plaintext_relay =
             format!("nostrconnect://{client}?relay=http://relay.example&secret=x");
         assert!(reason(&plaintext_relay).contains("wss"));
+    }
+
+    #[test]
+    fn an_invited_relay_is_held_to_the_declarations_alphabet() {
+        // The twin of config.rs's relay validator, from the other
+        // direction: the URI is the road a stranger writes, so it gets
+        // no wider a rule than the declaration a machine's owner
+        // writes. Validation runs after the percent-decoding, which is
+        // the side a `%20` or a `%09` smuggles a space or a tab
+        // through.
+        let client = Keys::generate().public_key();
+        let reason = |relay: &str| {
+            let uri = format!("nostrconnect://{client}?relay={relay}&secret=x");
+            parse_nostrconnect_uri(&uri).unwrap_err().to_string()
+        };
+        assert!(reason("wss://host.example/a%20b").contains("argv"), "encoded space");
+        assert!(reason("wss://host.example/a%09b").contains("argv"), "encoded tab");
+        assert!(reason("wss://host.example%25h").contains("argv"), "encoded systemd specifier");
+        assert!(
+            reason("wss://host.example\"quoted").contains("argv"),
+            "raw quote re-splits a unit line"
+        );
+
+        // The ordinary spelling, ports, paths and query strings
+        // included, still parses.
+        let uri = format!(
+            "nostrconnect://{client}?relay=wss%3A%2F%2Frelay.example%3A7777%2Fpath%3Fx%3D1&secret=x"
+        );
+        let parts = parse_nostrconnect_uri(&uri).unwrap();
+        assert_eq!(parts.relays, ["wss://relay.example:7777/path?x=1"]);
     }
 
     #[test]
