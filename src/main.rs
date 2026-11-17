@@ -1224,6 +1224,7 @@ fn resolve_config(explicit: Option<PathBuf>) -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
         .map(|base| base.join("kuma/kuma.toml"));
+    let was_explicit = explicit.is_none();
     let (resolved, shadowed) = resolve_config_against(explicit, &cwd, xdg);
     if let Some(shadowed) = shadowed {
         eprintln!(
@@ -1233,21 +1234,19 @@ fn resolve_config(explicit: Option<PathBuf>) -> PathBuf {
             shadowed.display(),
             shadowed.display()
         );
-    }
-    // Under sudo (Fedora's env_reset), HOME is /root and root's home has
-    // no declaration, so what resolves is the file in the invoking
-    // user's working directory — now honored by a root process. The
-    // declaration's own trust story ("whoever wrote it is root-equivalent
-    // through packages.rpm") does not cover that shape, so it says so
-    // out loud rather than proceeding quietly. A warning, not a refusal:
-    // hibernate's precedent, and `sudo kuma` in a project checkout is a
-    // thing people do for reasons the resolver cannot see.
-    if explicit.is_none()
-        && shadowed.is_none()
+    } else if !was_explicit
         && resolved == cwd.join("kuma.toml")
         && std::env::var_os("SUDO_USER").is_some()
         && unsafe { libc::geteuid() } == 0
     {
+        // Under sudo (Fedora's env_reset), HOME is /root and root's home has
+        // no declaration, so what resolves is the file in the invoking
+        // user's working directory — now honored by a root process. The
+        // declaration's own trust story ("whoever wrote it is root-equivalent
+        // through packages.rpm") does not cover that shape, so it says so
+        // out loud rather than proceeding quietly. A warning, not a refusal:
+        // hibernate's precedent, and `sudo kuma` in a project checkout is a
+        // thing people do for reasons the resolver cannot see.
         eprintln!(
             "note: running as root under sudo, and root's home declares nothing, \
              so this is {} from the invoking user's working directory. A \
