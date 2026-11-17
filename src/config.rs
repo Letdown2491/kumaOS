@@ -997,6 +997,16 @@ fn validate_user_fields(
         if !looks_like_key || key.contains('\n') {
             bail!("{prefix}.ssh_keys entry doesn't look like a single-line OpenSSH public key");
         }
+        // The key lands single-quoted in files a root shell sources —
+        // the converger's account file and the installer's install
+        // facts both — and a key's comment is free text, so a raw
+        // quote would end the value and run whatever followed it as
+        // root. The write sites escape; the alphabet here makes that
+        // escaping a formality rather than the boundary. A public key
+        // is an algorithm name, base64, and a comment, and none of
+        // those need a quote, a `$`, or a backslash. Same rule, same
+        // reason, as every other value in this file.
+        validate_name(key, &format!("{prefix}.ssh_keys"), &['@', '.', '+', '-', '_', '/', ':', ' '])?;
     }
     Ok(())
 }
@@ -1314,6 +1324,26 @@ pub(crate) mod tests {
         assert!(hashed("$6$").is_err(), "no salt, no hash");
         assert!(hashed("$6$$abcdef").is_err(), "empty salt field");
         assert!(hashed("hunter2").is_err(), "a plaintext password is not a hash");
+    }
+
+    #[test]
+    fn an_ssh_key_is_alphabet_bound_like_every_other_value() {
+        // The key is quoted into files a root shell sources; the write
+        // sites escape, and this holds the alphabet that makes the
+        // escaping a formality. The hostile key here is the PoC from
+        // adversarial review: a comment that closes the single quote
+        // and runs a command when the file is sourced.
+        let key = |ssh_key: &str| {
+            let toml = format!(
+                "schema_version = 1\n[other_users.partner]\nssh_keys = [\"{ssh_key}\"]\n"
+            );
+            toml::from_str::<Config>(&toml).unwrap().validate()
+        };
+        assert!(key("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB7cQ9Qme@host").is_ok());
+        assert!(key("ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTY me@laptop:22").is_ok());
+        assert!(key("ssh-ed25519 AAA'; touch /tmp/x; echo '").is_err(), "a quote breaks out of the sourced file");
+        assert!(key("ssh-ed25519 AAA$(id -u)").is_err(), "$ has no business in a key");
+        assert!(key("ssh-ed25519 AAA\\n real key").is_err(), "a backslash is not a key byte");
     }
 
     /// The README tells people to download one filename and the release
