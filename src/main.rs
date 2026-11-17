@@ -1234,7 +1234,47 @@ fn resolve_config(explicit: Option<PathBuf>) -> PathBuf {
             shadowed.display()
         );
     }
+    // Under sudo (Fedora's env_reset), HOME is /root and root's home has
+    // no declaration, so what resolves is the file in the invoking
+    // user's working directory — now honored by a root process. The
+    // declaration's own trust story ("whoever wrote it is root-equivalent
+    // through packages.rpm") does not cover that shape, so it says so
+    // out loud rather than proceeding quietly. A warning, not a refusal:
+    // hibernate's precedent, and `sudo kuma` in a project checkout is a
+    // thing people do for reasons the resolver cannot see.
+    if explicit.is_none()
+        && shadowed.is_none()
+        && resolved == cwd.join("kuma.toml")
+        && std::env::var_os("SUDO_USER").is_some()
+        && unsafe { libc::geteuid() } == 0
+    {
+        eprintln!(
+            "note: running as root under sudo, and root's home declares nothing, \
+             so this is {} from the invoking user's working directory. A \
+             declaration that was safe to trust as its author is not \
+             automatically safe to trust as root: pass --config to pin the \
+             file, or run without sudo.",
+            resolved.display()
+        );
+    }
     resolved
+}
+
+/// Whether a path is there — including when the honest answer is "cannot
+/// say", which counts as present. `Path::exists()` is `metadata().is_ok()`,
+/// so a permission error reads as an absence, and the resolver would walk
+/// past a declaration that exists but cannot be read and fall through to
+/// the next candidate in silence — the exact authority error the
+/// changelog (v45.2.0) records for state.rs: "a declaration that exists
+/// but cannot be read is an authority error", not a missing one.
+/// lstat rather than stat, so a dangling link is present too: reading it
+/// then fails loudly, which is that same honesty, where `exists()` would
+/// have skipped it.
+fn present(path: &Path) -> bool {
+    !matches!(
+        std::fs::symlink_metadata(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound
+    )
 }
 
 /// The resolution with the environment handed in, so the precedence has
@@ -1251,10 +1291,10 @@ fn resolve_config_against(
         return (path, None);
     }
     let local = cwd.join("kuma.toml");
-    let xdg = xdg.filter(|path| path.exists());
+    let xdg = xdg.filter(|path| present(path));
     match xdg {
         Some(home) => {
-            let shadowed = local.exists().then_some(local);
+            let shadowed = present(&local).then_some(local);
             (home, shadowed)
         }
         None => (local, None),
@@ -1268,7 +1308,10 @@ fn resolve_config_against(
 /// and an explicit --config that doesn't exist stays an error rather
 /// than silently meaning something else.
 fn read_config_path(resolved: &Path, explicit: bool, announce: bool) -> PathBuf {
-    if !explicit && !resolved.exists() {
+    // present(), not exists(): an unreadable declaration is an authority
+    // error the read is about to raise, not an absence that entitles the
+    // baked file to step in.
+    if !explicit && !present(resolved) {
         let baked = Path::new(state::BAKED_CONFIG);
         if baked.exists() {
             if announce {
@@ -5443,6 +5486,37 @@ mod tests {
         let (path, shadowed) =
             resolve_config_against(None, dir.path(), Some(dir.path().join("xdg/kuma/kuma.toml")));
         assert_eq!(path, dir.path().join("kuma.toml"));
+        assert_eq!(shadowed, None);
+    }
+
+    #[test]
+    fn an_unreadable_home_declaration_is_present_not_absent() {
+        // The v45.2.0 authority rule, held at the resolver: metadata
+        // failing on anything but NotFound must not read as "not
+        // there", or an unreadable ~/.config/kuma/kuma.toml silently
+        // sends a root process to ./kuma.toml. A directory with no
+        // execute bit makes lstat on the file inside fail with EACCES —
+        // the cheapest way to stage a real permission error. Root sees
+        // through mode bits, so the test says nothing there.
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let xdg_dir = dir.path().join("xdg/kuma");
+        std::fs::create_dir_all(&xdg_dir).unwrap();
+        std::fs::write(xdg_dir.join("kuma.toml"), "schema_version = 1\n").unwrap();
+        std::fs::set_permissions(&xdg_dir, std::fs::Permissions::from_mode(0o400)).unwrap();
+        let (path, shadowed) =
+            resolve_config_against(None, dir.path(), Some(xdg_dir.join("kuma.toml")));
+        // Put the mode back before the tempdir's own cleanup has to
+        // walk the directory.
+        std::fs::set_permissions(&xdg_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            path,
+            xdg_dir.join("kuma.toml"),
+            "an unreadable declaration is an authority error at read time, not a fallback trigger"
+        );
         assert_eq!(shadowed, None);
     }
 
