@@ -34,7 +34,8 @@
 //! bunker is dead when it is not.
 
 use std::collections::HashMap;
-use std::os::unix::fs::PermissionsExt;
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -293,20 +294,41 @@ pub struct Engine {
 /// other account on the machine and by anything running as one. The
 /// tmp sibling means a crash mid-write leaves no half file behind, and
 /// the rename means a concurrent reader never sees one either.
+///
+/// The file is *created* at 0600 rather than written-then-chmodded:
+/// `std::fs::write` materializes at umask width and only narrows after,
+/// a window an inotify watcher can open through and hold past the
+/// chmod (an open fd keeps its read across the rename). create_new is
+/// also O_EXCL, which refuses to follow a link planted at the tmp
+/// name, and the sync makes the rename mean what it says across a
+/// power cut. The state dir is tightened as well as created — a dir
+/// made by the pre-0600 daemon is 0755, and 0600 files inside a
+/// world-traversable dir are enumerated, readably named, even when
+/// their bytes are closed.
 fn write_private(file: &Path, text: &str) -> std::io::Result<()> {
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent)?;
+        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
     }
     let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("state");
     let tmp = file.with_file_name(format!(".{name}.kuma-tmp"));
-    std::fs::write(&tmp, text)?;
+    // A tmp a kill left behind must not wedge every later flush, so it
+    // goes before the create_new — which would otherwise refuse it
+    // forever.
+    let _ = std::fs::remove_file(&tmp);
     let result = (|| {
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()?;
+        drop(f);
         std::fs::rename(&tmp, file)
     })();
     if result.is_err() {
-        // The tmp file is this call's own; leaving it behind would be a
-        // second writer's confusion, so a failed rename cleans it up.
         let _ = std::fs::remove_file(&tmp);
     }
     result
@@ -1187,6 +1209,26 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600, "startup tightens legacy {file}");
         }
+    }
+
+    #[test]
+    fn a_crash_leftover_tmp_does_not_wedge_the_flush_and_the_dir_is_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        // What a kill between write and rename leaves behind.
+        let tmp = state.join(".apps.json.kuma-tmp");
+        std::fs::write(&tmp, "half").unwrap();
+        let engine = Engine::with_prompt_ttl(Some(state.clone()), Duration::from_secs(1));
+        engine.pair_with_metadata(&app(), Some("a client".into()), None, None, None);
+        engine.flush();
+        assert!(!tmp.exists(), "the stale tmp goes before the create_new");
+        let mode = std::fs::metadata(&state).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o700,
+            "the dir tightens too: 0600 files in a 0755 dir are enumerable, and the names alone are history"
+        );
     }
 
     fn everyday(method: &NostrConnectMethod) -> Vec<String> {
