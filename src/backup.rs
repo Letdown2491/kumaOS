@@ -613,7 +613,10 @@ mod tests {
         assert!(script.contains("|| [ -n \"$line\" ]"), "{script}");
         // And the secret is still a path, never a value: ps shows argv.
         assert!(argv.iter().any(|a| a == "/s.env"));
-        assert!(!argv.iter().any(|a| a.contains("RESTIC_PASSWORD")));
+        // An assignment, not the bare name: the loop's own key guard
+        // names RESTIC_PASSWORD_COMMAND, which is the refusal, not a
+        // credential in argv.
+        assert!(!argv.iter().any(|a| a.contains("RESTIC_PASSWORD=")));
     }
 
     /// Every value three readers would read differently is refused.
