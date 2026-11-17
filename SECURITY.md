@@ -10,7 +10,7 @@ signing key is lost or rotated.
 ## Reporting a vulnerability
 
 Use GitHub's private vulnerability reporting:
-[**Report a vulnerability**](https://github.com/Letdown2491/kumaos/security/advisories/new).
+[**Report a vulnerability**](https://github.com/Letdown2491/kumaOS/security/advisories/new).
 It reaches the maintainer privately, and it is the only channel. Please
 don't open a public issue for one first.
 
