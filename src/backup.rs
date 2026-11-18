@@ -671,7 +671,9 @@ mod tests {
         let argv = restic_argv("/s.env", "b2:kuma", &["snapshots"]);
         let script = argv.iter().find(|a| a.contains("restic \"$@\"")).expect("the sh -c body");
         assert!(script.contains("refusing unsafe key"), "{script}");
-        for key in ["PATH", "HOME", "SHELL", "IFS", "USER", "LOGNAME", "RESTIC_PASSWORD_COMMAND", "LD_"] {
+        for key in
+            ["PATH", "HOME", "SHELL", "IFS", "USER", "LOGNAME", "RESTIC_PASSWORD_COMMAND", "LD_"]
+        {
             assert!(script.contains(key), "the loop must refuse {key}: {script}");
         }
         assert!(script.contains("*[!A-Z0-9_]*"), "{script}");
