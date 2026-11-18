@@ -98,12 +98,26 @@ fn restic_argv_within(
     // could read differently, so this loop and systemd's parser see one
     // file one way.
     let open = format!(
-        // `|| [ -n "$line" ]` because a file whose last line carries no
+        // `|| [ -n \"$line\" ]` because a file whose last line carries no
         // newline otherwise loses that variable, and systemd's parser does
         // not. Measured: without it, a one-line restore.env written by
         // `printf` reached restic with no password at all.
+        //
+        // The KEY is vetted here as well as by `ambiguous_values` above,
+        // because the two halves of this verb read the file at different
+        // privileges: this loop runs as root, and a file this half reads
+        // is one the verb's own check may not have been able to open.
+        // `PATH=`, `LD_PRELOAD=` or `RESTIC_PASSWORD_COMMAND=` in the
+        // credential file rewrites the environment the backup executes
+        // under — a different attack than a wrong password, and refused
+        // by name rather than trusted to be absent.
         "while IFS= read -r line || [ -n \"$line\" ]; do \
            case \"$line\" in \"\"|\\#*) continue ;; esac; \
+           key=${{line%%=*}}; \
+           case \"$key\" in \
+             PATH|HOME|SHELL|IFS|USER|LOGNAME|RESTIC_PASSWORD_COMMAND|LD_*|*[!A-Z0-9_]*) \
+               echo \"kuma: refusing unsafe key in $1\" >&2; exit 1 ;; \
+           esac; \
            export \"$line\"; \
          done < \"$1\"; export RESTIC_REPOSITORY=\"$2\"; \
          export RESTIC_CACHE_DIR=/var/cache/restic; install -d -m 0700 /var/cache/restic; \
@@ -155,12 +169,36 @@ pub fn ambiguous_values(text: &str) -> Vec<String> {
             // the value (`KEY =v`, `KEY= v`) is the same disagreement
             // with the `=` in the middle, where a whole-line trim
             // cannot see it.
+            //
+            // The key is an input the same way the value is. It rides
+            // `export` inside a root shell, so `PATH=`, `LD_PRELOAD=`,
+            // `IFS=` or `RESTIC_PASSWORD_COMMAND=` in the credential
+            // file rewrites the environment the backup runs under.
+            // Uppercase `[A-Z0-9_]` is the alphabet every backend's
+            // variables already spell (RESTIC_, AWS_, B2_, RCLONE_),
+            // and the named refusals are the ones that change what
+            // executes rather than what is read.
+            let k = key.trim();
+            let dangerous_key = k.is_empty()
+                || !k.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+                || matches!(
+                    k,
+                    "PATH"
+                        | "HOME"
+                        | "SHELL"
+                        | "IFS"
+                        | "USER"
+                        | "LOGNAME"
+                        | "RESTIC_PASSWORD_COMMAND"
+                )
+                || k.starts_with("LD_");
             if trimmed != line
-                || key != key.trim()
+                || key != k
                 || value != value.trim()
+                || dangerous_key
                 || value.contains(['$', '`', '"', '\'', '\\'])
             {
-                Some(key.trim().to_string())
+                Some(k.to_string())
             } else {
                 None
             }
@@ -178,7 +216,21 @@ fn ready(config: &Config) -> Result<(String, String)> {
     let secret = secret_path(config);
     // Read before use, so a file three readers disagree about is refused
     // here rather than silently meaning something different in the timer.
-    if let Ok(text) = std::fs::read_to_string(&secret) {
+    let text = match std::fs::read_to_string(&secret) {
+        Ok(text) => Some(text),
+        // Absent is the message below.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        // Present but unreadable is an authority error, not an absence:
+        // the ambiguity and key checks run on this half's reading, and
+        // skipping them because the file refused to open would let the
+        // root half export what this half could not vouch for.
+        Err(e) => bail!(
+            "cannot read {secret}: {e}. A credential that exists but cannot be read \
+             is an authority error, not an absence — fix the mode (0600 root) so \
+             this verb can vet what the timer and the sudo helper will export."
+        ),
+    };
+    if let Some(text) = text {
         let ambiguous = ambiguous_values(&text);
         if !ambiguous.is_empty() {
             bail!(
@@ -561,7 +613,10 @@ mod tests {
         assert!(script.contains("|| [ -n \"$line\" ]"), "{script}");
         // And the secret is still a path, never a value: ps shows argv.
         assert!(argv.iter().any(|a| a == "/s.env"));
-        assert!(!argv.iter().any(|a| a.contains("RESTIC_PASSWORD")));
+        // An assignment, not the bare name: the loop's own key guard
+        // names RESTIC_PASSWORD_COMMAND, which is the refusal, not a
+        // credential in argv.
+        assert!(!argv.iter().any(|a| a.contains("RESTIC_PASSWORD=")));
     }
 
     /// Every value three readers would read differently is refused.
@@ -577,6 +632,51 @@ mod tests {
         // values, and punctuation no reader treats specially.
         let fine = "# a comment\n\nRESTIC_PASSWORD=hunter2-with.punct_and/slash\nB2_KEY=abc123\n";
         assert!(ambiguous_values(fine).is_empty());
+    }
+
+    /// The key is an input the same way the value is: it rides `export`
+    /// in a root shell, so a credential file carrying `PATH=` or
+    /// `RESTIC_PASSWORD_COMMAND=` rewrites the environment the backup
+    /// executes under — a different attack than a wrong password.
+    #[test]
+    fn a_key_that_rewrites_the_environment_is_refused() {
+        for line in [
+            "PATH=/tmp/evil",
+            "LD_PRELOAD=/x",
+            "LD_LIBRARY_PATH=/x",
+            "RESTIC_PASSWORD_COMMAND=/x",
+            "IFS=x",
+            "HOME=/x",
+            // Lowercase is not the alphabet the three readers share:
+            // systemd's reader is case-sensitive and every backend's
+            // variables spell in uppercase.
+            "restic_password=hunter2",
+            "RESTIC-KEY=x",
+        ] {
+            let text = format!("{line}\n");
+            assert_eq!(ambiguous_values(&text).len(), 1, "{line} slipped through");
+        }
+        // The backends' ordinary variables stay ordinary.
+        let fine = "RESTIC_PASSWORD=hunter2\nAWS_ACCESS_KEY_ID=abcd\nB2_APPLICATION_KEY=xyz\nRCLONE_CONFIG_REMOTE_TYPE=s3\n";
+        assert!(ambiguous_values(fine).is_empty(), "backend variables are the ordinary case");
+    }
+
+    #[test]
+    fn the_root_loop_refuses_environment_rewriting_keys_by_name() {
+        // The verb's own check can be locked out of the file (0600 root,
+        // verb run unprivileged), so the loop that runs as root holds
+        // the same line on its own authority: the dangerous names, and
+        // anything outside the uppercase alphabet, refuse in the shell
+        // where the export would have happened.
+        let argv = restic_argv("/s.env", "b2:kuma", &["snapshots"]);
+        let script = argv.iter().find(|a| a.contains("restic \"$@\"")).expect("the sh -c body");
+        assert!(script.contains("refusing unsafe key"), "{script}");
+        for key in
+            ["PATH", "HOME", "SHELL", "IFS", "USER", "LOGNAME", "RESTIC_PASSWORD_COMMAND", "LD_"]
+        {
+            assert!(script.contains(key), "the loop must refuse {key}: {script}");
+        }
+        assert!(script.contains("*[!A-Z0-9_]*"), "{script}");
     }
 
     /// A line that changes under trim is its own refusal, and a CRLF
