@@ -175,18 +175,14 @@ fn heal_from(
         // The directory tightens too: 0600 files in a 0755 directory
         // are enumerated, and the names alone are the account list.
         std::fs::create_dir_all(machine_users_d)?;
-        let _ =
-            std::fs::set_permissions(machine_users_d, std::fs::Permissions::from_mode(0o700));
+        let _ = std::fs::set_permissions(machine_users_d, std::fs::Permissions::from_mode(0o700));
         let tmp = machine_users_d.join(format!(".{name}.kuma-heal"));
         // A tmp a kill left behind would make create_new refuse this
         // and every later heal.
         let _ = std::fs::remove_file(&tmp);
         (|| -> std::io::Result<()> {
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&tmp)?;
+            let mut f =
+                std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
             use std::io::Write as _;
             f.write_all(account_file(name, extra).as_bytes())?;
             f.sync_all()?;
@@ -297,10 +293,8 @@ mod tests {
         // sourced by the root converger. The escape sends the key
         // byte-for-byte into KUMA_SSH_KEY and nothing else happens.
         let hostile = "ssh-ed25519 AAA'; touch /tmp/kuma-heal-poc; echo '";
-        let extra = config::AdditionalUser {
-            ssh_keys: vec![hostile.to_string()],
-            ..Default::default()
-        };
+        let extra =
+            config::AdditionalUser { ssh_keys: vec![hostile.to_string()], ..Default::default() };
         let body = account_file("deltauser", &extra);
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("sourced.sh");
@@ -314,11 +308,7 @@ mod tests {
             ])
             .output()
             .unwrap();
-        assert!(
-            out.status.success(),
-            "sourcing failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+        assert!(out.status.success(), "sourcing failed: {}", String::from_utf8_lossy(&out.stderr));
         assert_eq!(String::from_utf8_lossy(&out.stdout), hostile);
         assert!(
             !std::path::Path::new("/tmp/kuma-heal-poc").exists(),
@@ -343,10 +333,7 @@ mod tests {
             0o700,
             "a 0755 dir makes 0600 files enumerable, and the names alone are the account list"
         );
-        let mode = std::fs::metadata(machine.join("deltauser"))
-            .unwrap()
-            .permissions()
-            .mode();
+        let mode = std::fs::metadata(machine.join("deltauser")).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
     }
 

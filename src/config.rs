@@ -1394,9 +1394,8 @@ pub(crate) mod tests {
         // adversarial review: a comment that closes the single quote
         // and runs a command when the file is sourced.
         let key = |ssh_key: &str| {
-            let toml = format!(
-                "schema_version = 1\n[other_users.partner]\nssh_keys = [\"{ssh_key}\"]\n"
-            );
+            let toml =
+                format!("schema_version = 1\n[other_users.partner]\nssh_keys = [\"{ssh_key}\"]\n");
             toml::from_str::<Config>(&toml).unwrap().validate()
         };
         assert!(key("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB7cQ9Qme@host").is_ok());
@@ -1408,7 +1407,10 @@ pub(crate) mod tests {
             "a padded RSA key is the ordinary case"
         );
         assert!(key("ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTY me@laptop:22").is_ok());
-        assert!(key("ssh-ed25519 AAA'; touch /tmp/x; echo '").is_err(), "a quote breaks out of the sourced file");
+        assert!(
+            key("ssh-ed25519 AAA'; touch /tmp/x; echo '").is_err(),
+            "a quote breaks out of the sourced file"
+        );
         assert!(key("ssh-ed25519 AAA$(id -u)").is_err(), "$ has no business in a key");
         assert!(key("ssh-ed25519 AAA\\n real key").is_err(), "a backslash is not a key byte");
     }
