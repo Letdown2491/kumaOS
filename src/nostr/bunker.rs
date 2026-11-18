@@ -172,13 +172,17 @@ pub fn parse_nostrconnect_uri(uri: &str) -> Result<NostrConnectParts> {
         // trusted.example, the daemon connects to evil.example.
         for ch in relay.chars() {
             if !(ch.is_ascii_alphanumeric() || ":/.-_~?#[]&*+,;=".contains(ch)) {
-                bail!("relay {relay:?} contains {ch:?}; a relay is scheme, host, port and \
-                       path, and this character rides the daemon's argv in a systemd unit");
+                bail!(
+                    "relay {relay:?} contains {ch:?}; a relay is scheme, host, port and \
+                       path, and this character rides the daemon's argv in a systemd unit"
+                );
             }
         }
         if relay.split('/').any(|segment| segment == "..") {
-            bail!("relay {relay:?} contains a `..` segment; a relay path is the daemon's \
-                   subscription road, not a reader misdirection");
+            bail!(
+                "relay {relay:?} contains a `..` segment; a relay path is the daemon's \
+                   subscription road, not a reader misdirection"
+            );
         }
         let (scheme, rest) = relay.split_once("://").ok_or_else(|| {
             anyhow!("relay {relay:?} has no scheme; relays are wss:// or ws:// to loopback")
@@ -2202,12 +2206,18 @@ mod tests {
         assert!(reason("wss://host.example/a%20b").contains("argv"), "encoded space");
         assert!(reason("wss://host.example/a%09b").contains("argv"), "encoded tab");
         assert!(reason("wss://host.example%25h").contains("argv"), "encoded systemd specifier");
-        assert!(reason("wss://host.example%24VAR").contains("argv"), "encoded $ expands in an ExecStart word");
+        assert!(
+            reason("wss://host.example%24VAR").contains("argv"),
+            "encoded $ expands in an ExecStart word"
+        );
         assert!(
             reason("wss%3A%2F%2Ftrusted.example%40evil.example").contains("argv"),
             "encoded @ is userinfo authority confusion"
         );
-        assert!(reason("wss://host.example/a%2F..%2Fb").contains("misdirection"), "encoded dot-dot segment");
+        assert!(
+            reason("wss://host.example/a%2F..%2Fb").contains("misdirection"),
+            "encoded dot-dot segment"
+        );
         assert!(
             reason("wss://host.example\"quoted").contains("argv"),
             "raw quote re-splits a unit line"

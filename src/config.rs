@@ -1276,7 +1276,10 @@ pub(crate) mod tests {
             valid("\"wss://trusted.example@evil.example\"").is_err(),
             "@ is userinfo: the human reads one host, the daemon connects to another"
         );
-        assert!(valid("\"wss://host.example/a/../b\"").is_err(), "a dot-dot segment misdirects a reader");
+        assert!(
+            valid("\"wss://host.example/a/../b\"").is_err(),
+            "a dot-dot segment misdirects a reader"
+        );
         // Ports, paths and query strings are the ordinary spelling.
         assert!(valid("\"wss://relay.example.com:7777/path?x=1#frag\"").is_ok());
     }
