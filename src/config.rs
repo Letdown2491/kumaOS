@@ -1006,7 +1006,14 @@ fn validate_user_fields(
         // is an algorithm name, base64, and a comment, and none of
         // those need a quote, a `$`, or a backslash. Same rule, same
         // reason, as every other value in this file.
-        validate_name(key, &format!("{prefix}.ssh_keys"), &['@', '.', '+', '-', '_', '/', ':', ' '])?;
+        // `=` rides with it: base64's padding is ordinary in public key
+        // blobs (an RSA key ends in one or two), and a padded key is the
+        // ordinary case, not the exotic one.
+        validate_name(
+            key,
+            &format!("{prefix}.ssh_keys"),
+            &['@', '.', '+', '-', '_', '/', ':', ' ', '='],
+        )?;
     }
     Ok(())
 }
@@ -1340,6 +1347,13 @@ pub(crate) mod tests {
             toml::from_str::<Config>(&toml).unwrap().validate()
         };
         assert!(key("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB7cQ9Qme@host").is_ok());
+        // Base64 padding is the ordinary end of an RSA blob, and a
+        // comment is ordinary too — the alphabet must hold both or the
+        // rule refuses real keys.
+        assert!(
+            key("ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDjeK2mZ0w== martin@kuma").is_ok(),
+            "a padded RSA key is the ordinary case"
+        );
         assert!(key("ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTY me@laptop:22").is_ok());
         assert!(key("ssh-ed25519 AAA'; touch /tmp/x; echo '").is_err(), "a quote breaks out of the sourced file");
         assert!(key("ssh-ed25519 AAA$(id -u)").is_err(), "$ has no business in a key");
