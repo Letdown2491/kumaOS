@@ -29,7 +29,7 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use crate::config;
@@ -99,7 +99,20 @@ pub(crate) fn heal() -> Result<()> {
 fn account_file(name: &str, extra: &config::AdditionalUser) -> String {
     let mut decl = account_keys(name, extra);
     if !extra.ssh_keys.is_empty() {
-        decl.push_str(&format!("KUMA_SSH_KEY='{}'\n", extra.ssh_keys.join("\n")));
+        // Single-quote escape, the installer's own shape for the same
+        // value (install.rs): this file is sourced by a root shell, a
+        // key's comment is free text, and a raw quote would end the
+        // value and run whatever followed it as root. The validation
+        // alphabet refuses quotes upstream; the write site holds the
+        // same line on its own authority, because a boundary one
+        // reader away from its rule is not the rule.
+        let escaped = extra
+            .ssh_keys
+            .iter()
+            .map(|key| key.trim().replace('\'', "'\\''"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        decl.push_str(&format!("KUMA_SSH_KEY='{escaped}'\n"));
     }
     decl
 }
@@ -155,11 +168,28 @@ fn heal_from(
         let file = machine_users_d.join(name);
         // Write-then-rename, the entry writer's own shape: a crash
         // mid-write leaves no half file for the converger to source.
+        // Created 0600 in the one call rather than written at umask
+        // width and narrowed afterward — the file carries a password
+        // hash, and the window between write and chmod is one an
+        // inotify watcher can open through and keep past the chmod.
+        // The directory tightens too: 0600 files in a 0755 directory
+        // are enumerated, and the names alone are the account list.
         std::fs::create_dir_all(machine_users_d)?;
+        let _ = std::fs::set_permissions(machine_users_d, std::fs::Permissions::from_mode(0o700));
         let tmp = machine_users_d.join(format!(".{name}.kuma-heal"));
-        std::fs::write(&tmp, account_file(name, extra))?;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
-        std::fs::rename(&tmp, &file)?;
+        // A tmp a kill left behind would make create_new refuse this
+        // and every later heal.
+        let _ = std::fs::remove_file(&tmp);
+        (|| -> std::io::Result<()> {
+            let mut f =
+                std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+            use std::io::Write as _;
+            f.write_all(account_file(name, extra).as_bytes())?;
+            f.sync_all()?;
+            drop(f);
+            std::fs::rename(&tmp, &file)
+        })()
+        .context("cannot write the heal's account file")?;
         moved.push(format!(
             "{name}: the ride names this account and no dropin carries \
                             it; the converger's machine-state loop will"
@@ -254,6 +284,57 @@ mod tests {
         heal_from(Some(&text), &dir.path().join("no-image"), &machine).unwrap();
         let contents = std::fs::read_to_string(machine.join("deltauser")).unwrap();
         assert!(contents.contains("KUMA_SSH_KEY='ssh-ed25519 AAA'"));
+    }
+
+    #[test]
+    fn a_hostile_ssh_key_comment_sources_to_its_own_bytes() {
+        // The adversarial-review PoC, held end to end: a comment that
+        // closes the single quote and runs a command when the file is
+        // sourced by the root converger. The escape sends the key
+        // byte-for-byte into KUMA_SSH_KEY and nothing else happens.
+        let hostile = "ssh-ed25519 AAA'; touch /tmp/kuma-heal-poc; echo '";
+        let extra =
+            config::AdditionalUser { ssh_keys: vec![hostile.to_string()], ..Default::default() };
+        let body = account_file("deltauser", &extra);
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sourced.sh");
+        std::fs::write(&file, &body).unwrap();
+        let out = std::process::Command::new("bash")
+            .args([
+                "-c",
+                "set -e; source \"$1\"; printf %s \"$KUMA_SSH_KEY\"",
+                "_",
+                file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "sourcing failed: {}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), hostile);
+        assert!(
+            !std::path::Path::new("/tmp/kuma-heal-poc").exists(),
+            "the breakout must not have run"
+        );
+    }
+
+    #[test]
+    fn the_heal_creates_its_file_at_0600_in_one_call_and_tightens_its_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine = dir.path().join("machine-users.d");
+        std::fs::create_dir_all(&machine).unwrap();
+        // What a kill between write and rename leaves behind.
+        let tmp = machine.join(".deltauser.kuma-heal");
+        std::fs::write(&tmp, "half").unwrap();
+        let text = ride("[other_users.deltauser]\npassword_hash = \"$6$hash\"\n");
+        heal_from(Some(&text), &dir.path().join("no-image"), &machine).unwrap();
+        assert!(!tmp.exists(), "the stale tmp goes before the create_new");
+        let dir_mode = std::fs::metadata(&machine).unwrap().permissions().mode();
+        assert_eq!(
+            dir_mode & 0o777,
+            0o700,
+            "a 0755 dir makes 0600 files enumerable, and the names alone are the account list"
+        );
+        let mode = std::fs::metadata(machine.join("deltauser")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]
