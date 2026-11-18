@@ -161,6 +161,25 @@ pub fn parse_nostrconnect_uri(uri: &str) -> Result<NostrConnectParts> {
         // declaration that runs the bunker — plaintext kind 24133
         // traffic to a non-loopback host announces which app talks to
         // which bunker, and that is not kuma's to leak.
+        //
+        // The alphabet is narrowed the same way: an invited relay
+        // rides the same roads a declared one rides — argv on the
+        // next delta's drop-in, the journal, the panel, the pairing
+        // list — and validation happens after the percent-decoding
+        // above, which is the side a `%20` smuggles through. `@` and
+        // `$` go with it: `$` expands in a systemd ExecStart word,
+        // and `@` is authority confusion — a human reads
+        // trusted.example, the daemon connects to evil.example.
+        for ch in relay.chars() {
+            if !(ch.is_ascii_alphanumeric() || ":/.-_~?#[]&*+,;=".contains(ch)) {
+                bail!("relay {relay:?} contains {ch:?}; a relay is scheme, host, port and \
+                       path, and this character rides the daemon's argv in a systemd unit");
+            }
+        }
+        if relay.split('/').any(|segment| segment == "..") {
+            bail!("relay {relay:?} contains a `..` segment; a relay path is the daemon's \
+                   subscription road, not a reader misdirection");
+        }
         let (scheme, rest) = relay.split_once("://").ok_or_else(|| {
             anyhow!("relay {relay:?} has no scheme; relays are wss:// or ws:// to loopback")
         })?;
@@ -168,7 +187,16 @@ pub fn parse_nostrconnect_uri(uri: &str) -> Result<NostrConnectParts> {
             "wss" => {}
             "ws" => {
                 let authority = rest.split('/').next().unwrap_or_default();
-                let host = authority.split(':').next().unwrap_or(authority);
+                // Bracketed IPv6, exactly as the declaration's validator
+                // spells it: the port's colon is not the host's, and a
+                // split-on-colon alone would read `[` as the host and
+                // refuse the one loopback spelling a comment-free URI
+                // can carry. Twin drift in the strict direction is
+                // still drift.
+                let host = match authority.strip_prefix('[') {
+                    Some(bracketed) => bracketed.split(']').next().unwrap_or_default(),
+                    None => authority.split(':').next().unwrap_or(authority),
+                };
                 let loopback = matches!(host, "127.0.0.1" | "::1" | "localhost");
                 if !loopback {
                     bail!("relay {relay:?} is ws:// to a non-loopback host: that is plaintext \
@@ -2156,6 +2184,51 @@ mod tests {
         let plaintext_relay =
             format!("nostrconnect://{client}?relay=http://relay.example&secret=x");
         assert!(reason(&plaintext_relay).contains("wss"));
+    }
+
+    #[test]
+    fn an_invited_relay_is_held_to_the_declarations_alphabet() {
+        // The twin of config.rs's relay validator, from the other
+        // direction: the URI is the road a stranger writes, so it gets
+        // no wider a rule than the declaration a machine's owner
+        // writes. Validation runs after the percent-decoding, which is
+        // the side a `%20` or a `%09` smuggles a space or a tab
+        // through.
+        let client = Keys::generate().public_key();
+        let reason = |relay: &str| {
+            let uri = format!("nostrconnect://{client}?relay={relay}&secret=x");
+            parse_nostrconnect_uri(&uri).unwrap_err().to_string()
+        };
+        assert!(reason("wss://host.example/a%20b").contains("argv"), "encoded space");
+        assert!(reason("wss://host.example/a%09b").contains("argv"), "encoded tab");
+        assert!(reason("wss://host.example%25h").contains("argv"), "encoded systemd specifier");
+        assert!(reason("wss://host.example%24VAR").contains("argv"), "encoded $ expands in an ExecStart word");
+        assert!(
+            reason("wss%3A%2F%2Ftrusted.example%40evil.example").contains("argv"),
+            "encoded @ is userinfo authority confusion"
+        );
+        assert!(reason("wss://host.example/a%2F..%2Fb").contains("misdirection"), "encoded dot-dot segment");
+        assert!(
+            reason("wss://host.example\"quoted").contains("argv"),
+            "raw quote re-splits a unit line"
+        );
+
+        // The ordinary spelling, ports, paths and query strings
+        // included, still parses.
+        let uri = format!(
+            "nostrconnect://{client}?relay=wss%3A%2F%2Frelay.example%3A7777%2Fpath%3Fx%3D1&secret=x"
+        );
+        let parts = parse_nostrconnect_uri(&uri).unwrap();
+        assert_eq!(parts.relays, ["wss://relay.example:7777/path?x=1"]);
+
+        // Bracketed loopback IPv6, the spelling the declaration accepts:
+        // split-on-colon alone read `[` as the host and refused it, which
+        // is twin drift in the strict direction — the two validators
+        // disagreeing about which plaintext relay is allowed.
+        let bracketed =
+            format!("nostrconnect://{client}?relay=ws%3A%2F%2F%5B%3A%3A1%5D%3A7777&secret=x");
+        let parts = parse_nostrconnect_uri(&bracketed).unwrap();
+        assert_eq!(parts.relays, ["ws://[::1]:7777"]);
     }
 
     #[test]
