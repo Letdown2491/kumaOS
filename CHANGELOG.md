@@ -2,6 +2,107 @@
 
 ## Unreleased
 
+- **The home declaration outranks the working directory.** The audit's
+  P1 closes: `resolve_config` preferred `./kuma.toml` over
+  `~/.config/kuma/kuma.toml`, which made the current directory the one
+  place a checkout kuma was pointed at could volunteer a declaration —
+  and every field a declaration carries ends up running as root in the
+  image build, from `packages.rpm` down to the shell fragments the
+  converger sources. The precedence is the reverse now: `--config`,
+  then the XDG declaration, then `./kuma.toml`. Project checkouts keep
+  working — the CWD fallback only ever mattered when the home had no
+  declaration — and when both files exist the resolver says so on
+  stderr, naming both and pointing `--config` at the loser, so "I
+  edited kuma.toml and nothing changed" has a message instead of two
+  silent files. An unreadable declaration is an authority error now,
+  not an absence the resolver walks past; and a root run under sudo in
+  a project checkout says out loud that the invoking user's working
+  directory is being honored by a root process. (#86)
+
+- **The accounts heal's file is created 0600 in one call, and its ssh
+  keys cannot speak.** Two findings from the adversarial round, in the
+  path that writes the machine-state account file the root converger
+  sources every boot. The quote: `ssh_keys` passed a shape check but no
+  alphabet, and the heal embedded them into `KUMA_SSH_KEY='…'`
+  unescaped — a key whose *comment* closed the single quote ran a
+  command when the file was sourced as root. The alphabet now refuses
+  quotes, `$` and backslashes (base64's `=` padding rides — a padded
+  RSA key is the ordinary case, a test comment the audit gate first
+  caught carrying the builder's own identity now reads `user@host`),
+  the write site escapes with the installer's own shape, and neither
+  layer is trusted alone; the sourcing PoC is the regression test. The
+  mode: the heal's tmp was written at umask width and chmodded after —
+  the same openable window the bunker's state files closed — so the
+  file now opens 0600 in the one `create_new` call, synced before the
+  rename, and `/var/lib/kuma/users.d` tightens to 0700: 0600 files in
+  a 0755 directory are enumerable, and the names alone are the account
+  list. (#89)
+
+- **Relay urls are held to the alphabet the unit line can carry.** Relay
+  strings were the one declaration value that reached generated content
+  without an allowlist, and they ride the daemon's argv inside a
+  systemd `ExecStart=`: a space is an argument kuma-nostrd never asked
+  for, a quote re-splits the line, `%` is systemd's own specifier
+  escape, `$` expands from the unit's environment, and `@` in a relay
+  is authority confusion — the human reads trusted.example while the
+  daemon connects to evil.example. Both validators now hold relays to
+  the characters an ordinary `wss://host:port/path?query` spells with —
+  the declaration's, and the nostrconnect URI's twin, which validates
+  after its percent-decoding, the road a `%20` smuggles a space
+  through, and whose bracketed-IPv6 loopback check no longer misreads
+  `[` as the host. No privilege boundary anyone can cross this release;
+  the hole closes before declarations start arriving from elsewhere.
+  (#88)
+
+- **The bunker's state files are private, and stay that way across
+  restarts.** `apps.json` and `log.json` under `~/.local/state/` are
+  one account's record — paired app pubkeys, the names and client URLs
+  those apps claimed, every ask with its verdict — and they landed at
+  umask width, 0644 on the ordinary machine, readable by every other
+  account, while the daemon's unix socket beside them was 0600 with a
+  peer-uid check. Writes go through the accounts heal's shape now:
+  created 0600 in the one call (`O_NOFOLLOW` against a planted link),
+  synced before the rename, so a crash leaves no half file and a
+  concurrent reader never sees one; the state dir tightens to 0700 —
+  0600 files in a 0755 directory are enumerated, and the names alone
+  are the history — and startup tightens what an older daemon left at
+  0644, because a machine whose pairing never changes would otherwise
+  keep its world-readable files forever. (#87)
+
+- **The backup credential file's keys are vetted where its values
+  already were.** `ambiguous_values` refused any value carrying a
+  quote, backslash, `$` or backtick, but the *key* rode
+  `export "$line"` inside a root shell unexamined: `PATH=`,
+  `LD_PRELOAD=` or `RESTIC_PASSWORD_COMMAND=` in the credential file
+  rewrites the environment the backup executes under — a different
+  attack than a wrong password. The key is now held to the uppercase
+  alphabet every backend's variables already spell, with the
+  environment-rewriting names refused, in two authorities
+  independently: the verb's Rust-side check (which can be locked out
+  of a 0600 root file — a lockout that is now an authority error, not
+  a silent skip), and the root-side shell loop, which refuses by name
+  in the shell where the export would happen. (#91)
+
+- **Release verification pins the cosign identity to release.yml,
+  spelled the way GitHub issues it.** The regexp on SECURITY.md spelled
+  the repository lowercase — `kumaos` — and cosign regexps are
+  case-sensitive, so the documented verify command matched no signature
+  at all: it looked like a verification and verified nothing. The
+  regexp now spells the repository as the identity reads and names the
+  workflow file, so a signature from any other workflow in this
+  repository at any ref fails the check the way a main-branch
+  signature does; each release's notes quote the exact identity —
+  workflow file and full tag ref — which is the strictest form. (#85)
+
+- **build.rs's `include_bytes!` literal is debug-escaped, not
+  displayed.** The plymouth theme table was generated Rust source with
+  two `Display` interpolations — the manifest path and the asset
+  filename. The assert above bans quotes and backslashes from the
+  filenames, so the honest case was safe; the `{:?}` makes the
+  defensive case loud too: a name that slipped past the assert becomes
+  a compile error about a missing file instead of injected source.
+  Byte-identical output for the committed spinner frames. (#90)
+
 ## v45.4.0 (2026-11-13)
 
 - **The shell rides with its battery notifier.** The kumaui pin moves
