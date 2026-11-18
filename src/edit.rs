@@ -16,9 +16,11 @@ const LISTS: &[&str] = &["rpm", "flatpak", "brew"];
 ///
 /// kuma does not write here and does not read the result. What it
 /// contributes is the path, which is the part that is easy to get wrong:
-/// a `./kuma.toml` in the current directory outranks
-/// `~/.config/kuma/kuma.toml`, so "I edited kuma.toml and nothing
-/// changed" has two files behind it and no error message.
+/// `~/.config/kuma/kuma.toml` outranks a `./kuma.toml` in the current
+/// directory — a checkout kuma is pointed at cannot volunteer its own
+/// declaration — and when both exist the resolution announces on stderr
+/// which one won, so "I edited kuma.toml and nothing changed" has two
+/// files behind it and a message naming them.
 ///
 /// The editor replaces this process rather than being waited on. A
 /// desktop entry runs this in a terminal window through `kuma-launch`,

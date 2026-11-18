@@ -1207,29 +1207,97 @@ enable = []
 disable = []
 "#;
 
-/// `--config` wins untouched. Otherwise ./kuma.toml, falling back to the
-/// XDG config dir when the current directory has none — a home for
-/// declarations that don't live in a project checkout. Never creates
-/// anything; when neither exists, the local name is returned so error
-/// messages point somewhere sensible.
+/// `--config` wins untouched. Otherwise the XDG declaration when one
+/// exists, with ./kuma.toml behind it — the home file outranks the
+/// working directory, because the working directory is the one place a
+/// checkout kuma was pointed at can plant a file it should not get to
+/// volunteer: everything a declaration names, from packages.rpm down,
+/// ends up running as root in the image build. When both exist the
+/// choice is announced on stderr, naming both files, so "I edited
+/// kuma.toml and nothing changed" still has two files behind it but now
+/// has a message too, and --config takes the other one explicitly.
+/// Never creates anything; when neither exists, the local name is
+/// returned so error messages point somewhere sensible.
 fn resolve_config(explicit: Option<PathBuf>) -> PathBuf {
-    if let Some(path) = explicit {
-        return path;
-    }
-    let local = PathBuf::from("kuma.toml");
-    if local.exists() {
-        return local;
-    }
-    let base = std::env::var_os("XDG_CONFIG_HOME")
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
-    if let Some(base) = base {
-        let xdg = base.join("kuma/kuma.toml");
-        if xdg.exists() {
-            return xdg;
-        }
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .map(|base| base.join("kuma/kuma.toml"));
+    let was_explicit = explicit.is_none();
+    let (resolved, shadowed) = resolve_config_against(explicit, &cwd, xdg);
+    if let Some(shadowed) = shadowed {
+        eprintln!(
+            "note: two declarations are visible: using {}, ignoring {}. \
+             Point --config at {} to work on the other one.",
+            resolved.display(),
+            shadowed.display(),
+            shadowed.display()
+        );
+    } else if !was_explicit
+        && resolved == cwd.join("kuma.toml")
+        && std::env::var_os("SUDO_USER").is_some()
+        && unsafe { libc::geteuid() } == 0
+    {
+        // Under sudo (Fedora's env_reset), HOME is /root and root's home has
+        // no declaration, so what resolves is the file in the invoking
+        // user's working directory — now honored by a root process. The
+        // declaration's own trust story ("whoever wrote it is root-equivalent
+        // through packages.rpm") does not cover that shape, so it says so
+        // out loud rather than proceeding quietly. A warning, not a refusal:
+        // hibernate's precedent, and `sudo kuma` in a project checkout is a
+        // thing people do for reasons the resolver cannot see.
+        eprintln!(
+            "note: running as root under sudo, and root's home declares nothing, \
+             so this is {} from the invoking user's working directory. A \
+             declaration that was safe to trust as its author is not \
+             automatically safe to trust as root: pass --config to pin the \
+             file, or run without sudo.",
+            resolved.display()
+        );
     }
-    local
+    resolved
+}
+
+/// Whether a path is there — including when the honest answer is "cannot
+/// say", which counts as present. `Path::exists()` is `metadata().is_ok()`,
+/// so a permission error reads as an absence, and the resolver would walk
+/// past a declaration that exists but cannot be read and fall through to
+/// the next candidate in silence — the exact authority error the
+/// changelog (v45.2.0) records for state.rs: "a declaration that exists
+/// but cannot be read is an authority error", not a missing one.
+/// lstat rather than stat, so a dangling link is present too: reading it
+/// then fails loudly, which is that same honesty, where `exists()` would
+/// have skipped it.
+fn present(path: &Path) -> bool {
+    !matches!(
+        std::fs::symlink_metadata(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
+/// The resolution with the environment handed in, so the precedence has
+/// tests that do not have to move this process's working directory or
+/// rewrite its environment mid-run. Returns the path that wins and —
+/// when both a home and a working-directory declaration exist — the one
+/// that lost, for the caller to announce.
+fn resolve_config_against(
+    explicit: Option<PathBuf>,
+    cwd: &Path,
+    xdg: Option<PathBuf>,
+) -> (PathBuf, Option<PathBuf>) {
+    if let Some(path) = explicit {
+        return (path, None);
+    }
+    let local = cwd.join("kuma.toml");
+    let xdg = xdg.filter(|path| present(path));
+    match xdg {
+        Some(home) => {
+            let shadowed = present(&local).then_some(local);
+            (home, shadowed)
+        }
+        None => (local, None),
+    }
 }
 
 /// Read-only consumers (generate, diff, update) can work straight from
@@ -1239,7 +1307,10 @@ fn resolve_config(explicit: Option<PathBuf>) -> PathBuf {
 /// and an explicit --config that doesn't exist stays an error rather
 /// than silently meaning something else.
 fn read_config_path(resolved: &Path, explicit: bool, announce: bool) -> PathBuf {
-    if !explicit && !resolved.exists() {
+    // present(), not exists(): an unreadable declaration is an authority
+    // error the read is about to raise, not an absence that entitles the
+    // baked file to step in.
+    if !explicit && !present(resolved) {
         let baked = Path::new(state::BAKED_CONFIG);
         if baked.exists() {
             if announce {
@@ -5335,6 +5406,117 @@ fn path_str(path: &Path) -> Result<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The resolution is the one place an untrusted directory could
+    /// volunteer a declaration, so its precedence table gets the same
+    /// treatment the routing table gets below: every row held by a
+    /// test, against a pure function that takes the environment as
+    /// arguments rather than reading it mid-run.
+    #[test]
+    fn an_explicit_config_wins_untouched_even_when_it_does_not_exist() {
+        // An explicit path that does not exist is read_config_path's and
+        // the command's error to give, not the resolver's to preempt.
+        let dir = tempfile::tempdir().unwrap();
+        let explicit = dir.path().join("elsewhere/kuma.toml");
+        let (path, shadowed) = resolve_config_against(Some(explicit.clone()), dir.path(), None);
+        assert_eq!(path, explicit);
+        assert_eq!(shadowed, None);
+    }
+
+    #[test]
+    fn the_home_declaration_outranks_the_working_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let xdg = dir.path().join("xdg/kuma/kuma.toml");
+        std::fs::create_dir_all(xdg.parent().unwrap()).unwrap();
+        std::fs::write(&xdg, "schema_version = 1\n").unwrap();
+        let (path, shadowed) = resolve_config_against(None, dir.path(), Some(xdg.clone()));
+        assert_eq!(path, xdg);
+        assert_eq!(shadowed, None, "only one declaration, nothing to announce");
+    }
+
+    #[test]
+    fn the_working_directory_declaration_is_used_when_the_home_has_none() {
+        // The documented project-checkout shape keeps working: the
+        // precedence moved, not the fallback.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("kuma.toml"), "schema_version = 1\n").unwrap();
+        let (path, shadowed) =
+            resolve_config_against(None, dir.path(), Some(dir.path().join("xdg/kuma/kuma.toml")));
+        assert_eq!(path, dir.path().join("kuma.toml"));
+        assert_eq!(shadowed, None);
+    }
+
+    #[test]
+    fn two_visible_declarations_resolve_to_the_home_and_name_the_loser() {
+        // The untrusted-checkout case, held directly: ./kuma.toml does
+        // not outrank the home file, and the loser comes back so the
+        // caller announces it instead of ignoring it silently.
+        let dir = tempfile::tempdir().unwrap();
+        let xdg = dir.path().join("xdg/kuma/kuma.toml");
+        std::fs::create_dir_all(xdg.parent().unwrap()).unwrap();
+        std::fs::write(&xdg, "schema_version = 1\n").unwrap();
+        let local = dir.path().join("kuma.toml");
+        std::fs::write(&local, "schema_version = 1\n").unwrap();
+        let (path, shadowed) = resolve_config_against(None, dir.path(), Some(xdg));
+        assert_eq!(path, dir.path().join("xdg/kuma/kuma.toml"));
+        assert_eq!(shadowed.as_deref(), Some(local.as_path()));
+    }
+
+    #[test]
+    fn neither_declaration_resolves_to_the_local_name_for_the_errors_sake() {
+        // "run kuma init to start one here" points at the file the
+        // person is standing in front of, not at a path they never wrote.
+        let dir = tempfile::tempdir().unwrap();
+        let (path, shadowed) =
+            resolve_config_against(None, dir.path(), Some(dir.path().join("xdg/kuma/kuma.toml")));
+        assert_eq!(path, dir.path().join("kuma.toml"));
+        assert_eq!(shadowed, None);
+    }
+
+    #[test]
+    fn an_xdg_base_without_a_declaration_changes_nothing() {
+        // The directory existing is not the file existing: the old
+        // resolver only ever asked about the joined file, and that is
+        // still the only question.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("xdg/kuma")).unwrap();
+        std::fs::write(dir.path().join("kuma.toml"), "schema_version = 1\n").unwrap();
+        let (path, shadowed) =
+            resolve_config_against(None, dir.path(), Some(dir.path().join("xdg/kuma/kuma.toml")));
+        assert_eq!(path, dir.path().join("kuma.toml"));
+        assert_eq!(shadowed, None);
+    }
+
+    #[test]
+    fn an_unreadable_home_declaration_is_present_not_absent() {
+        // The v45.2.0 authority rule, held at the resolver: metadata
+        // failing on anything but NotFound must not read as "not
+        // there", or an unreadable ~/.config/kuma/kuma.toml silently
+        // sends a root process to ./kuma.toml. A directory with no
+        // execute bit makes lstat on the file inside fail with EACCES —
+        // the cheapest way to stage a real permission error. Root sees
+        // through mode bits, so the test says nothing there.
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let xdg_dir = dir.path().join("xdg/kuma");
+        std::fs::create_dir_all(&xdg_dir).unwrap();
+        std::fs::write(xdg_dir.join("kuma.toml"), "schema_version = 1\n").unwrap();
+        std::fs::set_permissions(&xdg_dir, std::fs::Permissions::from_mode(0o400)).unwrap();
+        let (path, shadowed) =
+            resolve_config_against(None, dir.path(), Some(xdg_dir.join("kuma.toml")));
+        // Put the mode back before the tempdir's own cleanup has to
+        // walk the directory.
+        std::fs::set_permissions(&xdg_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            path,
+            xdg_dir.join("kuma.toml"),
+            "an unreadable declaration is an authority error at read time, not a fallback trigger"
+        );
+        assert_eq!(shadowed, None);
+    }
 
     /// The routing is the verb's whole contract on paper: the same
     /// machine, pointed at a different origin, takes a different lane.
