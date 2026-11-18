@@ -115,7 +115,7 @@ fn restic_argv_within(
            case \"$line\" in \"\"|\\#*) continue ;; esac; \
            key=${{line%%=*}}; \
            case \"$key\" in \
-             PATH|HOME|SHELL|IFS|USER|LOGNAME|RESTIC_PASSWORD_COMMAND|LD_*|*[!A-Za-z0-9_]*) \
+             PATH|HOME|SHELL|IFS|USER|LOGNAME|RESTIC_PASSWORD_COMMAND|LD_*|*[!A-Z0-9_]*) \
                echo \"kuma: refusing unsafe key in $1\" >&2; exit 1 ;; \
            esac; \
            export \"$line\"; \
@@ -674,7 +674,7 @@ mod tests {
         for key in ["PATH", "HOME", "SHELL", "IFS", "USER", "LOGNAME", "RESTIC_PASSWORD_COMMAND", "LD_"] {
             assert!(script.contains(key), "the loop must refuse {key}: {script}");
         }
-        assert!(script.contains("*[!A-Za-z0-9_]*"), "{script}");
+        assert!(script.contains("*[!A-Z0-9_]*"), "{script}");
     }
 
     /// A line that changes under trim is its own refusal, and a CRLF
