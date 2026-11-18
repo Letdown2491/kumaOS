@@ -30,6 +30,19 @@ running binary should always be a commit you can name.
 
 ## Pushes wait for the user
 
+A PR body claims the gates it ran and no others. The Nov 2026
+adversarial round's seven bodies each said "full suite green, clippy
+clean" — honestly — and three of the seven still failed the battery's
+`cargo fmt --check` step, because no one in the loop ran it. Run
+`cargo fmt --check` beside `cargo test` before a branch is pushed;
+the claim names the gate, the gate does not name itself.
+
+And the audit's tracked-file scan reads the tree's prose too: a test
+fixture's comment field carried the builder's identity once (a key
+comment in a validation test), and the scan caught it. Fixtures speak
+`user@host`; a name rides in where prose is expected as easily as in
+a commit message.
+
 Commits are the agent's to make — the tree stays clean and every change
 is named by a commit — but `git push`, branch or tag, moves only on an
 explicit go: a branch push starts a 35-minute battery, and a `v*` tag

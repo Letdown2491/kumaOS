@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The battery-watch proof landed on hardware.** The udev
+  `power_supply` redesign 45.4.0 shipped carried its proof debt in the
+  open — nothing in a VM ever discharges — and a real machine has now
+  retired it: discharge past the 15% low and 5% critical bands
+  announced through the shell's notification road, the event watch
+  firing on real supply events rather than the smoke's synthetic
+  UEVENT. Record-only; no code change rides it. (#80)
+
 - **The home declaration outranks the working directory.** The audit's
   P1 closes: `resolve_config` preferred `./kuma.toml` over
   `~/.config/kuma/kuma.toml`, which made the current directory the one
