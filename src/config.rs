@@ -1403,7 +1403,7 @@ pub(crate) mod tests {
         // comment is ordinary too — the alphabet must hold both or the
         // rule refuses real keys.
         assert!(
-            key("ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDjeK2mZ0w== martin@kuma").is_ok(),
+            key("ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDjeK2mZ0w== user@host").is_ok(),
             "a padded RSA key is the ordinary case"
         );
         assert!(key("ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTY me@laptop:22").is_ok());
