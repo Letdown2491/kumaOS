@@ -80,9 +80,15 @@ fn plymouth_theme() {
     for path in &files {
         let name = path.file_name().and_then(|n| n.to_str()).expect("UTF-8 name");
         assert!(!name.contains('"') && !name.contains('\\'), "odd filename {name}");
-        table.push_str(&format!(
-            "    ({name:?}, include_bytes!(\"{manifest}/assets/spinner_alt/{name}\")),\n"
-        ));
+        // The literal is Rust source, so both interpolated paths go
+        // through {:?} rather than Display: a quote or a backslash that
+        // slipped past the assert would otherwise end the
+        // include_bytes! string and compile whatever followed it.
+        // Debug-escaped, the odd name becomes a compile error about a
+        // missing file — loud, and the generated table stays
+        // byte-identical for the honest names.
+        let literal = format!("{}/assets/spinner_alt/{}", manifest, name);
+        table.push_str(&format!("    ({name:?}, include_bytes!({literal:?})),\n"));
     }
     table.push_str("];\n");
 

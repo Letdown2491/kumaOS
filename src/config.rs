@@ -1019,6 +1019,35 @@ fn validate_user_fields(
 }
 
 fn validate_relay(relay: &str) -> Result<()> {
+    // The relay string rides the daemon's argv inside a systemd unit —
+    // split by systemd rather than by a shell, but split all the same:
+    // a space is an argument kuma-nostrd never asked for, a quote
+    // re-splits the line, `%` is systemd's own specifier escape (a
+    // `%h` in a relay URL becomes a home directory before the daemon
+    // ever sees it), and `$` expands too — systemd substitutes `$VAR`
+    // in ExecStart words from the unit's environment. `@` is refused
+    // not for the unit's sake but for the reader's: userinfo in a
+    // relay is authority confusion, `wss://trusted.example@evil.example`
+    // connects to evil.example while every human reading the URI
+    // trusts trusted.example, and NIP-46 relays take no userinfo. The
+    // alphabet below is what an ordinary wss://host:port/path spells
+    // with; anything else is refused here, at build, rather than
+    // trusted to mean nothing in the unit.
+    for ch in relay.chars() {
+        if !(ch.is_ascii_alphanumeric() || ":/.-_~?#[]&*+,;=".contains(ch)) {
+            bail!(
+                "nostr relay {relay:?} contains {ch:?}; a relay is scheme, host, port and \
+                 path, and this character would ride the daemon's argv in a systemd unit"
+            );
+        }
+    }
+    if relay.split('/').any(|segment| segment == "..") {
+        bail!(
+            "nostr relay {relay:?} contains a `..` segment; a relay path names the \
+             daemon's own subscription road, and a dot-dot there is either a typo \
+             or a reader being pointed somewhere other than where the URL goes"
+        );
+    }
     let (scheme, rest) = match relay.split_once("://") {
         Some((scheme, rest)) => (scheme, rest),
         None => {
@@ -1246,6 +1275,30 @@ pub(crate) mod tests {
         assert!(plaintext.to_string().contains("plaintext on the wire"));
         assert!(valid("\"http://relay.example.com\"").is_err());
         assert!(valid("\"relay.example.com\"").is_err());
+
+        // The alphabet the unit line can hold: a relay rides
+        // kuma-nostrd's argv inside a systemd unit — split by systemd,
+        // not a shell, but split all the same — so a space is an extra
+        // argument, a quote re-splits the line, and `%` is systemd's
+        // own specifier escape. Refused at build, where it costs a
+        // typo, rather than on the machine, where it costs a daemon.
+        assert!(valid("\"wss://host.example/a b\"").is_err(), "a space is an extra argv");
+        assert!(valid("\"wss://host.example\\\"q\"").is_err(), "a quote re-splits the line");
+        assert!(valid("\"wss://host.example%h\"").is_err(), "% is systemd's specifier escape");
+        assert!(
+            valid("\"wss://host.example$VAR\"").is_err(),
+            "$ expands in a systemd ExecStart word"
+        );
+        assert!(
+            valid("\"wss://trusted.example@evil.example\"").is_err(),
+            "@ is userinfo: the human reads one host, the daemon connects to another"
+        );
+        assert!(
+            valid("\"wss://host.example/a/../b\"").is_err(),
+            "a dot-dot segment misdirects a reader"
+        );
+        // Ports, paths and query strings are the ordinary spelling.
+        assert!(valid("\"wss://relay.example.com:7777/path?x=1#frag\"").is_ok());
     }
 
     #[test]
