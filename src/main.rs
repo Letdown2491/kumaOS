@@ -5418,8 +5418,7 @@ mod tests {
         // the command's error to give, not the resolver's to preempt.
         let dir = tempfile::tempdir().unwrap();
         let explicit = dir.path().join("elsewhere/kuma.toml");
-        let (path, shadowed) =
-            resolve_config_against(Some(explicit.clone()), dir.path(), None);
+        let (path, shadowed) = resolve_config_against(Some(explicit.clone()), dir.path(), None);
         assert_eq!(path, explicit);
         assert_eq!(shadowed, None);
     }
