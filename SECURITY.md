@@ -10,7 +10,7 @@ signing key is lost or rotated.
 ## Reporting a vulnerability
 
 Use GitHub's private vulnerability reporting:
-[**Report a vulnerability**](https://github.com/Letdown2491/kumaos/security/advisories/new).
+[**Report a vulnerability**](https://github.com/Letdown2491/kumaOS/security/advisories/new).
 It reaches the maintainer privately, and it is the only channel. Please
 don't open a public issue for one first.
 
@@ -140,7 +140,7 @@ attacker would have to take is push access to this repository.
 ```console
 $ cosign verify-blob \
     --bundle kuma-x86_64-unknown-linux-musl.bundle \
-    --certificate-identity-regexp '^https://github.com/Letdown2491/kumaos/.+@refs/tags/' \
+    --certificate-identity-regexp '^https://github.com/Letdown2491/kumaOS/\.github/workflows/release\.yml@refs/tags/' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     kuma-x86_64-unknown-linux-musl
 ```
@@ -153,14 +153,26 @@ say one thing. The regexp is narrower than it was at 44.0, on purpose:
 the workflow also signs every push to main, for the rolling artifact,
 and a prefix match alone would verify one of those as a tagged release.
 `@refs/tags/` is the part a tag-triggered run has and a main run does
-not.
+not. Narrower again since then: the regexp names the workflow file,
+`release.yml`, because every other workflow in this repository shares
+the same issuer and the same repository prefix, and a signature from
+any of them should fail this check the same way a main-branch
+signature does. The repository is also spelled in its canonical case
+here, `kumaOS`, because that is how the identity GitHub issues reads
+and a regexp matches case-sensitively — the lowercase `kumaos` this
+page used to carry matched no signature at all, so the command above
+verified nothing while looking like it verified everything. The
+strictest form is exact: replace `@refs/tags/` with the full ref of
+the release in hand, `@refs/tags/v<version>`, and the command accepts
+that release and nothing else. Each release's notes already quote the
+command in that exact form, with the tag filled in.
 
 The installer media is signed the same way:
 
 ```console
 $ cosign verify-blob \
     --bundle kuma-x86_64.iso.bundle \
-    --certificate-identity-regexp '^https://github.com/Letdown2491/kumaos/.+@refs/tags/' \
+    --certificate-identity-regexp '^https://github.com/Letdown2491/kumaOS/\.github/workflows/release\.yml@refs/tags/' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     kuma-x86_64.iso
 ```
