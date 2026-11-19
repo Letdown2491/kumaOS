@@ -886,9 +886,9 @@ mod tests {
         );
         assert!(unit.contains("ProtectSystem=strict"), "the sandbox is the point: {unit}");
         assert!(
-            unit.contains("ExecStartPre=+/usr/bin/mkdir -p %h/.local/state/kuma-nostr"),
-            "the state dir exists before the sandbox mounts, or ReadWritePaths \
-             fails the namespace and the bunker never starts: {unit}"
+            unit.contains("ExecStartPre=+/usr/bin/mkdir -m 0700 -p %h/.local/state/kuma-nostr"),
+            "the state dir exists before the sandbox mounts, at 0700 from birth — \
+             or ReadWritePaths fails the namespace and the bunker never starts: {unit}"
         );
         assert!(
             unit.contains("Restart=always"),
