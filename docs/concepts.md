@@ -468,9 +468,14 @@ them print something worth reading. Press enter to close it.
 
 `Edit Declaration` opens the declaration **this machine is actually
 using** in `$EDITOR` (falling back to nano, vim, or vi). Which file that
-is depends on where you run it: a `kuma.toml` in the current directory
-outranks `~/.config/kuma/kuma.toml`. `kuma edit --print` says which one
-resolved without opening anything.
+is depends on what exists: `--config` wins untouched; otherwise
+`~/.config/kuma/kuma.toml` when the home declares one, with a
+`kuma.toml` in the current directory behind it. When both are visible
+the resolver says so on stderr, naming both files and pointing
+`--config` at the loser — a checkout kuma was pointed at cannot
+volunteer its own declaration silently, and "I edited kuma.toml and
+nothing changed" has a message naming the two files behind it.
+`kuma edit --print` says which one resolved without opening anything.
 
 No entry writes your declaration without asking.
 

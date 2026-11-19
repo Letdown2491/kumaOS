@@ -883,6 +883,7 @@ pub fn doctor(json: bool, as_report: bool) -> Result<()> {
         check_etc_drift(&mut report);
         check_keymap(&mut report);
         check_mime_defaults(&mut report);
+        check_oo7_posture(&mut report);
         check_dev_install(&mut report);
         check_cargo_bin(&mut report);
     } else if Path::new("/usr/lib/kuma").is_dir() {
@@ -4438,6 +4439,98 @@ fn check_signature_policy(report: &mut impl FnMut(Grade, &str, String, Option<Ac
     );
 }
 
+/// The oo7 posture: the beta Secret Service daemon rides the F45 image
+/// as a transitive pull (issue #43's 2026-11-07 finding) and is held
+/// OFF the secrets surface by construction — the scriptlet's user-unit
+/// enablement provably does not apply on a bootc deploy, so no wants
+/// symlink exists and no preset names it, and the PAM twins are
+/// `-`-prefixed and optional beside gnome-keyring's lines. The posture
+/// is graded while it holds, so the day an image update or a machine
+/// command flips it, doctor says so: two Secret Service providers on
+/// one session is the dual-daemon state the rebase's own research
+/// named the shipped symptom to avoid. The stay lane (issue #43,
+/// decided 2026-11-18: hold for upstream's activation file) is what
+/// makes this a maintained posture rather than an absence, and a
+/// maintained posture is exactly the thing a graded check exists for.
+fn check_oo7_posture(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
+    // rpm -q answers presence; "not installed" is the ordinary answer
+    // on any base older than the sneak-in and grades nothing — the
+    // check exists for the posture of a present daemon, not to miss
+    // one that is not there.
+    let present = host_output_any(&["rpm", "-q", "oo7-daemon"])
+        .map(|out| out.starts_with("oo7-daemon-"))
+        .unwrap_or(false);
+    let enabled = oo7_user_enablement(
+        &[Path::new("/usr/lib/systemd/user"), Path::new("/etc/systemd/user")],
+        &[Path::new("/usr/lib/systemd/user-preset"), Path::new("/etc/systemd/user-preset")],
+    );
+    let Some((grade, detail)) = oo7_posture(present, enabled) else { return };
+    report(grade, "oo7", detail.to_string(), None);
+}
+
+/// The two enablement shapes a bootc image or a machine command can
+/// carry: the user unit dropped into a target's wants directory (baked
+/// at /usr/lib, machine-set at /etc), and a preset file whose enable
+/// line names the unit. The person's own ~/.config enablement is
+/// theirs, deliberately not read — check_enablements' rule one
+/// directory over, and the same reason. The read is the name itself
+/// (symlink_metadata, not exists()): a wants link whose target was
+/// removed is still enablement — check_enablements grades that same
+/// shape as dangling — and exists() would follow the link and call
+/// an enablement absent.
+fn oo7_user_enablement(user_dirs: &[&Path], preset_dirs: &[&Path]) -> bool {
+    for dir in user_dirs {
+        for target in ["default.target.wants", "graphical-session.target.wants"] {
+            let link = dir.join(target).join("oo7-daemon.service");
+            if std::fs::symlink_metadata(&link).is_ok() {
+                return true;
+            }
+        }
+    }
+    for dir in preset_dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        for entry in entries.flatten() {
+            let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
+            for line in text.lines() {
+                let line = line.trim();
+                if line.starts_with("enable ") && line[6..].trim() == "oo7-daemon.service" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// The posture table's rows. Absent grades nothing (None); present and
+/// inert is the maintained stay lane and reads green with its reason
+/// named; present and enabled is the flip — two Secret Service
+/// providers on one session — and warns without a fix action, because
+/// the cure is a decision (issue #43's lane), not a command.
+fn oo7_posture(present: bool, enabled: bool) -> Option<(Grade, &'static str)> {
+    if !present {
+        return None;
+    }
+    if enabled {
+        Some((
+            Grade::Warn,
+            "oo7-daemon is present AND enabled — the dual-daemon posture the F45 \
+             rebase's research named the shipped symptom: two Secret Service \
+             providers on one session, gnome-keyring's PAM lines beside a live \
+             oo7. An image that enabled the unit without kuma deciding it is the \
+             drift this check exists to catch; issue #43's adopt lane owns the \
+             surface",
+        ))
+    } else {
+        Some((
+            Grade::Ok,
+            "oo7-daemon rides the image (a transitive pull) and is held inert: \
+             no user-unit enablement, so the Secret Service surface stays \
+             gnome-keyring's — the stay lane issue #43 maintains on purpose",
+        ))
+    }
+}
+
 fn check_gpu(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
     let mut drivers: Vec<String> = Vec::new();
     if let Ok(cards) = std::fs::read_dir("/sys/class/drm") {
@@ -4478,6 +4571,112 @@ fn check_gpu(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
 
 #[cfg(test)]
 mod tests {
+
+    /// The oo7 posture table's rows, held the way the routing table's
+    /// rows are: absent grades nothing, the maintained stay lane reads
+    /// green with its reason named, and the flip — a live daemon beside
+    /// gnome-keyring — warns without a fix action, because the cure is
+    /// issue #43's lane, not a command.
+    #[test]
+    fn the_oo7_posture_rows() {
+        assert!(
+            oo7_posture(false, false).is_none(),
+            "a base without the transitive pull grades nothing"
+        );
+        assert!(
+            oo7_posture(false, true).is_none(),
+            "an absent daemon cannot be enabled into a finding"
+        );
+        let (inert_grade, inert_detail) =
+            oo7_posture(true, false).expect("the stay lane is a finding");
+        assert!(
+            matches!(inert_grade, Grade::Ok),
+            "the maintained posture is healthy: {inert_grade:?}"
+        );
+        assert!(inert_detail.contains("held inert"), "{inert_detail}");
+        assert!(
+            inert_detail.contains("gnome-keyring"),
+            "the message names what owns the surface: {inert_detail}"
+        );
+        let (flip_grade, flip_detail) = oo7_posture(true, true).expect("the flip is a finding");
+        assert!(
+            matches!(flip_grade, Grade::Warn),
+            "the machine boots; the posture is what moved: {flip_grade:?}"
+        );
+        assert!(flip_detail.contains("dual-daemon"), "{flip_detail}");
+    }
+
+    /// The enablement detector against the shapes a bootc image or a
+    /// machine command can carry: the baked wants symlink, the
+    /// machine-set one, the preset's enable line — and the near misses
+    /// that must not read as enablement.
+    #[test]
+    fn the_oo7_enablement_detector_reads_both_roads() {
+        let dir = tempfile::tempdir().unwrap();
+        let baked = dir.path().join("usr/lib/systemd/user");
+        let etc = dir.path().join("etc/systemd/user");
+        let baked_presets = dir.path().join("usr/lib/systemd/user-preset");
+        let empty: &[&Path] = &[];
+        assert!(!oo7_user_enablement(empty, empty), "nothing anywhere is not enablement");
+
+        // The baked wants symlink: what a scriptlet's enablement would
+        // leave if a base update ever started applying it.
+        std::fs::create_dir_all(baked.join("default.target.wants")).unwrap();
+        std::os::unix::fs::symlink(
+            "/usr/lib/systemd/user/oo7-daemon.service",
+            baked.join("default.target.wants/oo7-daemon.service"),
+        )
+        .unwrap();
+        assert!(
+            oo7_user_enablement(&[baked.as_path()], empty),
+            "a baked wants symlink is enablement"
+        );
+
+        // The machine-set shape, one directory over.
+        std::fs::create_dir_all(etc.join("graphical-session.target.wants")).unwrap();
+        std::os::unix::fs::symlink(
+            "/usr/lib/systemd/user/oo7-daemon.service",
+            etc.join("graphical-session.target.wants/oo7-daemon.service"),
+        )
+        .unwrap();
+        assert!(
+            oo7_user_enablement(&[baked.as_path(), etc.as_path()], empty),
+            "a machine-set wants symlink is enablement too"
+        );
+
+        // The preset road: an enable line naming the unit.
+        std::fs::create_dir_all(&baked_presets).unwrap();
+        std::fs::write(
+            baked_presets.join("90-oo7.preset"),
+            "# a comment\nenable oo7-daemon.service\n",
+        )
+        .unwrap();
+        assert!(
+            oo7_user_enablement(empty, &[baked_presets.as_path()]),
+            "a preset's enable line is enablement"
+        );
+
+        // Near misses: a preset line for another unit, a commented
+        // enable line, and disable is the opposite of enable.
+        std::fs::write(baked_presets.join("90-oo7.preset"), "enable some-other.service\n").unwrap();
+        assert!(
+            !oo7_user_enablement(empty, &[baked_presets.as_path()]),
+            "another unit's enable line is not oo7's"
+        );
+        std::fs::write(baked_presets.join("90-oo7.preset"), "# enable oo7-daemon.service\n")
+            .unwrap();
+        assert!(
+            !oo7_user_enablement(empty, &[baked_presets.as_path()]),
+            "a commented enable line enables nothing"
+        );
+        std::fs::write(baked_presets.join("90-oo7.preset"), "disable oo7-daemon.service\n")
+            .unwrap();
+        assert!(
+            !oo7_user_enablement(empty, &[baked_presets.as_path()]),
+            "disable is the opposite of enable"
+        );
+    }
+
     use super::*;
 
     fn set(items: &[&str]) -> BTreeSet<String> {
