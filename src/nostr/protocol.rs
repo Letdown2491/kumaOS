@@ -921,9 +921,17 @@ impl<S: super::vault::SecretStore> Daemon<S> {
             match PublicKey::parse(&paired.pubkey) {
                 Ok(pubkey) => {
                     if paired.revoked_at.is_some() {
-                        if let Some(bunker) = self.bunker.as_mut() {
-                            bunker.mark_revoked(&pubkey);
-                        }
+                        // On the local handle, never through `self` —
+                        // teardown_bunker emptied `self.bunker` at the
+                        // top of this function and the armed bunker is
+                        // only assigned back at the end, so the
+                        // as_mut() this loop used to consult was None
+                        // on every iteration and every tombstone died
+                        // at the restart it was set to survive. A
+                        // revoked app could then re-pair with a live
+                        // secret, which is the one thing revocation
+                        // exists to refuse.
+                        bunker.mark_revoked(&pubkey);
                     } else {
                         seeded.push(pubkey);
                     }
@@ -1460,6 +1468,33 @@ mod tests {
                 assert!(plaintext.contains("not paired"), "{plaintext}");
             }
             other => panic!("a revoked app is refused, not gated: {other:?}"),
+        }
+
+        // GetPublicKey is refused by the engine's pairing record; the
+        // tombstone on the bunker earns its keep one verb over, at
+        // Connect — the pairing handshake itself, which the engine
+        // never sees. The secret is live (the vault's own), so a
+        // bunker that lost its tombstones to a restart would answer
+        // Paired and hand a revoked app the keys back. This is the
+        // assertion that caught the as_mut()-on-None bug: without the
+        // tombstones riding in, Connect paired.
+        let secret = daemon.vault.secrets().last().expect("the mint's outstanding secret").to_string();
+        let connect = NostrConnectMessage::Request {
+            id: "connect-after-revoke".into(),
+            method: NostrConnectMethod::Connect,
+            params: vec![bunker_pubkey.to_string(), secret],
+        };
+        let content = app_keys.nip44_encrypt(&bunker_pubkey, &connect.as_json()).unwrap();
+        let connect_event = EventBuilder::new(Kind::NostrConnect, content)
+            .tag(Tag::public_key(bunker_pubkey))
+            .finalize(&app_keys)
+            .unwrap();
+        match daemon.plan_bunker_event(&connect_event) {
+            Some(crate::nostr::bunker::Plan::Answer(response)) => {
+                let plaintext = app_keys.nip44_decrypt(&bunker_pubkey, &response.content).unwrap();
+                assert!(plaintext.contains("revoked"), "{plaintext}");
+            }
+            other => panic!("a revoked app's connect is refused, not paired: {other:?}"),
         }
     }
 
