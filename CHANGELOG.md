@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## v45.5.0 (2026-11-18)
 
 - **Doctor can answer "did my base move since I installed."** The
