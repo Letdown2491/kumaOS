@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v45.5.0 (2026-11-18)
 
 - **Doctor can answer "did my base move since I installed."** The
   44.2.0 scope cut closes: every image now stamps the base it was
