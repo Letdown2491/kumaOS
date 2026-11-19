@@ -750,6 +750,18 @@ impl<S: super::vault::SecretStore> Daemon<S> {
                             None => Err(anyhow!("the bunker is not running")),
                         };
                         if let Err(e) = published {
+                            // Roll the half-pairing back before answering.
+                            // The subscribe and the pairing already ran, so
+                            // the plain error answer would leave an app the
+                            // panel shows and the engine honors, for a
+                            // handshake that reached no client. drop_app is
+                            // the revocation's own teardown — same
+                            // machinery, no tombstone, because the pairing
+                            // never happened to forgive.
+                            if let Some(pool) = self.pool.as_mut() {
+                                pool.drop_app(&parts.client_pubkey);
+                            }
+                            self.engine.delete(&parts.client_pubkey.to_string());
                             return err_response(anyhow!("the handshake was not published: {e}"));
                         }
                         Response::Ok(OkResponse::Connect {
@@ -1428,6 +1440,29 @@ mod tests {
             daemon.plan_bunker_event(&reconnect_event),
             Some(crate::nostr::bunker::Plan::Paired { .. })
         ));
+    }
+
+    /// The pairing's steps are not atomic by nature — subscribe, pair,
+    /// publish — so the Connect verb owes the machine a rollback when
+    /// the last step fails: a handshake that reached no client pairs
+    /// nobody, or the panel shows an app the engine honors and no
+    /// client can complete. The pool is the part that can fail, so the
+    /// test removes it and asks for the pairing anyway.
+    #[tokio::test]
+    async fn a_failed_publish_leaves_no_half_pairing() {
+        let mut daemon = daemon().await;
+        daemon.handle(decode(r#"{"cmd":"setup","mode":{"how":"generate"}}"#).unwrap()).await;
+        daemon.pool = None;
+        let client = Keys::generate().public_key();
+        let uri = format!("nostrconnect://{client}?relay=wss%3A%2F%2Frelay.example&secret=x");
+        let response =
+            daemon.handle(decode(&format!(r#"{{"cmd":"connect","uri":"{uri}"}}"#)).unwrap()).await;
+        assert!(matches!(response, Response::Err(_)), "the publish failure must answer Err");
+        assert!(
+            daemon.engine.apps().is_empty(),
+            "a handshake that reached no client pairs nobody: {:?}",
+            daemon.engine.apps()
+        );
     }
 
     #[tokio::test]
