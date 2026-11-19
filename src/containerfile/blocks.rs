@@ -4570,6 +4570,24 @@ fn greeter_seam(e: &mut Emitter<'_>) {
     e.stage("kuma-wallpaper.jpg", WALLPAPER);
     let greeter_check = e.stage("kuma-greeter-check", GREETER_CHECK);
     let launch = e.stage("kuma-launch", KUMA_LAUNCH);
+    // The VT escape hatch, on both desktop roads: logind's on-demand
+    // VT console resolves through `autovt@.service`, and systemd 262
+    // stopped shipping that alias — it became an `Alias=` in
+    // getty@.service's [Install], materialized only when something
+    // enables the unit, and nothing here does (Fedora's own
+    // 90-default.preset disables getty, and the F45 default road,
+    // kmscon, is deliberately not this image's: it wants DRM master
+    // beside the greeter). Without the symlink, Ctrl+Alt+F2 lands on a
+    // blinking cursor — logind logs "Unit autovt@ttyN.service not
+    // found" and nothing spawns — and "getty remains available on the
+    // VTs" (GREETD_RESTART_DROPIN) is a lie exactly on the boot a
+    // broken greeter makes it matter. Upstream saw the same failure
+    // and closed it not-our-bug (systemd #41602): the distro bakes the
+    // alias. This is the ≤261 shape, the alias beside its target, and
+    // the readlink is the build gate.
+    e.raw(
+        "RUN ln -sfn getty@.service /usr/lib/systemd/system/autovt@.service \\\n    && test \"$(readlink /usr/lib/systemd/system/autovt@.service)\" = getty@.service\n",
+    );
     let mut entries = Vec::new();
     for entry in seam::ENTRIES {
         entries.push(e.stage(&format!("{}.desktop", entry.id), seam::render(entry)));

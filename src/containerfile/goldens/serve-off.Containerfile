@@ -142,6 +142,8 @@ RUN set -eux; \
     dconf="$(mktemp -d)"; \
     printf '%s\n' 'sysloglvl=0' > "$dconf/99-kuma-build.conf"; \
     dracut --add-confdir "$dconf" --force --no-hostonly --add plymouth "/usr/lib/modules/$kver/initramfs.img" "$kver"
+RUN ln -sfn getty@.service /usr/lib/systemd/system/autovt@.service \
+    && test "$(readlink /usr/lib/systemd/system/autovt@.service)" = getty@.service
 COPY --chmod=755 kuma-greeter-check /usr/lib/greenboot/check/required.d/50-kuma-greeter.sh
 COPY --chmod=755 kuma-launch /usr/libexec/kuma-launch
 COPY kuma-edit.desktop /usr/share/applications/kuma-edit.desktop

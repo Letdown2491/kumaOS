@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **The VT escape hatch works again.** Ctrl+Alt+F2 on an F45 image
+  landed on a blinking cursor: systemd 262 stopped shipping the
+  `autovt@.service` alias logind's on-demand VT console resolves
+  through (it became an `Alias=` in `getty@.service`'s `[Install]`,
+  materialized only when something enables the unit, and nothing on
+  the image does — Fedora's own preset disables getty, and F45's
+  default road, kmscon, is deliberately not this image's since it
+  wants DRM master beside the greeter). Every desktop image now bakes
+  the ≤261 alias beside its target, so a broken greeter is no longer
+  one VT switch away from a machine nobody can type at. Found by the
+  VT-switch check on real hardware — the keypress the #43 verification
+  list asked for, catching a regression no journal line had announced
+  loudly. (systemd closed the same report not-our-bug: #41602.)
+
 - **The battery-watch proof landed on hardware.** The udev
   `power_supply` redesign 45.4.0 shipped carried its proof debt in the
   open — nothing in a VM ever discharges — and a real machine has now
