@@ -1143,7 +1143,15 @@ pub fn bunker_uri(public_key: &PublicKey, relays: &[String], secret: Option<&str
             }
         }
         let encoded = String::from_utf8(encoded).expect("percent-encoded ASCII");
-        uri.push_str("&secret=");
+        // Same separator discipline as the relay loop above: with no
+        // relays the URI carries no `?` yet, and an unconditional `&`
+        // would mint `bunker://<pubkey>&secret=…` — a URI the parser
+        // reads as a pubkey of `&secret=…`-shaped garbage and every
+        // client refuses, for a pairing the daemon already minted a
+        // secret for.
+        let sep = if uri.contains('?') { '&' } else { '?' };
+        uri.push(sep);
+        uri.push_str("secret=");
         uri.push_str(&encoded);
     }
     uri
@@ -2410,5 +2418,19 @@ mod tests {
         assert_eq!(parse_bunker_uri(&uri).unwrap(), (pubkey, relays));
         assert!(parse_bunker_uri("nostr://nope").is_err());
         assert!(parse_bunker_uri("bunker://not-a-pubkey").is_err());
+
+        // No relays, a secret: the secret's separator must be the `?`
+        // that opens the query, not the `&` that presumes one. The
+        // malformed form was `bunker://<pk>&secret=…`, which the
+        // parser reads as a garbage pubkey and the client refuses —
+        // for a pairing the daemon had already minted a secret for.
+        let uri = bunker_uri(&pubkey, &[], Some("the-secret"));
+        assert!(
+            uri.starts_with(&format!("bunker://{pubkey}?secret=")),
+            "the secret opens the query when no relay precedes it: {uri}"
+        );
+        let (parsed, parsed_relays) = parse_bunker_uri(&uri).unwrap();
+        assert_eq!(parsed, pubkey);
+        assert!(parsed_relays.is_empty());
     }
 }
