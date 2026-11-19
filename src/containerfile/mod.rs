@@ -2149,7 +2149,7 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         let script = dir.path().join("check");
         std::fs::write(
             &script,
-            GREETER_CHECK.replace("SECONDS + 120", "SECONDS + 4").replace("settle=5", "settle=1"),
+            GREETER_CHECK.replace("SECONDS + 120", "SECONDS + 4").replace("settle=3", "settle=1"),
         )
         .unwrap();
         for (name, body, want) in [
