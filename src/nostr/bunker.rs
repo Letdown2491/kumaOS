@@ -196,9 +196,17 @@ pub fn parse_nostrconnect_uri(uri: &str) -> Result<NostrConnectParts> {
                 // split-on-colon alone would read `[` as the host and
                 // refuse the one loopback spelling a comment-free URI
                 // can carry. Twin drift in the strict direction is
-                // still drift.
+                // still drift. Both brackets or neither, likewise in
+                // unison: split(']') on `ws://[::1` reads the whole
+                // tail as the host, and a typo would pass as loopback
+                // on the strength of its own broken shape.
                 let host = match authority.strip_prefix('[') {
-                    Some(bracketed) => bracketed.split(']').next().unwrap_or_default(),
+                    Some(bracketed) => match bracketed.split_once(']') {
+                        Some((host, _)) => host,
+                        None => bail!("relay {relay:?} opens an IPv6 bracket it never \
+                                       closes; an IPv6 host is bracketed on both sides \
+                                       or not bracketed at all"),
+                    },
                     None => authority.split(':').next().unwrap_or(authority),
                 };
                 let loopback = matches!(host, "127.0.0.1" | "::1" | "localhost");
@@ -2217,6 +2225,10 @@ mod tests {
         assert!(
             reason("wss://host.example/a%2F..%2Fb").contains("misdirection"),
             "encoded dot-dot segment"
+        );
+        assert!(
+            reason("ws%3A%2F%2F%5B%3A%3A1").contains("bracket"),
+            "an opener without its closer is not a loopback spelling"
         );
         assert!(
             reason("wss://host.example\"quoted").contains("argv"),

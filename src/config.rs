@@ -1060,8 +1060,17 @@ fn validate_relay(relay: &str) -> Result<()> {
             let authority = rest.split('/').next().unwrap_or_default();
             let host = match authority.strip_prefix('[') {
                 // [::1]:7777 — the bracketed form, where the port's
-                // colon is not the host's.
-                Some(bracketed) => bracketed.split(']').next().unwrap_or_default(),
+                // colon is not the host's. Both brackets or neither:
+                // split(']') on `ws://[::1` hands back everything after
+                // the `[`, and a typo'd URI would pass as loopback on
+                // the strength of its own broken shape.
+                Some(bracketed) => match bracketed.split_once(']') {
+                    Some((host, _)) => host,
+                    None => bail!(
+                        "nostr relay {relay:?} opens an IPv6 bracket it never closes; \
+                         an IPv6 host is bracketed on both sides or not bracketed at all"
+                    ),
+                },
                 None => authority.split(':').next().unwrap_or(authority),
             };
             let loopback = matches!(host, "127.0.0.1" | "::1" | "localhost");
@@ -1265,6 +1274,10 @@ pub(crate) mod tests {
         assert!(valid("\"ws://127.0.0.1:7777\"").is_ok());
         assert!(valid("\"ws://localhost:7777\"").is_ok());
         assert!(valid("\"ws://[::1]:7777\"").is_ok());
+        // Both brackets or neither: an opener without its closer would
+        // otherwise pass as loopback on the strength of a typo, the
+        // split handing back everything after the `[` as "the host".
+        assert!(valid("\"ws://[::1\"").is_err());
         // Mixed sets are the normal case: local first, fallbacks after.
         assert!(valid("\"wss://relay.nip46.com\", \"ws://127.0.0.1:7777\"").is_ok());
 
