@@ -167,6 +167,15 @@ pub struct Provenance {
     /// Absent wherever no lock was written: a fresh checkout's first
     /// install, or media with no build of its own.
     pub base: Option<String>,
+    /// The base REFERENCE the lock resolved — the `FROM` the image was
+    /// built with, `localhost/kuma-base:m…` for the composed default or
+    /// the declared reference verbatim. Beside `base`'s digest because
+    /// the doctor's base-drift compare reads the reference: a digest
+    /// pins one manifest, while the reference is the identity a base
+    /// flip changes (a compose-seed move, an edited `system.base`, a
+    /// release crossing). The image's own stamp (`/usr/lib/kuma/
+    /// base-from`) carries the same identity from the other end.
+    pub base_ref: Option<String>,
     /// The image ref that was installed.
     pub image: String,
     /// Its digest, when the image was local enough to ask.
@@ -184,6 +193,7 @@ impl Provenance {
             "installed_at": self.installed_at,
             "declaration": self.declaration,
             "base": self.base,
+            "base_ref": self.base_ref,
             "image": self.image,
             "image_digest": self.image_digest,
             "media": self.media,

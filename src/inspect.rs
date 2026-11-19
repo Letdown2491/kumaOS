@@ -1868,10 +1868,48 @@ fn check_install_provenance(report: &mut impl FnMut(Grade, &str, String, Option<
     if let Some(base) = parsed["base"].as_str() {
         said.push_str(&format!(", base {}", crate::short(base)));
     }
+    // The base-drift answer, the 44.2.0 scope cut: the image's own
+    // stamp says what it was built FROM, the install record says what
+    // it was built from THAT DAY, and a difference is a base move the
+    // machine crossed — worth naming in the same breath as the rest of
+    // the provenance, graded Ok because a base crossing is what a
+    // deliberate update does, not a defect. Either fact missing (any
+    // machine from before either existed) compares nothing.
+    if let Some(clause) = base_moved(parsed["base_ref"].as_str(), booted_base_from().as_deref()) {
+        said.push_str(&format!(", {clause}"));
+    }
     if said.is_empty() {
         return;
     }
     report(Grade::Ok, "install", said, None);
+}
+
+/// The base reference the booted image was built FROM, from its stamp
+/// (/usr/lib/kuma/base-from, written by the build's header beside the
+/// FROM it names). None wherever the stamp is missing — a machine
+/// whose image predates it — and for an empty file, because a stamp
+/// that says nothing is the same absence.
+fn booted_base_from() -> Option<String> {
+    let text = std::fs::read_to_string("/usr/lib/kuma/base-from").ok()?;
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// The base-drift clause: what moved, or None for nothing to say. The
+/// rows held pure so the table is testable without a machine — a
+/// missing fact on either side compares nothing (an empty string is a
+/// missing fact, the same absence booted_base_from filters), and an
+/// equal pair is the quiet healthy answer the provenance line already
+/// carries.
+fn base_moved(installed: Option<&str>, booted: Option<&str>) -> Option<String> {
+    let installed = installed.map(str::trim).filter(|s| !s.is_empty());
+    let booted = booted.map(str::trim).filter(|s| !s.is_empty());
+    match (installed, booted) {
+        (Some(installed), Some(booted)) if installed != booted => {
+            Some(format!("base moved since install: {installed} → {booted}"))
+        }
+        _ => None,
+    }
 }
 
 /// Whether a `stat -c %i` answer names the root of a btrfs subvolume.
@@ -4577,6 +4615,38 @@ mod tests {
     /// green with its reason named, and the flip — a live daemon beside
     /// gnome-keyring — warns without a fix action, because the cure is
     /// issue #43's lane, not a command.
+    /// The base-drift table's rows: the 44.2.0 question asked of two
+    /// facts that can each be missing. Nothing compares until both
+    /// exist, equal is the quiet healthy answer, and a difference is
+    /// the machine's base-move story in one clause.
+    #[test]
+    fn the_base_drift_rows() {
+        assert!(base_moved(None, None).is_none(), "no record, no stamp: nothing to compare");
+        assert!(
+            base_moved(Some("localhost/kuma-base:mabc"), None).is_none(),
+            "no stamp grades nothing"
+        );
+        assert!(
+            base_moved(None, Some("localhost/kuma-base:mabc")).is_none(),
+            "no record grades nothing"
+        );
+        assert!(
+            base_moved(Some("localhost/kuma-base:mabc"), Some("localhost/kuma-base:mabc"))
+                .is_none(),
+            "an unchanged base is the quiet answer the provenance line already carries"
+        );
+        let clause = base_moved(
+            Some("localhost/kuma-base:m000000000000"),
+            Some("localhost/kuma-base:m111111111111"),
+        )
+        .expect("a difference is the finding");
+        assert!(clause.contains("m000000000000"), "names what it was: {clause}");
+        assert!(clause.contains("m111111111111"), "names what it is now: {clause}");
+        assert!(clause.contains("moved since install"), "{clause}");
+        // A stamp an empty file would make must not read as a base.
+        assert!(base_moved(Some("x"), Some("")).is_none(), "an empty stamp is the absence");
+    }
+
     #[test]
     fn the_oo7_posture_rows() {
         assert!(

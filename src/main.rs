@@ -3559,6 +3559,10 @@ fn build_disk(tag: &str, output: &Path) -> Result<()> {
         installed_at: crate::lock::rfc3339(now),
         declaration,
         base: None,
+        // The vm-disk road has no lock: the image was already built, and
+        // its own stamp (/usr/lib/kuma/base-from) is the authority on
+        // what it FROM'd. Nothing here grades on the absence.
+        base_ref: None,
         image: tag.to_string(),
         image_digest: Some(local_id.clone()),
         media: "vm disk".to_string(),
@@ -4243,8 +4247,9 @@ fn install_provenance(config_path: &Path, media: &str, image: &str) -> install::
         let digest = Sha256::digest(&bytes);
         format!("sha256:{}", digest.iter().map(|b| format!("{b:02x}")).collect::<String>())
     });
-    let base =
-        crate::lock::Lock::load(&crate::lock::path_for(config_path)).map(|lock| lock.base.digest);
+    let (base, base_ref) = crate::lock::Lock::load(&crate::lock::path_for(config_path))
+        .map(|lock| (Some(lock.base.digest), Some(lock.base.reference)))
+        .unwrap_or((None, None));
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -4254,6 +4259,7 @@ fn install_provenance(config_path: &Path, media: &str, image: &str) -> install::
         installed_at: crate::lock::rfc3339(now),
         declaration,
         base,
+        base_ref,
         image: image.to_string(),
         image_digest: image_id(image).ok(),
         media: media.to_string(),

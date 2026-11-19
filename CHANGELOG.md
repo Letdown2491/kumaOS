@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Doctor can answer "did my base move since I installed."** The
+  44.2.0 scope cut closes: every image now stamps the base it was
+  built FROM beside the `FROM` itself (`/usr/lib/kuma/base-from`), the
+  install record carries the same identity from install day
+  (`base_ref` beside the digest it already named), and the provenance
+  check compares the two — naming the move when the machine has
+  crossed a base flip since it was installed, and comparing nothing
+  where either fact predates the stamp. The stamp is the resolved
+  `FROM` reference rather than a manifest digest because the digest
+  is only knowable after podman resolves it, while the reference is a
+  pure function of the declaration — and the reference is the
+  identity a base flip changes either way.
+
 - **The VT escape hatch works again.** Ctrl+Alt+F2 on an F45 image
   landed on a blinking cursor: systemd 262 stopped shipping the
   `autovt@.service` alias logind's on-demand VT console resolves
