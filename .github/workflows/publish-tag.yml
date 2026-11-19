@@ -123,6 +123,12 @@ jobs:
           # client-side, both reads would be empty, and every re-run
           # would dispatch.
           owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          # Same floor as the siblings: the guard below reads
+          # 2>/dev/null || true, which is idempotent by design — but
+          # only if skopeo exists. Without this line a runner without
+          # skopeo turns the guard into a silent no-op and every re-run
+          # dispatches.
+          command -v skopeo >/dev/null || sudo apt-get install -y -qq skopeo
           pin=$(skopeo inspect "docker://ghcr.io/${owner}/kuma:niri-${version}" \
               --format '{{.Digest}}' 2>/dev/null || true)
           move=$(skopeo inspect "docker://ghcr.io/${owner}/kuma:niri" \
