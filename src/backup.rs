@@ -111,11 +111,22 @@ fn restic_argv_within(
         // credential file rewrites the environment the backup executes
         // under — a different attack than a wrong password, and refused
         // by name rather than trusted to be absent.
+        //
+        // The whole line is the input, not just what follows the `=`:
+        // a line without one, an empty key (`=value` matches zero
+        // characters of a complement class), a digit-led key (no
+        // shell's valid identifier), and lowercase (the alphabet the
+        // three readers share is uppercase) all refuse before the
+        // export rather than after meaning something. The character
+        // class spells its letters out, because a locale whose
+        // collation widens [A-Z] would otherwise widen the gate.
         "while IFS= read -r line || [ -n \"$line\" ]; do \
            case \"$line\" in \"\"|\\#*) continue ;; esac; \
+           case \"$line\" in *=*) ;; *) \
+             echo \"kuma: refusing malformed line in $1\" >&2; exit 1 ;; esac; \
            key=${{line%%=*}}; \
            case \"$key\" in \
-             PATH|HOME|SHELL|IFS|USER|LOGNAME|RESTIC_PASSWORD_COMMAND|LD_*|*[!A-Z0-9_]*) \
+             \"\"|[0-9]*|PATH|HOME|SHELL|IFS|USER|LOGNAME|BASH_ENV|ENV|RESTIC_PASSWORD_COMMAND|LD_*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_]*) \
                echo \"kuma: refusing unsafe key in $1\" >&2; exit 1 ;; \
            esac; \
            export \"$line\"; \
@@ -180,6 +191,7 @@ pub fn ambiguous_values(text: &str) -> Vec<String> {
             // executes rather than what is read.
             let k = key.trim();
             let dangerous_key = k.is_empty()
+                || !k.starts_with(|c: char| c.is_ascii_uppercase())
                 || !k.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
                 || matches!(
                     k,
@@ -189,6 +201,8 @@ pub fn ambiguous_values(text: &str) -> Vec<String> {
                         | "IFS"
                         | "USER"
                         | "LOGNAME"
+                        | "BASH_ENV"
+                        | "ENV"
                         | "RESTIC_PASSWORD_COMMAND"
                 )
                 || k.starts_with("LD_");
@@ -223,11 +237,23 @@ fn ready(config: &Config) -> Result<(String, String)> {
         // Present but unreadable is an authority error, not an absence:
         // the ambiguity and key checks run on this half's reading, and
         // skipping them because the file refused to open would let the
-        // root half export what this half could not vouch for.
+        // root half export what this half could not vouch for. The one
+        // error that is not a misconfiguration is PermissionDenied on
+        // a CORRECTLY configured file — 0600 root is the mode the
+        // message beside the secret asks for, and an unprivileged verb
+        // running into it is the documented `sudo` flow announcing
+        // itself — so that case says run sudo instead of saying fix a
+        // mode that is already right.
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => bail!(
+            "cannot read {secret}: {e}. The credential is 0600 root, which is \
+             correct — this verb is simply not running as root. Run it under \
+             `sudo kuma backup`, as the docs have it."
+        ),
         Err(e) => bail!(
             "cannot read {secret}: {e}. A credential that exists but cannot be read \
-             is an authority error, not an absence — fix the mode (0600 root) so \
-             this verb can vet what the timer and the sudo helper will export."
+             is an authority error, not an absence — check the ownership and mode \
+             (0600 root) so this verb can vet what the timer and the sudo helper \
+             will export."
         ),
     };
     if let Some(text) = text {
@@ -652,6 +678,12 @@ mod tests {
             // variables spell in uppercase.
             "restic_password=hunter2",
             "RESTIC-KEY=x",
+            // A digit-led name is no shell's valid identifier: export
+            // would refuse it, and a line the loop cannot export is a
+            // line whose meaning depends on which reader got there.
+            "1FOO=bar",
+            "BASH_ENV=/x",
+            "ENV=/x",
         ] {
             let text = format!("{line}\n");
             assert_eq!(ambiguous_values(&text).len(), 1, "{line} slipped through");
@@ -667,16 +699,27 @@ mod tests {
         // verb run unprivileged), so the loop that runs as root holds
         // the same line on its own authority: the dangerous names, and
         // anything outside the uppercase alphabet, refuse in the shell
-        // where the export would have happened.
+        // where the export would have happened. The line itself is the
+        // input too: no `=`, an empty key, a digit-led key, and
+        // lowercase all refuse before the export, and the complement
+        // class spells its letters out so a locale's collation cannot
+        // widen the gate.
         let argv = restic_argv("/s.env", "b2:kuma", &["snapshots"]);
         let script = argv.iter().find(|a| a.contains("restic \"$@\"")).expect("the sh -c body");
         assert!(script.contains("refusing unsafe key"), "{script}");
-        for key in
-            ["PATH", "HOME", "SHELL", "IFS", "USER", "LOGNAME", "RESTIC_PASSWORD_COMMAND", "LD_"]
-        {
+        assert!(script.contains("refusing malformed line"), "{script}");
+        assert!(script.contains("*=*)"), "a line without = refuses: {script}");
+        assert!(script.contains("\"\"|[0-9]*"), "empty and digit-led keys refuse: {script}");
+        for key in [
+            "PATH", "HOME", "SHELL", "IFS", "USER", "LOGNAME", "RESTIC_PASSWORD_COMMAND", "LD_",
+            "BASH_ENV", "ENV",
+        ] {
             assert!(script.contains(key), "the loop must refuse {key}: {script}");
         }
-        assert!(script.contains("*[!A-Z0-9_]*"), "{script}");
+        assert!(
+            script.contains("*[!ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_]"),
+            "the class spells its letters out: {script}"
+        );
     }
 
     /// A line that changes under trim is its own refusal, and a CRLF
