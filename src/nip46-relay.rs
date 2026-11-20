@@ -183,6 +183,13 @@ fn main() -> Result<()> {
             continue;
         }
         active.fetch_add(1, Ordering::SeqCst);
+        struct ActiveGuard(Arc<AtomicUsize>);
+        impl Drop for ActiveGuard {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        let active_guard = ActiveGuard(active.clone());
         // The handshake has ten seconds to land: a TCP client that
         // opens and stalls parks its thread inside the upgrade read
         // for no longer than this. one_connection replaces it with the
@@ -194,8 +201,8 @@ fn main() -> Result<()> {
         let outbound = outbound.clone();
         let subscriptions = subscriptions.clone();
         let limiters = limiters.clone();
-        let active = active.clone();
         std::thread::spawn(move || {
+            let _active_guard = active_guard;
             if let Err(e) = one_connection(
                 id,
                 stream,
@@ -207,7 +214,6 @@ fn main() -> Result<()> {
             ) {
                 eprintln!("nip46-relay: connection {id} ended: {e:#}");
             }
-            active.fetch_sub(1, Ordering::SeqCst);
         });
     }
     Ok(())
@@ -227,6 +233,7 @@ fn one_connection(
     // field this relay cares about is set on the default.
     let mut config = tungstenite::protocol::WebSocketConfig::default();
     config.max_message_size = Some(MAX_FRAME_BYTES);
+    config.max_frame_size = Some(MAX_FRAME_BYTES);
     let mut socket = tungstenite::accept_with_config(stream, Some(config))?;
     socket.get_mut().set_read_timeout(Some(BEAT))?;
     // Bounded, with a kick switch: a reader that stops reading must
@@ -462,6 +469,30 @@ fn serve_connection(
                     ))?;
                     continue;
                 }
+                // Bounded before querying or replaying: each
+                // subscription is a broadcast fan-out multiplier, and
+                // an over-cap REQ must not force a store scan or emit a
+                // spurious EOSE before CLOSED. A re-REQ of an id the
+                // connection already holds is the replace rule, not
+                // growth, and stays allowed.
+                let over_limit = {
+                    let subs = subscriptions.lock().expect("the subscription map");
+                    subs.get(&id).is_some_and(|held| {
+                        held.len() >= MAX_SUBSCRIPTIONS
+                            && held.iter().all(|(held_id, _)| *held_id != subscription_id)
+                    })
+                };
+                if over_limit {
+                    socket.send(Message::text(
+                        serde_json::json!([
+                            "CLOSED",
+                            subscription_id,
+                            "blocked: too many subscriptions on this connection"
+                        ])
+                        .to_string(),
+                    ))?;
+                    continue;
+                }
                 // Replay what is held, then remember the subscription
                 // for what arrives later. The replay first sweeps the
                 // TTL: a query never meets an expired event, whatever
@@ -483,25 +514,6 @@ fn serve_connection(
                 socket.send(Message::text(
                     serde_json::json!(["EOSE", subscription_id]).to_string(),
                 ))?;
-                // Bounded before it is remembered: each subscription
-                // is a broadcast fan-out multiplier, and an unbounded
-                // client could register thousands of distinct ids and
-                // turn every broadcast into thousands of queue writes.
-                // A re-REQ of an id the connection already holds is
-                // the replace rule, not growth, and stays allowed.
-                let over_limit = {
-                    let subs = subscriptions.lock().expect("the subscription map");
-                    subs.get(&id).is_some_and(|held| {
-                        held.len() >= MAX_SUBSCRIPTIONS
-                            && held.iter().all(|(held_id, _)| *held_id != subscription_id)
-                    })
-                };
-                if over_limit {
-                    socket.send(Message::text(
-                        serde_json::json!(["CLOSED", subscription_id, "blocked: too many subscriptions on this connection"]).to_string(),
-                    ))?;
-                    continue;
-                }
                 let mut subs = subscriptions.lock().expect("the subscription map");
                 let entry = subs.entry(id).or_default();
                 // NIP-01's replace rule: a new REQ with a subscription
@@ -769,10 +781,11 @@ mod tests {
             handles.push(std::thread::spawn(move || {
                 let mut i: u64 = 0;
                 while !stop.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
-                    let event = EventBuilder::new(Kind::from_u16(24133), format!("{broadcaster}:{i}"))
-                        .tag(Tag::public_key(Keys::generate().public_key()))
-                        .finalize(&Keys::generate())
-                        .unwrap();
+                    let event =
+                        EventBuilder::new(Kind::from_u16(24133), format!("{broadcaster}:{i}"))
+                            .tag(Tag::public_key(Keys::generate().public_key()))
+                            .finalize(&Keys::generate())
+                            .unwrap();
                     broadcast(&event, &outbound, &subscriptions);
                     i += 1;
                 }
@@ -800,11 +813,7 @@ mod tests {
         // kicked subscriber — and the maps agree with each other,
         // which is what a deadlock between their locks would break.
         assert_eq!(outbound.lock().expect("outbound").len(), 0, "the kicked queue is gone");
-        assert_eq!(
-            subscriptions.lock().expect("subs").len(),
-            0,
-            "the kicked subscription is gone"
-        );
+        assert_eq!(subscriptions.lock().expect("subs").len(), 0, "the kicked subscription is gone");
     }
 
     /// A frame over the wire cap is refused: the library errors on the
@@ -903,11 +912,17 @@ mod tests {
             .unwrap();
         }
         let mut closed = 0;
+        let mut spurious_eose = false;
+        let over_cap_id = format!("sub-{MAX_SUBSCRIPTIONS}");
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
             match conn.read() {
                 Ok(Message::Text(text)) => {
-                    if text.contains("too many subscriptions") {
+                    let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    if frame[0] == "EOSE" && frame[1] == over_cap_id {
+                        spurious_eose = true;
+                    }
+                    if frame[0] == "CLOSED" && text.contains("too many subscriptions") {
                         closed += 1;
                         break;
                     }
@@ -916,6 +931,7 @@ mod tests {
                 _ => {}
             }
         }
+        assert!(!spurious_eose, "an over-cap subscription must be CLOSED without EOSE");
         assert!(closed >= 1, "the over-cap subscription is CLOSED by name");
     }
 
