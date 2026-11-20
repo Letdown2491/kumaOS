@@ -481,7 +481,7 @@ fn render(value: &serde_json::Value) -> Result<()> {
                     None => {
                         match app["url"].as_str().and_then(kuma::nostr::bunker::name_from_url) {
                             Some(derived) => derived,
-                            None => format!("{}…", &app["pubkey"].as_str().unwrap_or("?")[..16]),
+                            None => format!("{}…", app["pubkey"].as_str().unwrap_or("?").get(..16).unwrap_or("?")),
                         }
                     }
                 };
