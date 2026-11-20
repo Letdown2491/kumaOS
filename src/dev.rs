@@ -97,7 +97,7 @@ impl Receipt {
         self.checkouts
             .iter()
             .filter_map(|c| dotted(&c.version).map(|d| (d, c.version.as_str())))
-            .max_by_key(|(numeric, _)| *numeric)
+            .max_by_key(|(numeric, _)| numeric.clone())
             .map(|(_, version)| version)
             .unwrap_or("")
     }
