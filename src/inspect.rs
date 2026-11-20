@@ -2994,10 +2994,16 @@ fn prune_command(lines: &[(String, String)], home: Option<&std::path::Path>) -> 
         .map(|(mime, handler)| format!(r"'\#^{}={};\?$#d'", sed_bre(mime), sed_bre(handler)))
         .collect();
     // The fallback spells ~ because a tilde inside quotes does not
-    // expand — the single-quoted absolute path is quoted, the tilde
-    // fallback is left bare for the shell to expand.
+    // expand — the single-quoted absolute path is quoted (with any
+    // embedded single quote escaped), the tilde fallback is left bare
+    // for the shell to expand.
     let target = home
-        .map(|h| format!("'{}'", h.join(".config/mimeapps.list").display()))
+        .map(|h| {
+            format!(
+                "'{}'",
+                h.join(".config/mimeapps.list").display().to_string().replace('\'', r"'\''")
+            )
+        })
         .unwrap_or_else(|| "~/.config/mimeapps.list".to_string());
     format!("sed -i -e {} {}", drops.join(" -e "), target)
 }
@@ -3080,6 +3086,16 @@ mod mime_tests {
         assert!(hostile.starts_with("sed -i -e '\\#^application/x-`id`"));
         assert!(hostile.ends_with("~/.config/mimeapps.list"));
         assert_eq!(hostile.matches('\'').count(), 2, "only the one -e quoting pair");
+        // A home directory carrying a single quote escapes it instead of
+        // breaking out of the single-quoted path.
+        let quoted_home = prune_command(
+            &[("text/plain".into(), "a.desktop".into())],
+            Some(std::path::Path::new("/var/home/o'brien")),
+        );
+        assert!(
+            quoted_home.ends_with(r"'/var/home/o'\''brien/.config/mimeapps.list'"),
+            "embedded single quotes in home path are shell-escaped: {quoted_home}"
+        );
     }
 }
 
@@ -4402,12 +4418,6 @@ fn signature_key_for(policy_text: &str, repo: &str) -> Option<String> {
 /// it. The cost is that a scope buried in a comment would count; the
 /// alternative was a check that failed working machines.
 fn sigstore_attachments_cover(text: &str, repo: &str) -> bool {
-    // The VALUE is the answer, not the key: `use-sigstore-attachments:
-    // false` is an explicit refusal, and a contains() over the key
-    // alone read that as coverage.
-    if !text.contains("use-sigstore-attachments: true") {
-        return false;
-    }
     // Every prefix of the repository that could legally be a scope, plus
     // the catch-all, so the widest working configuration still passes.
     let mut scopes = vec!["default-docker".to_string()];
@@ -4415,9 +4425,36 @@ fn sigstore_attachments_cover(text: &str, repo: &str) -> bool {
     for n in 1..=parts.len() {
         scopes.push(parts[..n].join("/"));
     }
-    text.lines()
-        .map(|l| l.trim().trim_end_matches(':').trim())
-        .any(|key| scopes.iter().any(|s| s == key))
+    // Track the indentation of a matching scope block so an unrelated
+    // sibling registry carrying `use-sigstore-attachments: true` cannot
+    // satisfy a matching scope that omits or disables it.
+    let mut active_indent: Option<usize> = None;
+    for raw in text.lines() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = raw.len() - raw.trim_start().len();
+        if let Some(scope_indent) = active_indent {
+            if indent > scope_indent {
+                if let Some((k, v)) = trimmed.split_once(':') {
+                    let val = v.split('#').next().unwrap_or("").trim();
+                    if k.trim() == "use-sigstore-attachments" && val == "true" {
+                        return true;
+                    }
+                }
+                continue;
+            }
+            active_indent = None;
+        }
+        if let Some(key) = trimmed.strip_suffix(':') {
+            let key = key.trim().trim_matches(['"', '\'']);
+            if scopes.iter().any(|s| s == key) {
+                active_indent = Some(indent);
+            }
+        }
+    }
+    false
 }
 
 fn check_signature_policy(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
@@ -5881,6 +5918,20 @@ mod tests {
         // alone read exactly that as covered (adversarial review).
         assert!(!sigstore_attachments_cover(
             &format!("docker:\n  {repo}:\n    use-sigstore-attachments: false\n"),
+            repo
+        ));
+        // A sibling registry's `use-sigstore-attachments: true` does
+        // not cover our repo when our own scope disables or omits it.
+        assert!(!sigstore_attachments_cover(
+            &format!(
+                "docker:\n  ghcr.io/somebody-else:\n    use-sigstore-attachments: true\n  {repo}:\n    use-sigstore-attachments: false\n"
+            ),
+            repo
+        ));
+        assert!(!sigstore_attachments_cover(
+            &format!(
+                "docker:\n  {repo}:\n    x: y\n  ghcr.io/somebody-else:\n    use-sigstore-attachments: true\n"
+            ),
             repo
         ));
     }
