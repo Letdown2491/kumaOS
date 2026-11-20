@@ -252,7 +252,10 @@ fn restore_path(
     let destination = Path::new(&config.snapshots.target).join(&relative);
     let overwrites = destination.exists();
     let action = (!yes).then(|| {
-        let mut cmd = format!("kuma snapshot --restore {path}");
+        // The path rides the paste-able command quoted — backup.rs quotes
+        // everything it hands a shell, and a path with a space in it
+        // would otherwise split at the paste.
+        let mut cmd = format!("kuma snapshot --restore {}", crate::state::shell_quote(path));
         if let Some(id) = from {
             cmd.push_str(&format!(" --from {id}"));
         }

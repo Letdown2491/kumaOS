@@ -91,7 +91,15 @@ impl Receipt {
 
     /// The newest version any checkout in this receipt claims.
     pub fn version(&self) -> &str {
-        self.checkouts.iter().map(|c| c.version.as_str()).max().unwrap_or("")
+        // Numeric, not lexicographic: "45.10.0" sorts below "45.9.0"
+        // as a string, and a multi-checkout receipt would report the
+        // OLDER version as the newest.
+        self.checkouts
+            .iter()
+            .filter_map(|c| dotted(&c.version).map(|d| (d, c.version.as_str())))
+            .max_by_key(|(numeric, _)| *numeric)
+            .map(|(_, version)| version)
+            .unwrap_or("")
     }
 
     /// Remove everything the receipt staged, then the receipt itself.
