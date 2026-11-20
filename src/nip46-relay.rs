@@ -546,13 +546,15 @@ fn serve_connection(
 /// lock site goes through here too, or the stress test
 /// (`broadcast_kick_stress_never_deadlocks`) hangs and names the
 /// regression.
-fn lock_maps<'a>(
-    subscriptions: &'a Subscriptions,
-    outbound: &'a Outbound,
-) -> (
+/// The two map guards in canonical rank order: subscriptions, then
+/// outbound. The type alias exists for the rank's sake — one name for
+/// the pair every lock site takes.
+type MapGuards<'a> = (
     std::sync::MutexGuard<'a, HashMap<u64, Vec<(String, RelayFilter)>>>,
     std::sync::MutexGuard<'a, HashMap<u64, (SyncSender<Message>, Arc<AtomicBool>)>>,
-) {
+);
+
+fn lock_maps<'a>(subscriptions: &'a Subscriptions, outbound: &'a Outbound) -> MapGuards<'a> {
     let subs = subscriptions.lock().expect("the subscription map");
     let queues = outbound.lock().expect("the outbound map");
     (subs, queues)
@@ -771,7 +773,7 @@ mod tests {
                         .tag(Tag::public_key(Keys::generate().public_key()))
                         .finalize(&Keys::generate())
                         .unwrap();
-                    let _ = broadcast(&event, &outbound, &subscriptions);
+                    broadcast(&event, &outbound, &subscriptions);
                     i += 1;
                 }
             }));
