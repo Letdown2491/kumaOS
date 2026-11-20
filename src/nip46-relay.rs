@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -33,6 +33,27 @@ type Outbound = Arc<Mutex<HashMap<u64, (SyncSender<Message>, Arc<AtomicBool>)>>>
 /// this cadence. Long enough that an idle relay costs nothing; short
 /// enough that a queued answer goes out before its reader gives up.
 const BEAT: Duration = Duration::from_secs(1);
+
+/// How many TCP connections the relay serves at once. Each is an OS
+/// thread for as long as it lives; the cap is what keeps a dial loop
+/// from turning the relay into a thread farm. Generous against any
+/// real bunker-plus-apps population, tight against a dial loop.
+const MAX_CONNECTIONS: usize = 512;
+
+/// Subscriptions one connection may hold at a time. Each is a
+/// broadcast fan-out multiplier; a client registering thousands of
+/// distinct ids would turn every broadcast into thousands of queue
+/// writes.
+const MAX_SUBSCRIPTIONS: usize = 32;
+
+/// Bytes one wire frame may carry. A NIP-46 frame is a signed event —
+/// a few KiB at the edge — and the library's 64 MiB default is a
+/// memory-exhaustion invitation on a socket anyone can dial.
+const MAX_FRAME_BYTES: usize = 1_048_576;
+
+/// Seconds the TCP handshake (the HTTP upgrade read) may take before
+/// the connection is refused. One connection's beat replaces it once
+/// the upgrade is done.
 
 /// How deep a connection's outbound queue may get before the relay
 /// decides the reader stopped reading. Real clients queue single
@@ -142,6 +163,12 @@ fn main() -> Result<()> {
         sweep_limiters(&mut evictor_limiters.lock().expect("the rate limiter map"), now_secs());
     });
 
+    // The doors are bounded: connections (each an OS thread), frame
+    // size (set inside one_connection), handshake time (set here), and
+    // subscriptions per connection (set in the REQ arm). None of it
+    // matters on the loopback default; all of it matters the day
+    // `--bind` or `serve` points the relay somewhere public.
+    let active = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         let stream = match stream {
             Ok(stream) => stream,
@@ -150,11 +177,23 @@ fn main() -> Result<()> {
                 continue;
             }
         };
+        if active.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
+            eprintln!("nip46-relay: connection cap {MAX_CONNECTIONS} reached; refusing");
+            continue;
+        }
+        active.fetch_add(1, Ordering::SeqCst);
+        // The handshake has ten seconds to land: a TCP client that
+        // opens and stalls parks its thread inside the upgrade read
+        // for no longer than this. one_connection replaces it with the
+        // beat once the upgrade is done.
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
         let id = next_id.fetch_add(1, Ordering::SeqCst);
         let store = store.clone();
         let outbound = outbound.clone();
         let subscriptions = subscriptions.clone();
         let limiters = limiters.clone();
+        let active = active.clone();
         std::thread::spawn(move || {
             if let Err(e) = one_connection(
                 id,
@@ -167,6 +206,7 @@ fn main() -> Result<()> {
             ) {
                 eprintln!("nip46-relay: connection {id} ended: {e:#}");
             }
+            active.fetch_sub(1, Ordering::SeqCst);
         });
     }
     Ok(())
@@ -182,7 +222,11 @@ fn one_connection(
     limiters: Arc<Mutex<HashMap<nostr::key::PublicKey, RateLimiter>>>,
     rate_limit: usize,
 ) -> Result<()> {
-    let mut socket = tungstenite::accept(stream)?;
+    // tungstenite 0.26's config struct is non-exhaustive, so the one
+    // field this relay cares about is set on the default.
+    let mut config = tungstenite::protocol::WebSocketConfig::default();
+    config.max_message_size = Some(MAX_FRAME_BYTES);
+    let mut socket = tungstenite::accept_with_config(stream, Some(config))?;
     socket.get_mut().set_read_timeout(Some(BEAT))?;
     // Bounded, with a kick switch: a reader that stops reading must
     // cost the relay a bounded queue, not an unbounded one. The flag
@@ -438,6 +482,25 @@ fn serve_connection(
                 socket.send(Message::text(
                     serde_json::json!(["EOSE", subscription_id]).to_string(),
                 ))?;
+                // Bounded before it is remembered: each subscription
+                // is a broadcast fan-out multiplier, and an unbounded
+                // client could register thousands of distinct ids and
+                // turn every broadcast into thousands of queue writes.
+                // A re-REQ of an id the connection already holds is
+                // the replace rule, not growth, and stays allowed.
+                let over_limit = {
+                    let subs = subscriptions.lock().expect("the subscription map");
+                    subs.get(&id).is_some_and(|held| {
+                        held.len() >= MAX_SUBSCRIPTIONS
+                            && held.iter().all(|(held_id, _)| *held_id != subscription_id)
+                    })
+                };
+                if over_limit {
+                    socket.send(Message::text(
+                        serde_json::json!(["CLOSED", subscription_id, "blocked: too many subscriptions on this connection"]).to_string(),
+                    ))?;
+                    continue;
+                }
                 let mut subs = subscriptions.lock().expect("the subscription map");
                 let entry = subs.entry(id).or_default();
                 // NIP-01's replace rule: a new REQ with a subscription
@@ -502,8 +565,12 @@ fn broadcast(event: &Event, outbound: &Outbound, subscriptions: &Subscriptions) 
         }
     }
     if !kicked.is_empty() {
-        let mut queues = outbound.lock().expect("the outbound map");
+        // Subs-then-outbound, the same order the walk takes: a kick
+        // and a broadcast running concurrently would AB-BA deadlock
+        // the relay if this block grabbed outbound first (found by
+        // adversarial review).
         let mut subs = subscriptions.lock().expect("the subscription map");
+        let mut queues = outbound.lock().expect("the outbound map");
         for conn_id in kicked {
             if let Some((_, kicked)) = queues.remove(&conn_id) {
                 kicked.store(true, Ordering::SeqCst);
@@ -555,13 +622,20 @@ mod tests {
         // stand-in and the app's. The listener is shared across the
         // handler threads, which is exactly what the main loop does.
         let listener = Arc::new(listener);
-        for _ in 0..2 {
+        // Distinct connection ids — the outbound map and the
+        // subscription map are both keyed by it, and a shared 0 would
+        // have the second registration overwrite the first, leaving
+        // one queue where the lane needs two. (The test used to pass
+        // with both at 0, because the app conn received its own
+        // broadcast and the assertion could not tell whose lane had
+        // actually carried the event.)
+        for id in 1..=2u64 {
             let maps = maps.clone();
             let listener = listener.clone();
             std::thread::spawn(move || {
                 let (stream, _) = listener.accept().unwrap();
                 let _ = one_connection(
-                    0,
+                    id,
                     stream,
                     maps.0,
                     maps.1,
@@ -602,13 +676,14 @@ mod tests {
         // subscriptions — the app's included, because its subscription
         // is its channel.
         let mut saw_ok = false;
-        let mut event_crossed = false;
+        let mut event_on_bunker = false;
+        let mut event_on_app = false;
         for _ in 0..20 {
             if let Ok(Message::Text(text)) = bunker_conn.read() {
                 let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
                 if frame[0] == "EVENT" && frame[1] == "bunker-sub" {
                     assert_eq!(frame[2]["id"], request.id.to_string());
-                    event_crossed = true;
+                    event_on_bunker = true;
                 }
             }
             if let Ok(Message::Text(text)) = app_conn.read() {
@@ -619,14 +694,16 @@ mod tests {
                     saw_ok = true;
                 }
                 if frame[0] == "EVENT" && frame[2]["id"] == request.id.to_string() {
-                    event_crossed = true;
+                    event_on_app = true;
                 }
             }
-            if saw_ok && event_crossed {
+            if saw_ok && event_on_bunker && event_on_app {
                 return;
             }
         }
-        panic!("the lane did not close the loop: ok={saw_ok} event={event_crossed}");
+        panic!(
+            "the lane did not close the loop: ok={saw_ok} bunker={event_on_bunker} app={event_on_app}"
+        );
     }
 
     /// The bunker pubkey the test's filter addresses — a fresh key per

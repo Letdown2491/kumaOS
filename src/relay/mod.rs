@@ -127,7 +127,13 @@ impl RelayFilter {
         let kinds = value
             .get("kinds")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_u64().map(|k| k as u16)).collect())
+            // try_from, not `as`: `as` truncates, and 65536 + 24133
+            // would alias the bunker's own kind past the door.
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_u64().and_then(|k| u16::try_from(k).ok()))
+                    .collect()
+            })
             .unwrap_or_default();
         let p = value
             .get("#p")
@@ -180,6 +186,17 @@ impl RelayFilter {
     /// Whether an event answers this subscription.
     pub fn matches(&self, event: &Event) -> bool {
         if !self.kinds.is_empty() && !self.kinds.contains(&event.kind.as_u16()) {
+            return false;
+        }
+        // Every scoping field the door accepts, the match enforces —
+        // a field parsed and then ignored is a firehose ticket: a
+        // subscription naming one dead `id` (or one unrelated
+        // `author`) would pass the scoping door and match everything
+        // the relay holds, in replay and live alike.
+        if !self.authors.is_empty() && self.authors.iter().all(|a| *a != event.pubkey) {
+            return false;
+        }
+        if !self.ids.is_empty() && !self.ids.iter().any(|i| *i == event.id.to_string()) {
             return false;
         }
         if !self.p.is_empty()
@@ -380,6 +397,64 @@ mod tests {
     fn held(event: &Event, now: u64) -> Result<bool, Rejected> {
         let mut store = EventStore::new(RelayConfig::default());
         store.insert(event.clone(), now)
+    }
+
+    /// The door accepts authors/ids scoping, so the match has to
+    /// enforce it: a filter scoped by a field that `matches` then
+    /// ignores is a firehose ticket — one dead `id` or one unrelated
+    /// `author` passes the scoping door and matches every held event,
+    /// in replay and live alike. Found by adversarial review of the
+    /// Batch A sources.
+    #[test]
+    fn a_scoped_filter_enforces_the_field_its_scoping_names() {
+        let now = Timestamp::now().as_secs();
+        let event = request_event(24133, 0);
+        let stranger = Keys::generate().public_key();
+
+        let authors = RelayFilter {
+            kinds: vec![24133],
+            p: vec![],
+            authors: vec![stranger],
+            ids: vec![],
+            since: None,
+            until: None,
+            limit: None,
+        };
+        assert!(!authors.matches(&event), "another author's event is not mine");
+        // The author's own filter still matches its own event.
+        let own = RelayFilter {
+            kinds: vec![24133],
+            p: vec![],
+            authors: vec![event.pubkey],
+            ids: vec![],
+            since: None,
+            until: None,
+            limit: None,
+        };
+        assert!(own.matches(&event));
+
+        let ids = RelayFilter {
+            kinds: vec![24133],
+            p: vec![],
+            authors: vec![],
+            ids: vec!["deadbeef".to_string()],
+            since: None,
+            until: None,
+            limit: None,
+        };
+        assert!(!ids.matches(&event), "an id that names nothing matches nothing");
+        let _ = now;
+    }
+
+    /// `as u16` truncates, and 65536 + 24133 would alias the bunker's
+    /// own kind past the scoping door on the strength of a wrapped
+    /// integer. The parse drops what a u16 cannot hold.
+    #[test]
+    fn an_out_of_range_kind_does_not_alias_the_bunker_s() {
+        let filter = RelayFilter::from_json(&serde_json::json!({ "kinds": [65536 + 24133] }));
+        assert!(filter.kinds.is_empty(), "the out-of-range kind is dropped, not aliased");
+        let filter = RelayFilter::from_json(&serde_json::json!({ "kinds": [24133] }));
+        assert_eq!(filter.kinds, vec![24133], "the ordinary kind parses");
     }
 
     #[test]
