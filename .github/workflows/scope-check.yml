@@ -1,0 +1,71 @@
+# A PR declares the area it touches with a `Scope:` line in its body —
+# `Scope: src/nostr/, .github/workflows/release.yml` — and this job
+# fails if any changed file sits outside every declared prefix. The
+# contamination class this repo hit (one PR carrying another PR's diff
+# after a mid-air branch shuffle) is cheaper to refuse at the door
+# than to untangle at review.
+#
+# No Scope line is not a failure: the convention is new, and an
+# unscoped PR earns a notice instead of a gate. The job needs no
+# third-party action: the diff comes from git, the body from the
+# event payload read through an env indirection (never interpolated
+# into shell — a PR body is attacker-controlled text, and this repo's
+# own SECURITY.md draws that line for good reasons).
+name: scope check
+
+on:
+  pull_request:
+    types: [opened, synchronize, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  scope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: every changed file against the declared scope
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$PR_BODY" | grep -E '^[[:space:]]*Scope:' \
+            | sed 's/^[[:space:]]*Scope:[[:space:]]*//' | tr ',' '\n' \
+            | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' > scopes.txt || true
+          git diff --name-only "$BASE" "$HEAD" > changed.txt
+
+          if [ ! -s scopes.txt ]; then
+            echo "note: no Scope: line in the PR body; the convention is new and nothing is enforced yet" >&2
+            exit 0
+          fi
+
+          echo "Declared scope:" >&2
+          cat scopes.txt >&2
+          fail=0
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            in_scope=false
+            while IFS= read -r scope; do
+              [ -n "$scope" ] || continue
+              case "$file" in
+                "$scope" | "$scope"/*) in_scope=true; break ;;
+              esac
+            done < scopes.txt
+            if [ "$in_scope" = false ]; then
+              echo "OUT OF SCOPE: $file" >&2
+              fail=1
+            fi
+          done < changed.txt
+          exit "$fail"
