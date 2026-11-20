@@ -3055,7 +3055,9 @@ mod mime_tests {
             "sed -i -e '\\#^text/plain=org\\.gnome\\.Nautilus\\.desktop;\\?$#d' \
              '/var/home/myuser/.config/mimeapps.list'"
         );
-        // Two dead lines ride as two -e expressions, one command.
+        // Two dead lines ride as two -e expressions, one command. The
+        // fallback target rides bare: a tilde inside quotes does not
+        // expand, and ~ is the whole point of the fallback.
         let two = prune_command(
             &[("text/plain".into(), "a.desktop".into()), ("image/png".into(), "b.desktop".into())],
             None,
@@ -3063,7 +3065,7 @@ mod mime_tests {
         assert_eq!(
             two,
             "sed -i -e '\\#^text/plain=a\\.desktop;\\?$#d' \
-             -e '\\#^image/png=b\\.desktop;\\?$#d' '~/.config/mimeapps.list'"
+             -e '\\#^image/png=b\\.desktop;\\?$#d' ~/.config/mimeapps.list"
         );
         // The escape-injection facet: the fields are FILE TEXT from a
         // user-writable file. Control characters left at plain(), BRE
@@ -3076,8 +3078,8 @@ mod mime_tests {
         let hostile =
             prune_command(&[("application/x-`id`.type".into(), "a$(reboot).desktop".into())], None);
         assert!(hostile.starts_with("sed -i -e '\\#^application/x-`id`"));
-        assert!(hostile.ends_with("'~/.config/mimeapps.list'"));
-        assert_eq!(hostile.matches('\'').count(), 4, "only the two quoting pairs");
+        assert!(hostile.ends_with("~/.config/mimeapps.list"));
+        assert_eq!(hostile.matches('\'').count(), 2, "only the one -e quoting pair");
     }
 }
 
