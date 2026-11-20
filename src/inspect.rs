@@ -5876,6 +5876,13 @@ mod tests {
             repo
         ));
         assert!(!sigstore_attachments_cover(&format!("docker:\n  {repo}:\n    x: y\n"), repo));
+        // The value is the answer: an explicit false under a matching
+        // scope is a refusal, not coverage — a contains() over the key
+        // alone read exactly that as covered (adversarial review).
+        assert!(!sigstore_attachments_cover(
+            &format!("docker:\n  {repo}:\n    use-sigstore-attachments: false\n"),
+            repo
+        ));
     }
 
     /// The file kuma actually ships has to satisfy the check kuma
