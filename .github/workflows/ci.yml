@@ -202,10 +202,8 @@ jobs:
       - run: cargo fmt --check
       # nextest runs the unit/integration battery under the ci profile
       # (two retries; a flaky pass is an explicit FAIL — see
-      # .config/nextest.toml). Doc-tests do not run under nextest and
-      # stay on cargo test.
+      # .config/nextest.toml).
       - run: cargo nextest run --locked --profile ci --all-targets
-      - run: cargo test --locked --doc
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo build --locked --release
       # Pinned to an image rather than the runner's shellcheck, because
@@ -307,6 +305,18 @@ jobs:
           NIP46_RELAY_URL=ws://127.0.0.1:7778 \
             NIP46_RATE_LIMIT=5 NIP46_EVICTION_WAIT_SECS=90 \
             cargo test --locked --test interop -- --nocapture
+
+  # Doc-tests as their own required check: nextest does not run
+  # them, and a battery job that also carried the docs would make
+  # "docs required" mean "everything required". Same shape as the
+  # cargo-audit job: pinned toolchain, no cache, ten minutes.
+  doc-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - run: cargo test --locked --doc
 
   # The image stage: actually build every committed declaration with
   # podman and inspect the result.
