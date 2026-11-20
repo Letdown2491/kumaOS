@@ -1100,7 +1100,10 @@ fn redact_declaration(text: &str) -> Option<String> {
     // declaration over it would be its own kind of wrong.
     let survived = out.lines().any(|line| {
         let Some((key, _)) = line.split_once('=') else { return false };
-        let key = key.trim().trim_matches('"');
+        // TOML spells bare keys bare, but quoted keys ride in both
+        // quote flavors: 'password_hash' and "password_hash" are the
+        // same key to the parser, and the redactor refuses neither.
+        let key = key.trim().trim_matches(['"', '\'']);
         SECRET_KEYS.contains(&key) && !line.contains(REDACTED)
     });
     if survived {
@@ -2990,10 +2993,13 @@ fn prune_command(lines: &[(String, String)], home: Option<&std::path::Path>) -> 
         .iter()
         .map(|(mime, handler)| format!(r"'\#^{}={};\?$#d'", sed_bre(mime), sed_bre(handler)))
         .collect();
+    // The fallback spells ~ because a tilde inside quotes does not
+    // expand — the single-quoted absolute path is quoted, the tilde
+    // fallback is left bare for the shell to expand.
     let target = home
-        .map(|h| h.join(".config/mimeapps.list").display().to_string())
+        .map(|h| format!("'{}'", h.join(".config/mimeapps.list").display()))
         .unwrap_or_else(|| "~/.config/mimeapps.list".to_string());
-    format!("sed -i -e {} '{}'", drops.join(" -e "), target)
+    format!("sed -i -e {} {}", drops.join(" -e "), target)
 }
 
 fn sed_bre(text: &str) -> String {
@@ -4394,7 +4400,10 @@ fn signature_key_for(policy_text: &str, repo: &str) -> Option<String> {
 /// it. The cost is that a scope buried in a comment would count; the
 /// alternative was a check that failed working machines.
 fn sigstore_attachments_cover(text: &str, repo: &str) -> bool {
-    if !text.contains("use-sigstore-attachments") {
+    // The VALUE is the answer, not the key: `use-sigstore-attachments:
+    // false` is an explicit refusal, and a contains() over the key
+    // alone read that as coverage.
+    if !text.contains("use-sigstore-attachments: true") {
         return false;
     }
     // Every prefix of the repository that could legally be a scope, plus
