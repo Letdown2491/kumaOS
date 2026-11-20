@@ -43,8 +43,9 @@ jobs:
           set -euo pipefail
           printf '%s\n' "$PR_BODY" | grep -E '^[[:space:]]*Scope:' \
             | sed 's/^[[:space:]]*Scope:[[:space:]]*//' | tr ',' '\n' \
-            | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' > scopes.txt || true
-          git diff --name-only "$BASE" "$HEAD" > changed.txt
+            | sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's:/*$::' \
+            | sed '/^$/d' > scopes.txt || true
+          git diff --name-only "$BASE...$HEAD" > changed.txt
 
           if [ ! -s scopes.txt ]; then
             echo "note: no Scope: line in the PR body; the convention is new and nothing is enforced yet" >&2
