@@ -84,9 +84,9 @@ pub(crate) fn bwrap_argv(mode: Mode, cwd: &Path, home: &str, command: &[String])
         "/",
         "--dev",
         "/dev",
+        "--unshare-pid",
         "--proc",
         "/proc",
-        "--unshare-pid",
         "--tmpfs",
         "/tmp",
         // The session socket door, closed at the mount: /run/user
