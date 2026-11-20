@@ -724,6 +724,18 @@ impl<S: super::vault::SecretStore> Daemon<S> {
                         "the bunker is locked; unlock it and the pairing can land"
                     ));
                 }
+                let parsed = match super::bunker::parse_nostrconnect_uri(&uri) {
+                    Ok(parts) => parts,
+                    Err(e) => return err_response(anyhow!("the URI did not parse: {e}")),
+                };
+                let client_hex = parsed.client_pubkey.to_string();
+                let existing = self.engine.apps().into_iter().find(|a| a.pubkey == client_hex);
+                if existing.as_ref().is_some_and(|a| a.revoked_at.is_some()) {
+                    return err_response(anyhow!(
+                        "this app is revoked; unrevoke it before pairing again"
+                    ));
+                }
+                let already_paired = existing.is_some();
                 match self.bunker.as_mut().expect("checked").start_handshake(&uri) {
                     Ok((handshake, parts)) => {
                         if let Some(pool) = self.pool.as_mut() {
@@ -750,29 +762,32 @@ impl<S: super::vault::SecretStore> Daemon<S> {
                             None => Err(anyhow!("the bunker is not running")),
                         };
                         if let Err(e) = published {
-                            // Roll the half-pairing back before answering.
-                            // The subscribe and the pairing already ran, so
-                            // the plain error answer would leave an app the
-                            // panel shows and the engine honors, for a
-                            // handshake that reached no client. drop_app is
-                            // the revocation's own teardown — same
-                            // machinery, no tombstone, because the pairing
-                            // never happened to forgive.
-                            if let Some(pool) = self.pool.as_mut() {
-                                pool.drop_app(&parts.client_pubkey);
+                            // Roll the half-pairing back before answering,
+                            // unless the app was already paired before this
+                            // Connect attempt (a failed re-handshake must
+                            // not destroy a pre-existing live pairing).
+                            // drop_app is the revocation's own teardown —
+                            // same machinery, no tombstone, because the
+                            // pairing never happened to forgive.
+                            if !already_paired {
+                                if let Some(pool) = self.pool.as_mut() {
+                                    for url in pool.drop_app(&parts.client_pubkey) {
+                                        self.relay_states.remove(&url);
+                                    }
+                                }
+                                // The session rides in at start_handshake
+                                // (the pubkey enters bunker.sessions before
+                                // anything is published), and a session the
+                                // tombstone-less bunker still holds is one
+                                // it treats as paired: a request over a
+                                // declared relay would route to Ask and
+                                // re-pair the app in the engine. Evict the
+                                // session to match the roads and the record.
+                                if let Some(bunker) = self.bunker.as_mut() {
+                                    bunker.evict(&parts.client_pubkey.to_string());
+                                }
+                                self.engine.delete(&parts.client_pubkey.to_string());
                             }
-                            // The session rides in at start_handshake
-                            // (the pubkey enters bunker.sessions before
-                            // anything is published), and a session the
-                            // tombstone-less bunker still holds is one
-                            // it treats as paired: a request over a
-                            // declared relay would route to Ask and
-                            // re-pair the app in the engine. Evict the
-                            // session to match the roads and the record.
-                            if let Some(bunker) = self.bunker.as_mut() {
-                                bunker.evict(&parts.client_pubkey.to_string());
-                            }
-                            self.engine.delete(&parts.client_pubkey.to_string());
                             return err_response(anyhow!("the handshake was not published: {e}"));
                         }
                         Response::Ok(OkResponse::Connect {
@@ -1482,6 +1497,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connect_refuses_a_revoked_app_without_polluting_sessions() {
+        let mut daemon = daemon().await;
+        daemon.handle(decode(r#"{"cmd":"setup","mode":{"how":"generate"}}"#).unwrap()).await;
+        let client = Keys::generate().public_key();
+        daemon.engine.pair_with_metadata(&client, None, None, None, None);
+        daemon.handle(decode(&format!(r#"{{"cmd":"revoke","app":"{client}"}}"#)).unwrap()).await;
+
+        let uri = format!("nostrconnect://{client}?relay=wss%3A%2F%2Frelay.example&secret=x");
+        let response =
+            daemon.handle(decode(&format!(r#"{{"cmd":"connect","uri":"{uri}"}}"#)).unwrap()).await;
+        assert!(
+            matches!(response, Response::Err(_)),
+            "nostrconnect:// must refuse a revoked app: {response:?}"
+        );
+        let bunker = daemon.bunker.as_ref().expect("the armed bunker");
+        assert!(
+            !bunker.is_paired(&client),
+            "refused nostrconnect:// must not insert the revoked pubkey into bunker.sessions"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_re_connect_preserves_an_already_paired_app() {
+        let mut daemon = daemon().await;
+        daemon.handle(decode(r#"{"cmd":"setup","mode":{"how":"generate"}}"#).unwrap()).await;
+        let client = Keys::generate().public_key();
+        daemon.engine.pair_with_metadata(&client, Some("existing".into()), None, None, None);
+        daemon.bunker.as_mut().expect("the armed bunker").seed([client]);
+        daemon.pool = None;
+
+        let uri = format!("nostrconnect://{client}?relay=wss%3A%2F%2Frelay.example&secret=x");
+        let response =
+            daemon.handle(decode(&format!(r#"{{"cmd":"connect","uri":"{uri}"}}"#)).unwrap()).await;
+        assert!(matches!(response, Response::Err(_)), "publish failure still returns Err");
+        assert!(
+            daemon
+                .engine
+                .apps()
+                .iter()
+                .any(|a| a.pubkey == client.to_string() && a.revoked_at.is_none()),
+            "a failed re-connect must not delete an already-paired app"
+        );
+        let bunker = daemon.bunker.as_ref().expect("the armed bunker");
+        assert!(bunker.is_paired(&client), "the pre-existing session stays intact");
+    }
+
+    #[tokio::test]
     async fn a_revoked_app_stays_refused_after_a_restart() {
         use nostr::nips::nip44::Nip44;
         use nostr::nips::nip46::{NostrConnectMessage, NostrConnectMethod};
@@ -1529,7 +1591,8 @@ mod tests {
         // Paired and hand a revoked app the keys back. This is the
         // assertion that caught the as_mut()-on-None bug: without the
         // tombstones riding in, Connect paired.
-        let secret = daemon.vault.secrets().last().expect("the mint's outstanding secret").to_string();
+        let secret =
+            daemon.vault.secrets().last().expect("the mint's outstanding secret").to_string();
         let connect = NostrConnectMessage::Request {
             id: "connect-after-revoke".into(),
             method: NostrConnectMethod::Connect,
