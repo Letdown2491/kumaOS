@@ -54,6 +54,7 @@ const MAX_FRAME_BYTES: usize = 1_048_576;
 /// Seconds the TCP handshake (the HTTP upgrade read) may take before
 /// the connection is refused. One connection's beat replaces it once
 /// the upgrade is done.
+const HANDSHAKE_SECS: u64 = 10;
 
 /// How deep a connection's outbound queue may get before the relay
 /// decides the reader stopped reading. Real clients queue single
@@ -186,8 +187,8 @@ fn main() -> Result<()> {
         // opens and stalls parks its thread inside the upgrade read
         // for no longer than this. one_connection replaces it with the
         // beat once the upgrade is done.
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-        let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(HANDSHAKE_SECS)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(HANDSHAKE_SECS)));
         let id = next_id.fetch_add(1, Ordering::SeqCst);
         let store = store.clone();
         let outbound = outbound.clone();
