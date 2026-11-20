@@ -86,8 +86,21 @@ pub(crate) fn bwrap_argv(mode: Mode, cwd: &Path, home: &str, command: &[String])
         "/dev",
         "--proc",
         "/proc",
+        "--unshare-pid",
         "--tmpfs",
         "/tmp",
+        // The session socket door, closed at the mount: /run/user
+        // holds the bus, the Wayland surface, and the nostr signer's
+        // socket, and connect(2) succeeds through a read-only bind —
+        // the --ro-bind above does NOT keep a hostile postinstall from
+        // dialing the session. Masked, not /run wholesale: Fedora's
+        // resolv.conf is a symlink into /run/systemd/resolve, and a
+        // bare /run tmpfs would strand every build's DNS. The
+        // process namespace is unshared with it, so the fresh /proc
+        // shows the sandbox's own processes instead of the host's
+        // cmdlines.
+        "--tmpfs",
+        "/run/user",
         "--tmpfs",
         home,
         "--bind",
@@ -207,13 +220,22 @@ mod tests {
         assert_eq!(args[0], "bwrap", "{args:?}");
         let tmpfses: Vec<usize> =
             args.iter().enumerate().filter(|(_, a)| *a == "--tmpfs").map(|(i, _)| i).collect();
-        assert_eq!(tmpfses.len(), 2, "tmp and the home are the two tmpfs mounts: {args:?}");
+        assert_eq!(
+            tmpfses.len(),
+            3,
+            "tmp, /run/user (the session socket door), and the home are the three tmpfs mounts: {args:?}"
+        );
         assert_eq!(args[tmpfses[0] + 1], "/tmp");
-        assert_eq!(args[tmpfses[1] + 1], "/var/home/x");
+        assert_eq!(args[tmpfses[1] + 1], "/run/user");
+        assert_eq!(args[tmpfses[2] + 1], "/var/home/x");
         let bind_at = args.iter().position(|a| a == "--bind").unwrap();
         // Later mounts win: the cwd bind must come after the tmpfs
         // home, or the project directory would be empty too.
-        assert!(tmpfses[1] < bind_at, "{args:?}");
+        assert!(tmpfses[2] < bind_at, "{args:?}");
+        assert!(
+            args.windows(2).any(|w| w == ["--unshare-pid", "--proc"] || w == ["--proc", "--unshare-pid"]),
+            "the process namespace is unshared, so /proc shows the sandbox's own processes: {args:?}"
+        );
         assert_eq!(&args[bind_at + 1], "/var/home/x/project");
         assert_eq!(&args[bind_at + 2], "/var/home/x/project");
         assert!(
