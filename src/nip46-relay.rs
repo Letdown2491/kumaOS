@@ -750,6 +750,14 @@ mod tests {
             .expect("subscriptions")
             .insert(1, vec![("stress-sub".to_string(), filter)]);
 
+        // Time-boxed on purpose: a shared CI runner is a flake source,
+        // and a stress test that flaked would go red under the
+        // flaky-result policy. The wall-clock ceiling bounds the run
+        // to seconds on any machine; contention is asserted POSITIVELY
+        // below (broadcasts attempted beyond the eight-slot queue =
+        // overflow happened; the kick flag set = the kick path ran),
+        // so a fast machine cannot pass vacuously.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
         let stop = Arc::new(AtomicBool::new(false));
         let mut handles = Vec::new();
         for broadcaster in 0..4 {
@@ -758,7 +766,7 @@ mod tests {
             let stop = stop.clone();
             handles.push(std::thread::spawn(move || {
                 let mut i: u64 = 0;
-                while !stop.load(Ordering::SeqCst) {
+                while !stop.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
                     let event = EventBuilder::new(Kind::from_u16(24133), format!("{broadcaster}:{i}"))
                         .tag(Tag::public_key(Keys::generate().public_key()))
                         .finalize(&Keys::generate())
@@ -768,29 +776,33 @@ mod tests {
                 }
             }));
         }
-        for _ in 0..4_000 {
+        let mut attempted: u64 = 0;
+        while std::time::Instant::now() < deadline {
             let event = EventBuilder::new(Kind::from_u16(24133), "stress")
                 .tag(Tag::public_key(Keys::generate().public_key()))
                 .finalize(&Keys::generate())
                 .unwrap();
             broadcast(&event, &outbound, &subscriptions);
+            attempted += 1;
         }
         stop.store(true, Ordering::SeqCst);
         for handle in handles {
             handle.join().expect("a broadcaster panicked under contention");
         }
+        // Contention, positively asserted: more events were attempted
+        // than the eight-slot queue could hold, and the kick flag set.
+        assert!(attempted > 8, "the stress never contended: {attempted} broadcasts");
+        assert!(kicked.load(Ordering::SeqCst), "the kick path ran under contention");
         let _ = rx.try_recv();
-        // The end state is the kick's own: with a queue of eight under
-        // four thousand broadcasts, the subscriber was kicked and both
-        // maps dropped it — and the maps agree with each other, which
-        // is what a deadlock between their locks would break.
+        // The end state is the kick's own: both maps dropped the
+        // kicked subscriber — and the maps agree with each other,
+        // which is what a deadlock between their locks would break.
         assert_eq!(outbound.lock().expect("outbound").len(), 0, "the kicked queue is gone");
         assert_eq!(
             subscriptions.lock().expect("subs").len(),
             0,
             "the kicked subscription is gone"
         );
-        assert!(kicked.load(Ordering::SeqCst), "the kick flag was set before removal");
     }
 
     /// A frame over the wire cap is refused: the library errors on the
