@@ -1,0 +1,11 @@
+# The CI profile. Two automatic retries absorb the transient failures
+# a shared runner produces — port races between lanes, timing skew on
+# a cold cache. A test that passes only on retry is NOT quietly green:
+# flaky-result = "fail" makes the run red, on the grounds that a flaky
+# gate is a bug with a delay, and the report names it as FLAKY so the
+# quarantine conversation starts from the test's name.
+[profile.ci]
+retries = 2
+flaky-result = "fail"
+status-level = "retry"
+final-status-level = "flaky"

@@ -196,8 +196,16 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+        with:
+          tool: cargo-nextest
       - run: cargo fmt --check
-      - run: cargo test --locked --all-targets
+      # nextest runs the unit/integration battery under the ci profile
+      # (two retries; a flaky pass is an explicit FAIL — see
+      # .config/nextest.toml). Doc-tests do not run under nextest and
+      # stay on cargo test.
+      - run: cargo nextest run --locked --profile ci --all-targets
+      - run: cargo test --locked --doc
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo build --locked --release
       # Pinned to an image rather than the runner's shellcheck, because
