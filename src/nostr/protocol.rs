@@ -761,6 +761,17 @@ impl<S: super::vault::SecretStore> Daemon<S> {
                             if let Some(pool) = self.pool.as_mut() {
                                 pool.drop_app(&parts.client_pubkey);
                             }
+                            // The session rides in at start_handshake
+                            // (the pubkey enters bunker.sessions before
+                            // anything is published), and a session the
+                            // tombstone-less bunker still holds is one
+                            // it treats as paired: a request over a
+                            // declared relay would route to Ask and
+                            // re-pair the app in the engine. Evict the
+                            // session to match the roads and the record.
+                            if let Some(bunker) = self.bunker.as_mut() {
+                                bunker.evict(&parts.client_pubkey.to_string());
+                            }
                             self.engine.delete(&parts.client_pubkey.to_string());
                             return err_response(anyhow!("the handshake was not published: {e}"));
                         }
@@ -1463,6 +1474,11 @@ mod tests {
             "a handshake that reached no client pairs nobody: {:?}",
             daemon.engine.apps()
         );
+        // The bunker's own session book is the third place the pairing
+        // lived: a session the rollback forgets would route a request
+        // over a declared relay to Ask and re-pair the app.
+        let bunker = daemon.bunker.as_ref().expect("the armed bunker");
+        assert!(!bunker.is_paired(&client), "the rollback evicts the session");
     }
 
     #[tokio::test]
