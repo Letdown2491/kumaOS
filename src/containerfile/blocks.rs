@@ -551,6 +551,16 @@ After=graphical-session-pre.target
 
 [Service]
 ExecStart=/usr/bin/gnome-keyring-daemon --start --foreground --components=secrets
+# The adopt's exit zero is not the readiness the bunker's After= names
+# (45.7.1's second hardware boot proved the gap: the unit exited 0, the
+# PAM daemon aborted on the session's first OpenSession a second later,
+# and the ordering had barred nothing). This post is the barrier: hold
+# until the bus name is owned and its owner answers a Peer.Ping — bus
+# glue, not the secret module, so the probe cannot trip the very abort
+# it guards. A name that never answers fails the unit, and Restart=
+# puts a daemon back on the bus instead of leaving every dependent
+# ordered behind a corpse.
+ExecStartPost=/bin/sh -c 'for i in $(seq 1 10); do busctl --user call org.freedesktop.secrets /org/freedesktop/secrets org.freedesktop.DBus.Peer Ping >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
 Restart=on-failure
 RestartSec=2s
 Slice=session.slice

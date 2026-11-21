@@ -18,6 +18,7 @@
 //! error naming what the gate expects to have happened already.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use zbus::{Connection, ObjectPath, OwnedObjectPath, OwnedVariant, Proxy, Variant};
@@ -44,6 +45,48 @@ async fn service_proxy(conn: &Connection) -> Result<Proxy<'_>> {
     Proxy::new(conn, SERVICE, SERVICE_PATH, SERVICE_IFACE)
         .await
         .context("cannot address the Secret Service")
+}
+
+/// Who, if anyone, owns the Secret Service name right now. Asked of the
+/// bus itself, not of the service — a name nobody owns is a lookup that
+/// answers cleanly rather than an activation attempt.
+async fn service_name_owned() -> Result<bool> {
+    let conn = connect().await?;
+    let dbus = Proxy::new(&conn, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus")
+        .await
+        .context("cannot address the bus")?;
+    let owned: bool = dbus
+        .call("NameHasOwner", &("org.freedesktop.secrets",))
+        .await
+        .context("cannot ask the bus who owns the Secret Service")?;
+    Ok(owned)
+}
+
+/// The startup gate: wait until the Secret Service name is owned and
+/// *stays* owned across a settle pause, before the first ask. The
+/// 45.7.1 hardware round caught why the wait matters: gnome-keyring's
+/// PAM-spawned daemon can still be inside its first-second negotiation
+/// setup when the session's first OpenSession arrives, and the 51.x
+/// abort on exactly that ask takes the daemon — and the unlock it
+/// holds — down with it, leaving the name unowned and unactivatable
+/// for the rest of the session. A name that survives the settle is a
+/// daemon past its vulnerable window; a name that dies inside it is a
+/// lost boot regardless, and the caller proceeds to the honest error
+/// rather than waiting out the session.
+pub async fn wait_for_service_settled(max_wait: Duration, settle: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + max_wait;
+    loop {
+        if service_name_owned().await.unwrap_or(false) {
+            tokio::time::sleep(settle).await;
+            if service_name_owned().await.unwrap_or(false) {
+                return true;
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
 }
 
 /// A plain session opened on the service. The secret struct every read and

@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use super::bunker::Bunker;
 use super::keys;
 use super::policy::Level;
+use super::secrets;
 use super::pool::{RelayPool, RelayState, RelayStatus};
 use super::vault::Vault;
 
@@ -871,10 +872,14 @@ impl<S: super::vault::SecretStore> Daemon<S> {
     /// between the PAM-spawned daemon and a DBus-activated one, or — on
     /// gnome-keyring 51.x — mid-abort when the daemon's first OpenSession
     /// arrives, and one NoReply would otherwise strand the bunker locked
-    /// for the whole session. A short retry burst gives the same PAM-open
-    /// wall a second and third chance. A vault that is genuinely absent
-    /// or locked answers the same every time, so the last error is
-    /// returned as-is after the attempts run out.
+    /// for the whole session. Each attempt is preceded by the settle
+    /// gate (`secrets::wait_for_service_settled`): no ask goes to a name
+    /// that is not owned and stable, because an ask into that window is
+    /// what kills the daemon and the unlock it holds. A short retry
+    /// burst gives the same PAM-open wall a second and third chance. A
+    /// vault that is genuinely absent or locked answers the same every
+    /// time, so the last error is returned as-is after the attempts run
+    /// out.
     pub async fn startup_unlock_with_retries(
         &mut self,
         attempts: u32,
@@ -882,6 +887,13 @@ impl<S: super::vault::SecretStore> Daemon<S> {
     ) -> Result<String> {
         let mut last = None;
         for attempt in 1..=attempts.max(1) {
+            // The gate before the ask: 10s of patience for the name to
+            // appear, 2s of settle once it has. Waiting on a name that
+            // never comes is bounded here — the attempt below then
+            // produces the honest ServiceUnknown for the ladder to
+            // report, instead of the bunker hanging forever.
+            secrets::wait_for_service_settled(Duration::from_secs(10), Duration::from_secs(2))
+                .await;
             match self.startup_unlock().await {
                 Ok(npub) => return Ok(npub),
                 Err(e) => {
