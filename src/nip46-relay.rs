@@ -312,6 +312,9 @@ fn one_connection(
 /// for write-readiness up to BEAT instead of either erroring a
 /// connection the old blocking write would have paced through or
 /// parking the loop on a stalled reader forever.
+#[allow(clippy::result_large_err)]
+// Same as send_paced, which this forwards to: the Err is tungstenite's
+// own Error, whose size is that crate's design.
 fn say(
     socket: &mut tungstenite::WebSocket<std::net::TcpStream>,
     message: Message,

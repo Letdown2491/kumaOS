@@ -148,6 +148,10 @@ impl RawSocket for tungstenite::stream::MaybeTlsStream<std::net::TcpStream> {
 /// have paced through; with an unbounded wait, a stalled peer parks
 /// the loop forever. Ten seconds of a full send buffer is a dead peer
 /// by any honest measure.
+#[allow(clippy::result_large_err)]
+// The Err is tungstenite's own Error, whose size is that crate's design —
+// every fallible tungstenite call in this tree returns it, and boxing it
+// here would diverge from the API the call sites already speak.
 pub fn send_paced<S: std::io::Read + std::io::Write + RawSocket>(
     socket: &mut tungstenite::WebSocket<S>,
     message: tungstenite::Message,

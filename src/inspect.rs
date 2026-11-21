@@ -2437,7 +2437,7 @@ fn check_backup(
     // The verb's own answer rather than a second copy of the same format
     // string: doctor naming a path `kuma backup` does not would send
     // somebody to provision a file nothing ever reads.
-    let secret = crate::backup::secret_path(&config);
+    let secret = crate::backup::secret_path(config);
     // Existence is not the promise. SECURITY.md says "mode 0600, owned
     // by root", and kuma prints the command that makes it so, but the
     // operator creates this file by hand and a plain `>` redirect leaves
@@ -2705,7 +2705,7 @@ fn check_snapshots(
 
     // The store is the only evidence the whole chain ran. A unit can be
     // active and successful and still have written nothing.
-    let (store, count) = snapshot::store_state(&config);
+    let (store, count) = snapshot::store_state(config);
     if count == 0 {
         // Warn, not fail: between switching to a declaration that asks
         // for snapshots and the timer's first tick, empty is the correct
@@ -2810,7 +2810,7 @@ fn check_etc_drift(
     // check exists to catch can be exercised against a temp tree instead
     // of only ever running the everything-is-fine branch.
     let scan =
-        scan_etc(&crate::containerfile::etc_paths(&config), Path::new("/usr"), Path::new("/"));
+        scan_etc(&crate::containerfile::etc_paths(config), Path::new("/usr"), Path::new("/"));
     let EtcScan { owned, shadowed, removed } = scan;
     if owned == 0 {
         return;

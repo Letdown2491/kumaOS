@@ -239,7 +239,7 @@ impl RelayFilter {
         // per-broadcast tax.
         if !self.ids.is_empty() {
             let id_hex = event.id.to_string();
-            if !self.ids.iter().any(|i| *i == id_hex) {
+            if !self.ids.contains(&id_hex) {
                 return false;
             }
         }
@@ -355,9 +355,7 @@ impl EventStore {
             let dropped = self.events.remove(0);
             self.seen.remove(&dropped.event.id);
             self.bytes_held = self.bytes_held.saturating_sub(dropped.bytes);
-            if excess > 0 {
-                excess -= 1;
-            }
+            excess = excess.saturating_sub(1);
         }
         Ok(true) // fresh, held
     }

@@ -55,6 +55,10 @@ ready: the fix commits, but the push waits until the running workflows
 have all concluded — a mid-battery push cuts the remaining laps off
 mid-flight, spends the runners, and throws away the signal the lap was
 midway through producing. One battery at a time, read to the end.
+The gates a push claims are the gates the host runs: `cargo fmt --check`,
+`cargo clippy --locked --all-targets -- -D warnings`, and `cargo test`
+beside each other before any push — 45.6.0's first push claimed green
+and shipped red because clippy ran only in CI.
 
 ## The nostr layer's dev loop (44.4.0)
 
