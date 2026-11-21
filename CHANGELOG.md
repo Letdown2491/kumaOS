@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## v45.7.1 (2026-11-21)
+
+- **The keyring regression 45.7.0 shipped is fixed: the adopt half is
+  back.** The dbus-activation cut (#116) removed niri's only road to
+  adopt PAM's half-started keyring daemon — gnome-keyring's autostart
+  entry is `OnlyShowIn=GNOME;Unity;MATE` and its exec conditions skip
+  on every boot, so PAM's unlocked `--daemonize --login` daemon owned
+  no bus name forever and the bunker met a nameless Secret Service
+  ("cannot open a Secret Service session"). The image now ships
+  `kuma-keyring.service`: `gnome-keyring-daemon --start --foreground
+  --components=secrets`, wanted by `graphical-session.target` (not
+  any login-wide trigger — an ssh login must not squat the bus name
+  with a locked daemon), enabled by the user preset at bake time and
+  masked on live media. The bunker unit gains `After=`, so the asks
+  go out only after adoption has had its chance. The whole chain is
+  boot-tested now: the smoke's boot lap proves the unit stays off an
+  ssh login, is enabled for the account, and that the PAM unlock
+  survives the adopt — the collection reads unlocked on the bus and
+  the bunker answers its startup asks with no Secret Service failure.
+
 ## v45.7.0 (2026-11-21)
 
 - **The keyring cannot lose the race it kept losing.** A 45.6.0 boot
