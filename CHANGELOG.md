@@ -2,6 +2,143 @@
 
 ## Unreleased
 
+- **The relay's doors are scoped, ordered, and bounded.** The scoping
+  door accepted `authors`/`ids` as sufficient scoping and the match
+  enforced neither — a subscription naming one dead id or one
+  unrelated author passed the door and matched every held event, in
+  replay and live broadcast. `matches` now enforces every field the
+  door accepts, the kind parse uses `try_from` (an `as u16` aliased
+  `65536 + 24133` onto the bunker's own lane), and a present-but-empty
+  filter array is unsatisfiable rather than a wildcard. The walk and
+  the kick took the relay's two map locks in opposite orders — a
+  deadlock two concurrent broadcasts could reach; the rank now lives
+  in one helper a stress test hangs without. Connections cap at 512,
+  frames at 1 MiB, subscriptions at 32 per connection, and the
+  handshake gets ten seconds. (#109)
+
+- **Remember grants are scoped to what was shown.** `--remember` on a
+  `SignEvent` approval keyed standing grants without the event kind:
+  approving a harmless note with remember silently auto-approved
+  profile writes, deletes, relay lists, and Blossom `delete` for the
+  full remember window. Grants now remember the exact kind — and for
+  Blossom auth, the exact verb — and out-of-range kinds (an `as u16`
+  truncation) alias nothing. Existing grants re-ask once after the
+  upgrade. (#114)
+
+- **A revoked app cannot re-pair after a restart.** The re-arm walk
+  seeded revocation tombstones through a handle that was already
+  `None`, so every tombstone died at the restart it was set to
+  survive and a revoked app could pair again with a live secret.
+  `mark_revoked` runs on the local handle, and the restart test holds
+  `Connect` with the vault's own secret — the verb the engine's
+  record never sees, which is how the bug survived its own test. (#95)
+
+- **A failed publish rolls the half-pairing back.** Connect's
+  subscribe-pair-publish is not atomic, and a publish failure left
+  the pairing persisted, the app's roads threaded, and the bunker's
+  session live — a request over a declared relay then routed to Ask
+  and re-paired the app. The failure arm now rolls back all three
+  books, unless the app was already paired before the attempt. (#95)
+
+- **The sandbox closes the session socket door.** `connect(2)` on a
+  Unix socket succeeds through a read-only bind mount, so the
+  `--ro-bind / /` sandbox never kept a hostile postinstall from
+  dialing the session bus or the nostr signer from `getuid()` alone.
+  `/run/user` is masked with its own tmpfs — not `/run` wholesale,
+  which would strand Fedora's resolv.conf symlink — and the process
+  namespace is unshared, so `/proc` shows the sandbox's own. (#106)
+
+- **The credential file's key gate holds the whole line.** A line
+  without an `=`, an empty key, a digit-led key, and lowercase (a
+  UTF-8 collation widens `[A-Z]`) all refused nowhere before meaning
+  something; `BASH_ENV` and `ENV` join the refused names on both
+  readers. The unprivileged verb's read error on a correctly-0600
+  credential now says run `sudo kuma backup` instead of fix a mode
+  that is already right. (#105)
+
+- **The heal's tighten propagates.** A directory the root heal failed
+  to tighten defeated the 0600 file the write exists for, quietly —
+  failures are real ones now, named. The injection canary in its test
+  lives in the test's own tempdir. (#104)
+
+- **The state dir is born 0700.** The nostr unit's `mkdir -p` created
+  the state dir at umask width and held it world-traversable until
+  the daemon's first write tightened it; the creation is the tighten
+  now, idempotent for machines whose dir already exists. (#102)
+
+- **An unclosed IPv6 opener is not a loopback spelling.**
+  `ws://[::1` passed the loopback check because `split(']')` on a
+  missing closer hands back the whole tail — a typo'd URI accepted as
+  trusted on the strength of its own broken shape. Both validators
+  demand the bracket pair, in unison. (#92)
+
+- **The local declaration is judged on the handle it is read from.**
+  The governing read vetted one path and consumed another — a rename
+  in between drove a root converger through the gap. One open, fstat
+  of the same fd, then the read. (#98)
+
+- **The apparmor userns knob is read from the path that exists.** The
+  dotted sysctl spelling under `/proc/sys` names a file that does not
+  exist, so the relax-or-report block never ran on any machine; the
+  knob translates to its slashed spelling first. (#107)
+
+- **The sudo note fires for the shape it named.** An inverted
+  explicit-flag made the warning silent for implicit resolution onto
+  the invoking user's `./kuma.toml` under root and loud for an
+  explicit `--config` — backwards; the truth table is a test that
+  stages no sudo session, and `--help` states the home-first order. (#103)
+
+- **The sync's tag arrives in the shell string quoted.**
+  `sync_image_to_root` interpolated the CLI tag raw into a `bash -c`
+  whose second half runs under sudo — the same courtesy `vm_apply`
+  already extends over ssh. (#97)
+
+- **The bunker uri's secret opens the query.** A pairing with no
+  relays minted `bunker://<pk>&secret=…` — no `?`, a garbage pubkey,
+  a URI every client refuses, for a secret already minted. (#96)
+
+- **A short or missing pubkey renders, it does not panic.** The apps
+  view sliced `[..16]` off a fallback one byte long; `.get(..16)`
+  renders the whole short value. (#108)
+
+- **Three inspect nits.** The mimeapps fallback spelled `~` inside
+  single quotes, where it does not expand; the sigstore coverage
+  heuristic read a scope's key and ignored an explicit `false`; the
+  redaction backstop knew `"` keys but not `'` ones. (#110)
+
+- **Two review nits.** The dev receipt picked the "newest" checkout
+  by string max — `"45.10.0"` sorts below `"45.9.0"`; the snapshot
+  restore suggestion quotes the path it hands a shell. (#111)
+
+- **The fstab sync's temp file goes home.** `kuma-fstab-sync` ran
+  under `set -e` with no trap: a mid-flight failure leaked a temp
+  file beside fstab, one per failed boot, forever. The brew tarball's
+  floating HEAD is written down as an accepted trade, with the escape
+  hatch named. (#94)
+
+- **The refusal messages say what they mean.** Six `bail!` strings
+  ended in a doubled backslash — an escaped backslash, then a real
+  newline — and carried the next line's indentation into every
+  refusal a person reads. (#93)
+
+- **CI runs nextest, and a flaky pass is a fail.** The unit battery
+  runs under a `ci` profile with two retries; a test that passes only
+  on retry fails the run and is named FLAKY in the summary.
+  Doc-tests are their own required check. (#112)
+
+- **The nightly ledger counts every lap.** The `iso` lap and the new
+  `doc-tests` lap join the ledger's needs — a summary that omits an
+  input can close a red night as green. (#99, #113 follow-through)
+
+- **The scope check.** A PR declares its area with a `Scope:` line
+  and the check fails on any changed file outside it; no Scope line
+  is a notice, not a gate, until the convention settles. (#113)
+
+- **The idempotence guard installs skopeo before relying on it.**
+  `publish-tag`'s guard read skopeo's absence the same as an
+  unpublished image — every re-run dispatched with nothing red to say
+  why. Same floor as the sibling workflows. (#101)
+
 ## v45.5.0 (2026-11-18)
 
 - **Doctor can answer "did my base move since I installed."** The
