@@ -3892,7 +3892,7 @@ fn check_nostr(
             // unlocking the bunker cannot work until a human opens
             // the session's keyring. 2026-11-20's boot left this
             // branch silent about exactly that.
-            let keyring_shut = e.to_string().contains(crate::nostr::secrets::LOCKED_COLLECTION_MSG);
+            let keyring_shut = e.to_string().contains(kuma::nostr::secrets::LOCKED_COLLECTION_MSG);
             report(
                 Grade::Warn,
                 "nostr",

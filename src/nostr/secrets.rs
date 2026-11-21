@@ -149,10 +149,11 @@ async fn default_collection_locked(conn: &Connection) -> Result<bool> {
 /// The lock's message, named once: the vault-read bail below and the
 /// doctor's road-finder both speak it, and two copies of one sentence
 /// drift. The doctor matches on this string — it is this layer's own
-/// contract, not an upstream's mood.
-pub(crate) const LOCKED_COLLECTION_MSG: &str = "the login collection is locked; the vault cannot \
-                                                be read behind the lock — unlock the keyring and \
-                                                retry";
+/// contract, not an upstream's mood. Public because the doctor reads
+/// it from the bin side of the crate line.
+pub const LOCKED_COLLECTION_MSG: &str = "the login collection is locked; the vault cannot \
+                                         be read behind the lock — unlock the keyring and \
+                                         retry";
 
 /// Load the payload, or `None` when no vault exists here yet. A locked
 /// collection is neither: the empty search it answers is an error naming
