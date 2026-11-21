@@ -140,14 +140,29 @@ pub fn parse_nostrconnect_uri(uri: &str) -> Result<NostrConnectParts> {
             "relay" => relays.push(percent_decode(value)?),
             "secret" => secret = Some(percent_decode(value)?),
             "perms" => perms = Some(percent_decode(value)?),
-            "name" => name = Some(percent_decode(value)?),
+            "name" => name = Some(percent_decode_display(value)?),
             // The url rides captured, not discarded: it is where a
             // name is derived from when the client claims none.
-            "url" => url = Some(percent_decode(value)?),
+            "url" => url = Some(percent_decode_display(value)?),
             // image rides along unnamed: the panel's display hint, not
             // the daemon's business.
             _ => {}
         }
+    }
+    // Dedupe, then cap. A pasted URI is untrusted input that decides
+    // thread counts: every relay here becomes a pool road — a thread
+    // and a socket — and a URI with thousands of `relay=` params (or
+    // the same relay pasted thousands of times) is a thread-flood
+    // wearing a QR code. A client that speaks eight relays is a fleet;
+    // anything past the cap is either a mistake or a plan.
+    let mut seen = std::collections::HashSet::new();
+    relays.retain(|relay| seen.insert(relay.clone()));
+    if relays.len() > MAX_URI_RELAYS {
+        bail!(
+            "the URI names {} relays; the cap is {MAX_URI_RELAYS} — a pairing \
+               that wants more roads edits the declaration, not the paste",
+            relays.len()
+        );
     }
     if relays.is_empty() {
         bail!("the URI carries no relay to answer the client on");
@@ -330,6 +345,10 @@ pub enum Plan {
 /// delay for every app behind it.
 const RATE_REFILL_PER_SEC: f64 = 10.0;
 const RATE_BURST: f64 = 30.0;
+/// The relay cap per nostrconnect URI. Every relay a URI names becomes
+/// a pool road — a thread and a socket — so the paste is bounded where
+/// the thread count is decided.
+const MAX_URI_RELAYS: usize = 8;
 /// The bound the buckets shed to, and what idle means for one — a
 /// sender silent this long has a full bucket by refill, so its state
 /// is not worth keeping under a flood of throwaway pubkeys.
@@ -508,18 +527,21 @@ impl Bunker {
     /// sits unused until the person revokes it.
     pub fn start_handshake(&mut self, uri: &str) -> Result<(Event, NostrConnectParts)> {
         let parts = parse_nostrconnect_uri(uri)?;
-        self.sessions.insert(parts.client_pubkey);
-        // The id is nobody's correlation — a response to no request —
-        // so it is random, and its randomness is its whole job.
         let message = NostrConnectMessage::Response {
             id: handshake_id(),
             result: Some(parts.secret.clone()),
             error: None,
         };
+        // Built before the session is inserted: a signing failure (a
+        // broken keyring) used to leave a session standing for a
+        // pairing that never answered — a half-pairing that let the
+        // app's next connect skip the secret check. Same rollback
+        // shape the socket protocol's own handshake takes.
         let content = self.keys.nip44_encrypt(&parts.client_pubkey, &message.as_json())?;
         let event = EventBuilder::new(Kind::from_u16(24133), content)
             .tag(Tag::public_key(parts.client_pubkey))
             .finalize(&self.keys)?;
+        self.sessions.insert(parts.client_pubkey);
         Ok((event, parts))
     }
 
@@ -795,6 +817,14 @@ impl Bunker {
     /// Run a planned method under its decided answer. The decision is
     /// the gate's; the signing is the bunker's; the response event is
     /// the app's half of the channel again.
+    ///
+    /// The tombstone is re-checked here, not only at the gate: the
+    /// decision is made with no lock held (a person's think-time),
+    /// and a revoke that lands between decide and execute would
+    /// otherwise be outrun by the very ask it outlived — the worker
+    /// holds the daemon lock through this call, so the revocation
+    /// either landed before it or waits behind it. A stale Allow
+    /// does not survive the re-check.
     pub fn execute(
         &self,
         request: &Event,
@@ -803,6 +833,10 @@ impl Bunker {
         params: &[String],
         decision: Decision,
     ) -> Option<Event> {
+        if matches!(decision, Decision::Allow) && self.revoked.contains(&request.pubkey) {
+            let response = NostrConnectResponse::with_error("this app is revoked");
+            return self.response_event(request, id, response);
+        }
         let response = match decision {
             Decision::Allow => self.run(method, params),
             Decision::Deny(reason) => NostrConnectResponse::with_error(reason),
@@ -1116,7 +1150,10 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 /// to no request needs nothing longer, and nothing about it correlates.
 fn handshake_id() -> String {
     let mut bytes = [0u8; 8];
-    getrandom::fill(&mut bytes).unwrap_or_default();
+    // An OS entropy failure is not an empty id waiting to happen: the
+    // default of a failed fill is eight zero bytes, and a predictable
+    // id on a pairing response is a correlation an attacker chose.
+    getrandom::fill(&mut bytes).expect("the OS entropy source");
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -1186,21 +1223,44 @@ pub fn parse_bunker_uri(uri: &str) -> Result<(PublicKey, Vec<String>)> {
     Ok((public_key, relays))
 }
 
+/// The display fields (name, url) decode with the NIP's query-string
+/// convention on top: a bare `+` is a space, per the spec's own
+/// `name=My+Client` example, which real clients send. The functional
+/// fields (relay, secret, perms) keep `percent_decode`'s literal `+` —
+/// a relay path's plus is data, not a space.
+fn percent_decode_display(value: &str) -> Result<String> {
+    Ok(percent_decode(value)?.replace('+', " "))
+}
+
 fn percent_decode(value: &str) -> Result<String> {
     let bytes = value.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            // The query-string spelling of a space — the NIP's own
-            // example carries `name=My+Client`.
-            b'+' => out.push(b' '),
+            // `+` means `+`. The form-encoding convention that reads it
+            // as a space belongs to HTML forms, not to the URIs this
+            // parser answers (RFC 3986: a query's `+` is itself), and
+            // kuma's own encoder never emits a bare `+` for a space —
+            // it writes `%20`. Reading a relay path's `a+b` as `a b`
+            // was the asymmetry: the encoder's plus survived no
+            // round trip. The NIP's `name=My+Client` example renders
+            // with the plus in it, which is a display nit, where the
+            // other reading corrupted a relay URL.
+            b'+' => out.push(b'+'),
             b'%' => {
                 if i + 3 > bytes.len() {
                     return Err(anyhow!("bad percent-encoding"));
                 }
-                let hex = std::str::from_utf8(&bytes[i + 1..i + 3])
-                    .map_err(|_| anyhow!("bad percent-encoding"))?;
+                let hex = &bytes[i + 1..i + 3];
+                // Both characters must be hex digits, checked here:
+                // from_str_radix accepts a leading sign, so `%+4`
+                // parsed as 0x04 — a malformed escape decoding into a
+                // control byte is a smuggling lane, not a leniency.
+                if !hex.iter().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(anyhow!("bad percent-encoding"));
+                }
+                let hex = std::str::from_utf8(hex).map_err(|_| anyhow!("bad percent-encoding"))?;
                 let byte =
                     u8::from_str_radix(hex, 16).map_err(|_| anyhow!("bad percent-encoding"))?;
                 out.push(byte);

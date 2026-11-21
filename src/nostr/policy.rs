@@ -34,9 +34,8 @@
 //! bunker is dead when it is not.
 
 use std::collections::HashMap;
-use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::os::unix::fs::PermissionsExt as _;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -282,6 +281,12 @@ pub struct Engine {
     /// How long an ask waits. The constant in production; the test
     /// seam shrinks it to something a test can wait out.
     prompt_ttl: Duration,
+    /// The flusher's bell. The flusher used to tick every
+    /// FLUSH_PERIOD whether or not anything was dirty — 17,280 CPU
+    /// wakes a day on a daemon with nothing to say — so the marks
+    /// ring this and the flusher sleeps through the quiet, waking
+    /// only when a mark lands or a batch is due.
+    flush_wake: Arc<std::sync::Condvar>,
 }
 
 /// The batched writes' two doors, shared by the engine's methods and
@@ -289,53 +294,12 @@ pub struct Engine {
 /// either way, and a successful write clears the flag it served. A
 /// memory-only engine (no state dir) persists nothing and its flags
 /// stay set, which costs nothing: there is nothing to flush into.
-/// The one writer for state under the state dir: write-then-rename at
-/// 0600, the accounts heal's shape. The pairing list and the activity
-/// log are who-signed-what history — metadata rather than keys, but
-/// they are one account's private record, and a bare `std::fs::write`
-/// lands at whatever the umask leaves open: 0644, readable by every
-/// other account on the machine and by anything running as one. The
-/// tmp sibling means a crash mid-write leaves no half file behind, and
-/// the rename means a concurrent reader never sees one either.
-///
-/// The file is *created* at 0600 rather than written-then-chmodded:
-/// `std::fs::write` materializes at umask width and only narrows after,
-/// a window an inotify watcher can open through and hold past the
-/// chmod (an open fd keeps its read across the rename). create_new is
-/// also O_EXCL, which refuses to follow a link planted at the tmp
-/// name, and the sync makes the rename mean what it says across a
-/// power cut. The state dir is tightened as well as created — a dir
-/// made by the pre-0600 daemon is 0755, and 0600 files inside a
-/// world-traversable dir are enumerated, readably named, even when
-/// their bytes are closed.
-fn write_private(file: &Path, text: &str) -> std::io::Result<()> {
-    if let Some(parent) = file.parent() {
-        std::fs::create_dir_all(parent)?;
-        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
-    }
-    let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("state");
-    let tmp = file.with_file_name(format!(".{name}.kuma-tmp"));
-    // A tmp a kill left behind must not wedge every later flush, so it
-    // goes before the create_new — which would otherwise refuse it
-    // forever.
-    let _ = std::fs::remove_file(&tmp);
-    let result = (|| {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&tmp)?;
-        f.write_all(text.as_bytes())?;
-        f.sync_all()?;
-        drop(f);
-        std::fs::rename(&tmp, file)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
-}
+/// The one writer for state under the state dir: `crate::write_private`
+/// — created at 0600, tmp sibling, rename — because the pairing list
+/// and the activity log are who-signed-what history, one account's
+/// private record, and a bare `std::fs::write` lands at whatever the
+/// umask leaves open.
+use crate::write_private;
 
 fn persist_log_at(state_path: &Option<PathBuf>, inner: &mut Inner) {
     let Some(file) = state_path.as_ref().map(|dir| dir.join("log.json")) else { return };
@@ -371,6 +335,7 @@ impl Engine {
             inner: Arc::new(Mutex::new(Inner::default())),
             state_path: state_dir,
             prompt_ttl,
+            flush_wake: Arc::new(std::sync::Condvar::new()),
         };
         engine.load_apps();
         engine.load_log();
@@ -379,18 +344,35 @@ impl Engine {
         // dir to flush into, so the memory-only engines of the offline
         // tests spawn nothing. A kill can cost the last few seconds of
         // activity log; a pairing never waits — structural changes
-        // persist at once.
+        // persist at once. The loop is condvar-driven now: with
+        // nothing dirty it waits without a timeout (zero wakes while
+        // idle, where the old fixed 5s sleep woke 17,280 times a day
+        // to find nothing), and a mark wakes it into the period's
+        // wait — the batching is unchanged, at most one write per
+        // FLUSH_PERIOD.
         if engine.state_path.is_some() {
             let inner = Arc::clone(&engine.inner);
             let state_path = engine.state_path.clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(FLUSH_PERIOD);
+            let wake = Arc::clone(&engine.flush_wake);
+            std::thread::spawn(move || {
                 let mut guard = inner.lock().expect("the policy lock");
-                if guard.log_dirty {
-                    persist_log_at(&state_path, &mut guard);
-                }
-                if guard.apps_dirty {
-                    persist_apps_at(&state_path, &mut guard);
+                loop {
+                    if !guard.log_dirty && !guard.apps_dirty {
+                        guard = wake.wait(guard).expect("the policy condvar");
+                        continue;
+                    }
+                    // Something is dirty: hold the batch for the
+                    // period — a mark during the wait is more of the
+                    // same batch, never a reason to flush sooner.
+                    let (g, _) =
+                        wake.wait_timeout(guard, FLUSH_PERIOD).expect("the policy condvar");
+                    guard = g;
+                    if guard.log_dirty {
+                        persist_log_at(&state_path, &mut guard);
+                    }
+                    if guard.apps_dirty {
+                        persist_apps_at(&state_path, &mut guard);
+                    }
                 }
             });
         }
@@ -489,6 +471,10 @@ impl Engine {
             }
         }
         inner.log_dirty = true;
+        // The flusher sleeps through the quiet: a mark rings the bell
+        // so the batched write lands one period after the entry, not
+        // whenever the old fixed tick happened to fall.
+        self.flush_wake.notify_all();
     }
 
     /// The activity log, oldest first — what the `log` verb answers
@@ -528,19 +514,33 @@ impl Engine {
         let mut inner = self.inner.lock().expect("the policy lock");
         let hex = app.to_string();
         if let Some(paired) = inner.apps.iter_mut().find(|p| p.pubkey == hex) {
+            // A fill-in is a change to the persisted record: without
+            // the flag, a reconnect that taught the pairing its name
+            // wrote it to memory only and a restart forgot it. The
+            // unchanged path (every decide() pairs first) persists
+            // nothing — per-decision file rewrites are exactly what
+            // the flusher exists to avoid.
+            let mut filled = false;
             if paired.name.is_none() {
+                filled |= name.is_some();
                 paired.name = name;
             }
             if paired.image.is_none() {
+                filled |= image.is_some();
                 paired.image = image;
             }
             // A nostrconnect URI's perms fill in on pairing; they do
             // not overwrite a claim the app made later.
             if paired.perms.is_none() {
+                filled |= perms.is_some();
                 paired.perms = perms;
             }
             if paired.url.is_none() {
+                filled |= url.is_some();
                 paired.url = url;
+            }
+            if filled {
+                self.persist_apps(&mut inner);
             }
             return;
         }
@@ -800,13 +800,6 @@ impl Engine {
         } else {
             decision
         };
-        if matches!(decision, Decision::Allow) {
-            if let Some(duration) = remember {
-                if let Some(key) = remember_key(&prompt.app, &prompt.method, &prompt.params) {
-                    inner.remembered.insert(key, unix_now() + duration.as_secs());
-                }
-            }
-        }
         // The channel is the single arbiter of who decides: a send
         // that lands is the decision, and a send that fails means the
         // window closed first and the wait is gone. One answer goes to
@@ -821,6 +814,20 @@ impl Engine {
         for responder in prompt.responders {
             if responder.send(decision.clone()).is_ok() {
                 received = true;
+            }
+        }
+        // The remember grant rides the delivery. An approval nobody
+        // received answered an ask the app had already timed out of —
+        // minting its standing grant anyway would sign future asks on
+        // the strength of a click the app never benefited from; the
+        // person's yes is re-asked when the app asks again.
+        if received {
+            if let Decision::Allow = decision {
+                if let Some(duration) = remember {
+                    if let Some(key) = remember_key(&prompt.app, &prompt.method, &prompt.params) {
+                        inner.remembered.insert(key, unix_now() + duration.as_secs());
+                    }
+                }
             }
         }
         let verdict = if received {
@@ -925,6 +932,7 @@ impl super::bunker::Gate for Engine {
                 // verb contends on. The pairing's STRUCTURE changes
                 // persist at once; this is bookkeeping.
                 inner.apps_dirty = true;
+                self.flush_wake.notify_all();
                 return Decision::Allow;
             }
         }
@@ -1155,9 +1163,11 @@ fn summarize(method: &NostrConnectMethod, params: &[String]) -> String {
 
 /// Scope remembered standing grants so `SignEvent` remembers only the
 /// specific event kind (and for kind 24242 Blossom auth, the specific
-/// `t` verb). Without this scoping, remembering a harmless kind-1 note
-/// would silently approve sensitive kinds (profile, contacts, deletes,
-/// relay lists, Blossom delete) for the full remember window.
+/// `t` verb), and the crypto methods remember only the specific peer:
+/// params[0] of encrypt/decrypt is the counterparty pubkey, and a
+/// remember that ignored it would let "always decrypt for peer A"
+/// silently approve "decrypt for peer B" — the same shape the
+/// SignEvent scoping closes (#114's lesson applied one door over).
 fn remember_key(app: &PublicKey, method: &NostrConnectMethod, params: &[String]) -> Option<String> {
     match method {
         NostrConnectMethod::SignEvent => {
@@ -1169,6 +1179,16 @@ fn remember_key(app: &PublicKey, method: &NostrConnectMethod, params: &[String])
             } else {
                 Some(format!("{app}:{method:?}:{kind}"))
             }
+        }
+        // The crypto methods' first param is the peer the payload is
+        // for (encrypt) or from (decrypt). A grant scoped without it
+        // is a grant to every peer.
+        NostrConnectMethod::Nip04Encrypt
+        | NostrConnectMethod::Nip04Decrypt
+        | NostrConnectMethod::Nip44Encrypt
+        | NostrConnectMethod::Nip44Decrypt => {
+            let peer = params.first()?;
+            Some(format!("{app}:{method:?}:{peer}"))
         }
         _ => Some(format!("{app}:{method:?}")),
     }
@@ -1381,14 +1401,22 @@ mod tests {
                 engine_for_ask.decide(&app, &NostrConnectMethod::GetPublicKey, &params).await
             }));
         }
-        // The spawned asks queue at the scheduler's pace; the length
-        // stabilizes at the cap and stays there.
+        // The spawned asks queue at the scheduler's pace, and the
+        // queue's LENGTH can sit at the cap while later asks are still
+        // registering — approving on the length alone can pick a card
+        // the flood was about to shed. The sheds are the observable:
+        // a shed ask's senders drop and its task completes at once,
+        // so ten finished tasks is the flood settled, not the queue
+        // momentarily full.
+        let mut settled = false;
         for _ in 0..1000 {
-            if engine.prompts().len() == PROMPTS_MAX {
+            if asks.iter().filter(|ask| ask.is_finished()).count() == 10 {
+                settled = true;
                 break;
             }
             tokio::task::yield_now().await;
         }
+        assert!(settled, "the flood never shed its ten: the queue never reached the cap");
         assert_eq!(engine.prompts().len(), PROMPTS_MAX, "the queue holds the cap, not the flood");
         while let Some(prompt) = engine.prompts().into_iter().next() {
             engine.approve(&prompt.id, None).unwrap();
