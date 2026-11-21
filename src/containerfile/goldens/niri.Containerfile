@@ -59,6 +59,9 @@ COPY xsettingsd.conf /usr/lib/kuma/xsettingsd.conf
 COPY niri-binds.kdl /usr/lib/kuma/niri-binds.kdl
 COPY --chmod=755 kuma-record /usr/libexec/kuma-record
 COPY kuma-shell.service /usr/lib/systemd/user/kuma-shell.service
+COPY kuma-keyring.service /usr/lib/systemd/user/kuma-keyring.service
+COPY 50-kuma-desktop.preset /usr/lib/systemd/user-preset/50-kuma-desktop.preset
+RUN systemctl --global preset kuma-keyring.service
 COPY kuma-sleep-guard.service /usr/lib/systemd/system/kuma-sleep-guard.service
 COPY --chmod=755 kuma-sleep-guard /usr/libexec/kuma-sleep-guard
 RUN systemctl --global enable kuma-shell.service \

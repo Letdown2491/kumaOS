@@ -26,6 +26,9 @@ RUN test -f /usr/lib64/security/pam_gnome_keyring.so \
     && grep -q pam_gnome_keyring /etc/pam.d/cosmic-greeter /usr/lib/pam.d/cosmic-greeter 2>/dev/null
 RUN rm -f /usr/share/dbus-1/services/org.freedesktop.secrets.service \
     && test ! -e /usr/share/dbus-1/services/org.freedesktop.secrets.service
+COPY kuma-keyring.service /usr/lib/systemd/user/kuma-keyring.service
+COPY 50-kuma-desktop.preset /usr/lib/systemd/user-preset/50-kuma-desktop.preset
+RUN systemctl --global preset kuma-keyring.service
 COPY kargs-desktop.toml /usr/lib/bootc/kargs.d/10-kuma-desktop.toml
 COPY fastfetch-config.jsonc /etc/xdg/fastfetch/config.jsonc
 COPY fastfetch-logo.txt /usr/lib/kuma/fastfetch-logo.txt
