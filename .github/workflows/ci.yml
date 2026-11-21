@@ -766,7 +766,7 @@ jobs:
   # shape a person can mute without going blind.
   ledger:
     runs-on: ubuntu-24.04
-    needs: [when, boot, boot-delta, upgrade-fallback, install, hibernate, dead-disk, iso]
+    needs: [when, boot, boot-delta, upgrade-fallback, install, hibernate, dead-disk, iso, doc-tests]
     if: >-
       always() &&
       needs.when.outputs.heavy == 'true' &&
