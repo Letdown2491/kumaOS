@@ -108,7 +108,7 @@ pub struct Stored {
 /// deliberately out of scope — the daemon's subscription is the shape
 /// this must serve, and a relay that implements everything is a relay
 /// with a filter bug nobody can find.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct RelayFilter {
     pub kinds: Vec<u16>,
     pub p: Vec<PublicKey>,
@@ -117,6 +117,11 @@ pub struct RelayFilter {
     pub since: Option<u64>,
     pub until: Option<u64>,
     pub limit: Option<usize>,
+    /// True when a present filter constraint (`kinds`, `#p`, `authors`,
+    /// or `ids`) parsed to zero valid entries — e.g. an explicit `[]` or
+    /// all out-of-range/malformed values. Without this flag, an empty
+    /// Vec collapses into "unconstrained wildcard" in `matches`.
+    pub unsatisfiable: bool,
 }
 
 impl RelayFilter {
@@ -124,12 +129,18 @@ impl RelayFilter {
     /// because a filter that rejects its own superset would make the
     /// bunker miss requests the day the daemon learns a new key.
     pub fn from_json(value: &serde_json::Value) -> Self {
-        let kinds = value
+        let kinds_present = value.get("kinds").is_some();
+        let kinds: Vec<u16> = value
             .get("kinds")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_u64().map(|k| k as u16)).collect())
+            // try_from, not `as`: `as` truncates, and 65536 + 24133
+            // would alias the bunker's own kind past the door.
+            .map(|a| {
+                a.iter().filter_map(|v| v.as_u64().and_then(|k| u16::try_from(k).ok())).collect()
+            })
             .unwrap_or_default();
-        let p = value
+        let p_present = value.get("#p").is_some();
+        let p: Vec<PublicKey> = value
             .get("#p")
             .and_then(|v| v.as_array())
             .map(|a| {
@@ -139,7 +150,8 @@ impl RelayFilter {
                     .collect()
             })
             .unwrap_or_default();
-        let authors = value
+        let authors_present = value.get("authors").is_some();
+        let authors: Vec<PublicKey> = value
             .get("authors")
             .and_then(|v| v.as_array())
             .map(|a| {
@@ -149,7 +161,8 @@ impl RelayFilter {
                     .collect()
             })
             .unwrap_or_default();
-        let ids = value
+        let ids_present = value.get("ids").is_some();
+        let ids: Vec<String> = value
             .get("ids")
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
@@ -157,7 +170,11 @@ impl RelayFilter {
         let since = value.get("since").and_then(|v| v.as_u64());
         let until = value.get("until").and_then(|v| v.as_u64());
         let limit = value.get("limit").and_then(|v| v.as_u64()).map(|l| l as usize);
-        Self { kinds, p, authors, ids, since, until, limit }
+        let unsatisfiable = (kinds_present && kinds.is_empty())
+            || (p_present && p.is_empty())
+            || (authors_present && authors.is_empty())
+            || (ids_present && ids.is_empty());
+        Self { kinds, p, authors, ids, since, until, limit, unsatisfiable }
     }
 
     /// The REQ-side door, and the Go original's `rejectFilter` spelled
@@ -179,7 +196,21 @@ impl RelayFilter {
 
     /// Whether an event answers this subscription.
     pub fn matches(&self, event: &Event) -> bool {
+        if self.unsatisfiable {
+            return false;
+        }
         if !self.kinds.is_empty() && !self.kinds.contains(&event.kind.as_u16()) {
+            return false;
+        }
+        // Every scoping field the door accepts, the match enforces —
+        // a field parsed and then ignored is a firehose ticket: a
+        // subscription naming one dead `id` (or one unrelated
+        // `author`) would pass the scoping door and match everything
+        // the relay holds, in replay and live alike.
+        if !self.authors.is_empty() && self.authors.iter().all(|a| *a != event.pubkey) {
+            return false;
+        }
+        if !self.ids.is_empty() && !self.ids.iter().any(|i| *i == event.id.to_string()) {
             return false;
         }
         if !self.p.is_empty()
@@ -382,6 +413,83 @@ mod tests {
         store.insert(event.clone(), now)
     }
 
+    /// The door accepts authors/ids scoping, so the match has to
+    /// enforce it: a filter scoped by a field that `matches` then
+    /// ignores is a firehose ticket — one dead `id` or one unrelated
+    /// `author` passes the scoping door and matches every held event,
+    /// in replay and live alike. Found by adversarial review of the
+    /// Batch A sources.
+    #[test]
+    fn a_scoped_filter_enforces_the_field_its_scoping_names() {
+        let now = Timestamp::now().as_secs();
+        let event = request_event(24133, 0);
+        let stranger = Keys::generate().public_key();
+
+        let authors =
+            RelayFilter { kinds: vec![24133], authors: vec![stranger], ..Default::default() };
+        assert!(!authors.matches(&event), "another author's event is not mine");
+        // The author's own filter still matches its own event.
+        let own =
+            RelayFilter { kinds: vec![24133], authors: vec![event.pubkey], ..Default::default() };
+        assert!(own.matches(&event));
+
+        let ids = RelayFilter {
+            kinds: vec![24133],
+            ids: vec!["deadbeef".to_string()],
+            ..Default::default()
+        };
+        assert!(!ids.matches(&event), "an id that names nothing matches nothing");
+        let _ = now;
+    }
+
+    /// `as u16` truncates, and 65536 + 24133 would alias the bunker's
+    /// own kind past the scoping door on the strength of a wrapped
+    /// integer. The parse drops what a u16 cannot hold, and a present
+    /// filter array that yields zero valid entries stays unsatisfiable
+    /// rather than collapsing into an unconstrained wildcard.
+    #[test]
+    fn an_out_of_range_kind_does_not_alias_the_bunker_s() {
+        let bunker = Keys::generate().public_key();
+        let event = EventBuilder::new(Kind::from_u16(24133), "payload")
+            .tag(Tag::public_key(bunker))
+            .finalize(&Keys::generate())
+            .unwrap();
+
+        let filter = RelayFilter::from_json(&serde_json::json!({ "kinds": [65536 + 24133] }));
+        assert!(filter.kinds.is_empty(), "the out-of-range kind is dropped, not aliased");
+        assert!(filter.unsatisfiable);
+        assert!(!filter.matches(&event), "out-of-range kind must not collapse to wildcard");
+
+        let scoped_bad_kind = RelayFilter::from_json(&serde_json::json!({
+            "kinds": [65536 + 24133],
+            "#p": [bunker.to_string()],
+        }));
+        assert!(
+            !scoped_bad_kind.matches(&event),
+            "scoped filter with only out-of-range kinds must match nothing"
+        );
+
+        let bad_author = RelayFilter::from_json(&serde_json::json!({
+            "kinds": [24133],
+            "#p": [bunker.to_string()],
+            "authors": ["not-a-pubkey"],
+        }));
+        assert!(
+            !bad_author.matches(&event),
+            "invalid author list must not widen to match all authors"
+        );
+
+        let empty_kinds = RelayFilter::from_json(&serde_json::json!({
+            "kinds": [],
+            "#p": [bunker.to_string()],
+        }));
+        assert!(!empty_kinds.matches(&event), "explicit empty kinds array matches nothing");
+
+        let filter = RelayFilter::from_json(&serde_json::json!({ "kinds": [24133] }));
+        assert_eq!(filter.kinds, vec![24133], "the ordinary kind parses");
+        assert!(!filter.unsatisfiable);
+    }
+
     #[test]
     fn the_door_carries_only_signing_traffic() {
         let now = Timestamp::now().as_secs();
@@ -490,15 +598,7 @@ mod tests {
 
         // The daemon's subscription: the bunker's requests, addressed
         // to it.
-        let filter = RelayFilter {
-            kinds: vec![24133],
-            p: vec![bunker],
-            authors: vec![],
-            ids: vec![],
-            since: None,
-            until: None,
-            limit: None,
-        };
+        let filter = RelayFilter { kinds: vec![24133], p: vec![bunker], ..Default::default() };
         let matched = store.query(&filter);
         assert_eq!(matched.len(), 1);
         assert_eq!(matched[0].id, addressed.id);

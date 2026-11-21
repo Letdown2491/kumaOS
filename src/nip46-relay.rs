@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -33,6 +33,28 @@ type Outbound = Arc<Mutex<HashMap<u64, (SyncSender<Message>, Arc<AtomicBool>)>>>
 /// this cadence. Long enough that an idle relay costs nothing; short
 /// enough that a queued answer goes out before its reader gives up.
 const BEAT: Duration = Duration::from_secs(1);
+
+/// How many TCP connections the relay serves at once. Each is an OS
+/// thread for as long as it lives; the cap is what keeps a dial loop
+/// from turning the relay into a thread farm. Generous against any
+/// real bunker-plus-apps population, tight against a dial loop.
+const MAX_CONNECTIONS: usize = 512;
+
+/// Subscriptions one connection may hold at a time. Each is a
+/// broadcast fan-out multiplier; a client registering thousands of
+/// distinct ids would turn every broadcast into thousands of queue
+/// writes.
+const MAX_SUBSCRIPTIONS: usize = 32;
+
+/// Bytes one wire frame may carry. A NIP-46 frame is a signed event —
+/// a few KiB at the edge — and the library's 64 MiB default is a
+/// memory-exhaustion invitation on a socket anyone can dial.
+const MAX_FRAME_BYTES: usize = 1_048_576;
+
+/// Seconds the TCP handshake (the HTTP upgrade read) may take before
+/// the connection is refused. One connection's beat replaces it once
+/// the upgrade is done.
+const HANDSHAKE_SECS: u64 = 10;
 
 /// How deep a connection's outbound queue may get before the relay
 /// decides the reader stopped reading. Real clients queue single
@@ -142,6 +164,12 @@ fn main() -> Result<()> {
         sweep_limiters(&mut evictor_limiters.lock().expect("the rate limiter map"), now_secs());
     });
 
+    // The doors are bounded: connections (each an OS thread), frame
+    // size (set inside one_connection), handshake time (set here), and
+    // subscriptions per connection (set in the REQ arm). None of it
+    // matters on the loopback default; all of it matters the day
+    // `--bind` or `serve` points the relay somewhere public.
+    let active = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         let stream = match stream {
             Ok(stream) => stream,
@@ -150,12 +178,31 @@ fn main() -> Result<()> {
                 continue;
             }
         };
+        if active.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
+            eprintln!("nip46-relay: connection cap {MAX_CONNECTIONS} reached; refusing");
+            continue;
+        }
+        active.fetch_add(1, Ordering::SeqCst);
+        struct ActiveGuard(Arc<AtomicUsize>);
+        impl Drop for ActiveGuard {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        let active_guard = ActiveGuard(active.clone());
+        // The handshake has ten seconds to land: a TCP client that
+        // opens and stalls parks its thread inside the upgrade read
+        // for no longer than this. one_connection replaces it with the
+        // beat once the upgrade is done.
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(HANDSHAKE_SECS)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(HANDSHAKE_SECS)));
         let id = next_id.fetch_add(1, Ordering::SeqCst);
         let store = store.clone();
         let outbound = outbound.clone();
         let subscriptions = subscriptions.clone();
         let limiters = limiters.clone();
         std::thread::spawn(move || {
+            let _active_guard = active_guard;
             if let Err(e) = one_connection(
                 id,
                 stream,
@@ -182,7 +229,12 @@ fn one_connection(
     limiters: Arc<Mutex<HashMap<nostr::key::PublicKey, RateLimiter>>>,
     rate_limit: usize,
 ) -> Result<()> {
-    let mut socket = tungstenite::accept(stream)?;
+    // tungstenite 0.26's config struct is non-exhaustive, so the one
+    // field this relay cares about is set on the default.
+    let mut config = tungstenite::protocol::WebSocketConfig::default();
+    config.max_message_size = Some(MAX_FRAME_BYTES);
+    config.max_frame_size = Some(MAX_FRAME_BYTES);
+    let mut socket = tungstenite::accept_with_config(stream, Some(config))?;
     socket.get_mut().set_read_timeout(Some(BEAT))?;
     // Bounded, with a kick switch: a reader that stops reading must
     // cost the relay a bounded queue, not an unbounded one. The flag
@@ -417,6 +469,30 @@ fn serve_connection(
                     ))?;
                     continue;
                 }
+                // Bounded before querying or replaying: each
+                // subscription is a broadcast fan-out multiplier, and
+                // an over-cap REQ must not force a store scan or emit a
+                // spurious EOSE before CLOSED. A re-REQ of an id the
+                // connection already holds is the replace rule, not
+                // growth, and stays allowed.
+                let over_limit = {
+                    let subs = subscriptions.lock().expect("the subscription map");
+                    subs.get(&id).is_some_and(|held| {
+                        held.len() >= MAX_SUBSCRIPTIONS
+                            && held.iter().all(|(held_id, _)| *held_id != subscription_id)
+                    })
+                };
+                if over_limit {
+                    socket.send(Message::text(
+                        serde_json::json!([
+                            "CLOSED",
+                            subscription_id,
+                            "blocked: too many subscriptions on this connection"
+                        ])
+                        .to_string(),
+                    ))?;
+                    continue;
+                }
                 // Replay what is held, then remember the subscription
                 // for what arrives later. The replay first sweeps the
                 // TTL: a query never meets an expired event, whatever
@@ -474,6 +550,28 @@ fn serve_connection(
 
 /// A held event goes to every connection whose subscriptions match —
 /// the sender's own included, because its subscription is its channel.
+/// The canonical acquisition order for the relay's two maps:
+/// subscriptions first, outbound second, everywhere, forever. This
+/// function is the entire lock-rank policy — broadcast's walk and its
+/// kick both acquire through it, so the order is structural rather
+/// than a convention two call sites have to remember. A future third
+/// lock site goes through here too, or the stress test
+/// (`broadcast_kick_stress_never_deadlocks`) hangs and names the
+/// regression.
+/// The two map guards in canonical rank order: subscriptions, then
+/// outbound. The type alias exists for the rank's sake — one name for
+/// the pair every lock site takes.
+type MapGuards<'a> = (
+    std::sync::MutexGuard<'a, HashMap<u64, Vec<(String, RelayFilter)>>>,
+    std::sync::MutexGuard<'a, HashMap<u64, (SyncSender<Message>, Arc<AtomicBool>)>>,
+);
+
+fn lock_maps<'a>(subscriptions: &'a Subscriptions, outbound: &'a Outbound) -> MapGuards<'a> {
+    let subs = subscriptions.lock().expect("the subscription map");
+    let queues = outbound.lock().expect("the outbound map");
+    (subs, queues)
+}
+
 /// A queue that will not take a frame means a reader that stopped
 /// reading: the frame is dropped, the connection is kicked (its flag
 /// set, its queue and subscriptions taken away) and it closes itself
@@ -483,8 +581,7 @@ fn serve_connection(
 fn broadcast(event: &Event, outbound: &Outbound, subscriptions: &Subscriptions) {
     let mut kicked: Vec<u64> = Vec::new();
     {
-        let subs = subscriptions.lock().expect("the subscription map");
-        let mut queues = outbound.lock().expect("the outbound map");
+        let (subs, mut queues) = lock_maps(subscriptions, outbound);
         for (conn_id, conn_subs) in subs.iter() {
             for (sub_id, filter) in conn_subs {
                 if filter.matches(event) {
@@ -502,8 +599,12 @@ fn broadcast(event: &Event, outbound: &Outbound, subscriptions: &Subscriptions) 
         }
     }
     if !kicked.is_empty() {
-        let mut queues = outbound.lock().expect("the outbound map");
-        let mut subs = subscriptions.lock().expect("the subscription map");
+        // Subs-then-outbound, through the same helper the walk uses:
+        // the lock rank lives in ONE function, so a kick and a
+        // broadcast running concurrently cannot AB-BA deadlock the
+        // relay (the inversion was found by adversarial review; the
+        // helper is what keeps the fix from drifting back).
+        let (mut subs, mut queues) = lock_maps(subscriptions, outbound);
         for conn_id in kicked {
             if let Some((_, kicked)) = queues.remove(&conn_id) {
                 kicked.store(true, Ordering::SeqCst);
@@ -555,13 +656,20 @@ mod tests {
         // stand-in and the app's. The listener is shared across the
         // handler threads, which is exactly what the main loop does.
         let listener = Arc::new(listener);
-        for _ in 0..2 {
+        // Distinct connection ids — the outbound map and the
+        // subscription map are both keyed by it, and a shared 0 would
+        // have the second registration overwrite the first, leaving
+        // one queue where the lane needs two. (The test used to pass
+        // with both at 0, because the app conn received its own
+        // broadcast and the assertion could not tell whose lane had
+        // actually carried the event.)
+        for id in 1..=2u64 {
             let maps = maps.clone();
             let listener = listener.clone();
             std::thread::spawn(move || {
                 let (stream, _) = listener.accept().unwrap();
                 let _ = one_connection(
-                    0,
+                    id,
                     stream,
                     maps.0,
                     maps.1,
@@ -602,13 +710,14 @@ mod tests {
         // subscriptions — the app's included, because its subscription
         // is its channel.
         let mut saw_ok = false;
-        let mut event_crossed = false;
+        let mut event_on_bunker = false;
+        let mut event_on_app = false;
         for _ in 0..20 {
             if let Ok(Message::Text(text)) = bunker_conn.read() {
                 let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
                 if frame[0] == "EVENT" && frame[1] == "bunker-sub" {
                     assert_eq!(frame[2]["id"], request.id.to_string());
-                    event_crossed = true;
+                    event_on_bunker = true;
                 }
             }
             if let Ok(Message::Text(text)) = app_conn.read() {
@@ -619,14 +728,211 @@ mod tests {
                     saw_ok = true;
                 }
                 if frame[0] == "EVENT" && frame[2]["id"] == request.id.to_string() {
-                    event_crossed = true;
+                    event_on_app = true;
                 }
             }
-            if saw_ok && event_crossed {
+            if saw_ok && event_on_bunker && event_on_app {
                 return;
             }
         }
-        panic!("the lane did not close the loop: ok={saw_ok} event={event_crossed}");
+        panic!(
+            "the lane did not close the loop: ok={saw_ok} bunker={event_on_bunker} app={event_on_app}"
+        );
+    }
+
+    /// The lock-rank contract, held under contention: broadcasters and
+    /// the kick path hammer the two maps concurrently through
+    /// lock_maps, a deliberately tiny queue forces kicks on nearly
+    /// every broadcast, and the loop COMPLETING is the assertion — an
+    /// AB-BA deadlock hangs this test, and the CI job's timeout names
+    /// it. Completion also implies the queue stayed bounded: the cap
+    /// turned overflow into kicks rather than growth.
+    #[test]
+    fn broadcast_kick_stress_never_deadlocks() {
+        let outbound: Outbound = Arc::new(Mutex::new(HashMap::new()));
+        let subscriptions: Subscriptions = Arc::new(Mutex::new(HashMap::new()));
+
+        // One subscriber whose queue is deliberately tiny: nearly
+        // every broadcast fills it, and every fill is a kick racing a
+        // broadcast for the two locks.
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        let kicked = Arc::new(AtomicBool::new(false));
+        outbound.lock().expect("outbound").insert(1, (tx, kicked.clone()));
+        let filter = RelayFilter::from_json(&serde_json::json!({ "kinds": [24133] }));
+        subscriptions
+            .lock()
+            .expect("subscriptions")
+            .insert(1, vec![("stress-sub".to_string(), filter)]);
+
+        // Time-boxed on purpose: a shared CI runner is a flake source,
+        // and a stress test that flaked would go red under the
+        // flaky-result policy. The wall-clock ceiling bounds the run
+        // to seconds on any machine; contention is asserted POSITIVELY
+        // below (broadcasts attempted beyond the eight-slot queue =
+        // overflow happened; the kick flag set = the kick path ran),
+        // so a fast machine cannot pass vacuously.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut handles = Vec::new();
+        for broadcaster in 0..4 {
+            let outbound = outbound.clone();
+            let subscriptions = subscriptions.clone();
+            let stop = stop.clone();
+            handles.push(std::thread::spawn(move || {
+                let mut i: u64 = 0;
+                while !stop.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+                    let event =
+                        EventBuilder::new(Kind::from_u16(24133), format!("{broadcaster}:{i}"))
+                            .tag(Tag::public_key(Keys::generate().public_key()))
+                            .finalize(&Keys::generate())
+                            .unwrap();
+                    broadcast(&event, &outbound, &subscriptions);
+                    i += 1;
+                }
+            }));
+        }
+        let mut attempted: u64 = 0;
+        while std::time::Instant::now() < deadline {
+            let event = EventBuilder::new(Kind::from_u16(24133), "stress")
+                .tag(Tag::public_key(Keys::generate().public_key()))
+                .finalize(&Keys::generate())
+                .unwrap();
+            broadcast(&event, &outbound, &subscriptions);
+            attempted += 1;
+        }
+        stop.store(true, Ordering::SeqCst);
+        for handle in handles {
+            handle.join().expect("a broadcaster panicked under contention");
+        }
+        // Contention, positively asserted: more events were attempted
+        // than the eight-slot queue could hold, and the kick flag set.
+        assert!(attempted > 8, "the stress never contended: {attempted} broadcasts");
+        assert!(kicked.load(Ordering::SeqCst), "the kick path ran under contention");
+        let _ = rx.try_recv();
+        // The end state is the kick's own: both maps dropped the
+        // kicked subscriber — and the maps agree with each other,
+        // which is what a deadlock between their locks would break.
+        assert_eq!(outbound.lock().expect("outbound").len(), 0, "the kicked queue is gone");
+        assert_eq!(subscriptions.lock().expect("subs").len(), 0, "the kicked subscription is gone");
+    }
+
+    /// A frame over the wire cap is refused: the library errors on the
+    /// read, the connection ends, and nothing oversized reaches the
+    /// store.
+    #[test]
+    fn an_oversized_frame_ends_the_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let maps = (
+            Arc::new(Mutex::new(EventStore::new(RelayConfig::default()))),
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(HashMap::<nostr::key::PublicKey, RateLimiter>::new())),
+        );
+        let listener = Arc::new(listener);
+        let maps = maps.clone();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let _ = one_connection(
+                1,
+                stream,
+                maps.0,
+                maps.1,
+                maps.2,
+                maps.3,
+                kuma::relay::RATE_LIMIT_PER_MINUTE,
+            );
+        });
+        let (mut conn, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}")).unwrap();
+        plain(&mut conn).set_read_timeout(Some(BEAT)).unwrap();
+
+        let oversized = "x".repeat(MAX_FRAME_BYTES + 1);
+        conn.send(Message::text(oversized)).unwrap();
+        // The server's read of the frame errors on the cap, and the
+        // connection ends: the next read on the client side sees the
+        // close rather than an answer.
+        let mut saw_close = false;
+        for _ in 0..10 {
+            match conn.read() {
+                Err(tungstenite::Error::ConnectionClosed)
+                | Err(tungstenite::Error::Protocol(_))
+                | Err(tungstenite::Error::Io(_)) => {
+                    saw_close = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    saw_close = true;
+                    break;
+                }
+            }
+        }
+        assert!(saw_close, "the oversized frame ends the connection");
+    }
+
+    /// Subscriptions on one connection are bounded: the 33rd distinct
+    /// id is CLOSED by name, and a re-REQ of an id the connection
+    /// already holds is the replace rule, not growth.
+    #[test]
+    fn subscriptions_on_one_connection_are_bounded() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let maps = (
+            Arc::new(Mutex::new(EventStore::new(RelayConfig::default()))),
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(HashMap::<nostr::key::PublicKey, RateLimiter>::new())),
+        );
+        let listener = Arc::new(listener);
+        let maps = maps.clone();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let _ = one_connection(
+                7,
+                stream,
+                maps.0,
+                maps.1,
+                maps.2,
+                maps.3,
+                kuma::relay::RATE_LIMIT_PER_MINUTE,
+            );
+        });
+        let (mut conn, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}")).unwrap();
+        plain(&mut conn).set_read_timeout(Some(BEAT)).unwrap();
+
+        for i in 0..(MAX_SUBSCRIPTIONS + 8) {
+            conn.send(Message::text(
+                serde_json::json!([
+                    "REQ",
+                    format!("sub-{i}"),
+                    { "kinds": [24133], "ids": [format!("{i:064x}")] }
+                ])
+                .to_string(),
+            ))
+            .unwrap();
+        }
+        let mut closed = 0;
+        let mut spurious_eose = false;
+        let over_cap_id = format!("sub-{MAX_SUBSCRIPTIONS}");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            match conn.read() {
+                Ok(Message::Text(text)) => {
+                    let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    if frame[0] == "EOSE" && frame[1] == over_cap_id {
+                        spurious_eose = true;
+                    }
+                    if frame[0] == "CLOSED" && text.contains("too many subscriptions") {
+                        closed += 1;
+                        break;
+                    }
+                }
+                Err(_) => break,
+                _ => {}
+            }
+        }
+        assert!(!spurious_eose, "an over-cap subscription must be CLOSED without EOSE");
+        assert!(closed >= 1, "the over-cap subscription is CLOSED by name");
     }
 
     /// The bunker pubkey the test's filter addresses — a fresh key per
