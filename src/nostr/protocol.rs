@@ -28,8 +28,8 @@ use serde::{Deserialize, Serialize};
 use super::bunker::Bunker;
 use super::keys;
 use super::policy::Level;
-use super::secrets;
 use super::pool::{RelayPool, RelayState, RelayStatus};
+use super::secrets;
 use super::vault::Vault;
 
 /// A request, one line of JSON. `confirm` is the socket spelling of the

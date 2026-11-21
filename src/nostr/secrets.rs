@@ -52,9 +52,10 @@ async fn service_proxy(conn: &Connection) -> Result<Proxy<'_>> {
 /// answers cleanly rather than an activation attempt.
 async fn service_name_owned() -> Result<bool> {
     let conn = connect().await?;
-    let dbus = Proxy::new(&conn, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus")
-        .await
-        .context("cannot address the bus")?;
+    let dbus =
+        Proxy::new(&conn, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus")
+            .await
+            .context("cannot address the bus")?;
     let owned: bool = dbus
         .call("NameHasOwner", &("org.freedesktop.secrets",))
         .await
