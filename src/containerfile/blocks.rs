@@ -507,9 +507,11 @@ pub(crate) fn keyring_pam(service: &str) -> String {
 /// daemon owns the name fails fast instead of arming a competitor, and
 /// the daemon's own startup retries already answer that window (its
 /// first ask rode a NoReply that day and was retried into the lock
-/// message). gnome-keyring's own autostart entries keep their
-/// exec-conditions and still adopt a PAM-spawned daemon; only the
-/// activation road is cut.
+/// message). The cut also removed this desktop's only ADOPT road —
+/// gnome-keyring's autostart `--start` entry is
+/// `OnlyShowIn=GNOME;Unity;MATE` and never runs here — so the adopt
+/// half ships as kuma-keyring.service beside this cut; neither half
+/// works without the other.
 ///
 /// The assert is the END state, not the input: the fallback's full
 /// compile (#65) FROMs the release's own image — the layered rebuild
@@ -522,6 +524,42 @@ pub(crate) fn keyring_no_activation() -> String {
     "RUN rm -f /usr/share/dbus-1/services/org.freedesktop.secrets.service \\\n    && test ! -e /usr/share/dbus-1/services/org.freedesktop.secrets.service\n"
         .to_string()
 }
+
+/// The session half of the keyring, shipped as a unit because this
+/// desktop has no other. PAM half-starts the keyring at login —
+/// `gnome-keyring-daemon --daemonize --login` unlocks the keyring in
+/// a daemon that owns no bus name — and the session half whose `--start`
+/// adopts it and registers the name is gnome-keyring's autostart
+/// entry, `OnlyShowIn=GNOME;Unity;MATE`, which niri (and COSMIC) never
+/// satisfy: the generated autostart units skip on their exec-condition
+/// on every boot. Dbus activation was this desktop's adopt road by
+/// accident — the first client ask spawned `--start --foreground`,
+/// which found the PAM daemon (`discover_other_daemon: 1`) and brought
+/// the UNLOCKED keyring to the bus — and 45.7.0 cut that road because
+/// its failure mode was the adoption losing a race and a locked daemon
+/// registering itself instead (#116). The cut left PAM's unlocked
+/// daemon half-started forever: an unlocked keyring no client could
+/// reach, and a bunker that cannot read it. This unit is the adopt
+/// road on purpose — deterministic, ordered ahead of the bunker, and
+/// the same argv activation ran.
+pub(crate) const KEYRING_SERVICE: &str = r#"[Unit]
+Description=Bring the PAM-unlocked keyring to the session bus
+# Half of one daemon: the login half (PAM's --daemonize --login) holds
+# the unlocked keyring, this half adopts it and owns the bus name.
+PartOf=graphical-session.target
+After=graphical-session-pre.target
+
+[Service]
+ExecStart=/usr/bin/gnome-keyring-daemon --start --foreground --components=secrets
+Restart=on-failure
+RestartSec=2s
+"#;
+
+/// The preset that turns the keyring adopt on for every account: the
+/// preset file is the converged-enable shape (#54) — the converger
+/// re-applies it on every boot, so the enablement is a converged fact
+/// rather than a skel link nobody revisits.
+pub(crate) const KEYRING_PRESET: &str = "enable kuma-keyring.service\n";
 
 /// Two lint warnings' worth of build litter, swept before the verdict.
 ///
@@ -3718,6 +3756,8 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     let mimeapps = e.stage("mimeapps.list", mimeapps_text);
     let record = e.stage("kuma-record", RECORD_SCRIPT);
     let shell = e.stage("kuma-shell.service", SHELL_SERVICE);
+    let keyring = e.stage("kuma-keyring.service", KEYRING_SERVICE);
+    let keyring_preset = e.stage("50-kuma-desktop.preset", KEYRING_PRESET);
     let pam_lock = e.stage("kuma-lock", KUMA_LOCK_PAM);
     let guard_service = e.stage("kuma-sleep-guard.service", SLEEP_GUARD_SERVICE);
     let guard = e.stage("kuma-sleep-guard", SLEEP_GUARD);
@@ -3864,6 +3904,9 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     // and every account on this image should get it; the sleep guard
     // is system-wide because sleep is.
     e.copy(&shell, "/usr/lib/systemd/user/kuma-shell.service");
+    e.copy(&keyring, "/usr/lib/systemd/user/kuma-keyring.service");
+    e.copy(&keyring_preset, "/usr/lib/systemd/user-preset/50-kuma-desktop.preset");
+    e.preset_global(&["kuma-keyring.service"]);
     e.copy(&guard_service, "/usr/lib/systemd/system/kuma-sleep-guard.service");
     e.copy_exec(&guard, "/usr/libexec/kuma-sleep-guard");
     e.enable_global_then_system(&["kuma-shell.service"], &["kuma-sleep-guard.service"]);
@@ -3873,7 +3916,10 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     e.copy(&dconf_profile, "/etc/dconf/profile/user");
     e.raw(&keyring_pam("greetd"));
     // And the activation road cut, so the PAM spawn is the only thing
-    // that can create the daemon this layer's unlock depends on.
+    // that can create the daemon this layer's unlock depends on — with
+    // the adopt half shipped as kuma-keyring.service, because the cut
+    // also removed the only road that connected the half-started PAM
+    // daemon to the bus on this desktop.
     e.raw(&keyring_no_activation());
     // The lock screen's own service, beside the other PAM stack this
     // layer touches. Inert until kuma-shell is what kuma-shell.service
@@ -4050,8 +4096,15 @@ fn desktop_cosmic(e: &mut Emitter<'_>) {
     e.raw(&keyring_pam("cosmic-greeter"));
     // Same cut as the niri face: the activation road carries no
     // password, and COSMIC's session asks the Secret Service as early
-    // as niri's does.
+    // as niri's does. The adopt half rides for the same reason —
+    // COSMIC satisfies gnome-keyring's OnlyShowIn no better than
+    // niri does.
     e.raw(&keyring_no_activation());
+    let keyring = e.stage("kuma-keyring.service", KEYRING_SERVICE);
+    let keyring_preset = e.stage("50-kuma-desktop.preset", KEYRING_PRESET);
+    e.copy(&keyring, "/usr/lib/systemd/user/kuma-keyring.service");
+    e.copy(&keyring_preset, "/usr/lib/systemd/user-preset/50-kuma-desktop.preset");
+    e.preset_global(&["kuma-keyring.service"]);
     e.copy(&kargs, "/usr/lib/bootc/kargs.d/10-kuma-desktop.toml");
     e.copy(&fastfetch, "/etc/xdg/fastfetch/config.jsonc");
     e.copy(&fastfetch_logo, "/usr/lib/kuma/fastfetch-logo.txt");
@@ -5253,6 +5306,10 @@ Description=kumaOS nostr bunker
 # directory.
 PartOf=graphical-session.target
 After=graphical-session.target
+# The keyring adopt owns the bus name the vault reads through; the
+# bunker's startup asks should never race it (three retries cover a
+# slow adopt, but the order makes the race not exist).
+After=kuma-keyring.service
 
 [Service]
 ExecStart={exec_line}
@@ -5706,9 +5763,19 @@ pub(super) static BLOCKS: &[Block] = &[
             // can be exactly as much as an installed one; the hibernate
             // half is inert with no swapfile to write.
             ("kuma-sleep-guard.service", Live::Runs("it guards an unlocked live session at suspend the same way; its hibernate half is inert with no swapfile")),
+            // The keyring adopt: a live session converges nothing, and
+            // a live boot's autologin has no PAM unlock for it to adopt
+            // anyway — the activation road it replaced gave a locked
+            // daemon there too.
+            ("kuma-keyring.service", Live::Masked("a live session converges nothing, and a live boot's autologin never PAM-unlocks a keyring for it to adopt")),
         ],
     },
-    Block { name: "desktop-cosmic", emit: desktop_cosmic, units: &[] },
+    Block { name: "desktop-cosmic", emit: desktop_cosmic, units: &[
+        // Same adopt, same reason: COSMIC's face has no gnome-keyring
+        // autostart either (OnlyShowIn), so the adopt rides both faces
+        // and is masked on live media for the same convergence rule.
+        ("kuma-keyring.service", Live::Masked("a live session converges nothing, and a live boot's autologin never PAM-unlocks a keyring for it to adopt")),
+    ] },
     Block { name: "flatpak-remote", emit: flatpak_remote, units: &[] },
     Block {
         name: "flatpak-sync",
