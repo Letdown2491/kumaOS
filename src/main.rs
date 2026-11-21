@@ -5556,8 +5556,8 @@ mod tests {
     #[test]
     fn a_getent_line_yields_home_and_uid() {
         let (home, uid) =
-            passwd_home_uid("martin:x:1000:1000:Martin:/var/home/martin:/bin/bash\n").unwrap();
-        assert_eq!(home, "/var/home/martin");
+            passwd_home_uid("testuser:x:1000:1000:Test User:/home/testuser:/bin/bash\n").unwrap();
+        assert_eq!(home, "/home/testuser");
         assert_eq!(uid, "1000");
     }
 
