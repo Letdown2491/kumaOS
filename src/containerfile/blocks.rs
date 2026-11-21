@@ -510,8 +510,16 @@ pub(crate) fn keyring_pam(service: &str) -> String {
 /// message). gnome-keyring's own autostart entries keep their
 /// exec-conditions and still adopt a PAM-spawned daemon; only the
 /// activation road is cut.
+///
+/// The assert is the END state, not the input: the fallback's full
+/// compile (#65) FROMs the release's own image — the layered rebuild
+/// — where this block has already run and the file is already gone. A
+/// `test -f` on the input side fails that rebuild at this step
+/// (measured: the v45.7.0 publish road's delta lap died here), so the
+/// removal is `rm -f` and the loud check is that nothing can put the
+/// file back.
 pub(crate) fn keyring_no_activation() -> String {
-    "RUN test -f /usr/share/dbus-1/services/org.freedesktop.secrets.service \\\n    && rm /usr/share/dbus-1/services/org.freedesktop.secrets.service \\\n    && test ! -e /usr/share/dbus-1/services/org.freedesktop.secrets.service\n"
+    "RUN rm -f /usr/share/dbus-1/services/org.freedesktop.secrets.service \\\n    && test ! -e /usr/share/dbus-1/services/org.freedesktop.secrets.service\n"
         .to_string()
 }
 

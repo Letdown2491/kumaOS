@@ -24,8 +24,7 @@ RUN rm /etc/xdg/autostart/com.system76.CosmicInitialSetup.desktop
 RUN printf 'COSMIC_DISABLE_OVERLAY_SCANOUT=1\nCOSMIC_DISABLE_DIRECT_SCANOUT=1\n' >> /etc/environment
 RUN test -f /usr/lib64/security/pam_gnome_keyring.so \
     && grep -q pam_gnome_keyring /etc/pam.d/cosmic-greeter /usr/lib/pam.d/cosmic-greeter 2>/dev/null
-RUN test -f /usr/share/dbus-1/services/org.freedesktop.secrets.service \
-    && rm /usr/share/dbus-1/services/org.freedesktop.secrets.service \
+RUN rm -f /usr/share/dbus-1/services/org.freedesktop.secrets.service \
     && test ! -e /usr/share/dbus-1/services/org.freedesktop.secrets.service
 COPY kargs-desktop.toml /usr/lib/bootc/kargs.d/10-kuma-desktop.toml
 COPY fastfetch-config.jsonc /etc/xdg/fastfetch/config.jsonc
