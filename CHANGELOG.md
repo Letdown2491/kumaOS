@@ -4,6 +4,29 @@
 
 ## v45.7.1 (2026-11-21)
 
+- **A compose on a stale base refuses instead of shipping.** The
+  `(Pin::Follow, Some(_), true)` arm — the composed base's tag present
+  in storage but matching no digest the lock produced — used to note
+  "building from what's there" and proceed. On this machine's
+  45.7.1 road that composed the release on a month-old F44-era base:
+  the boot came up on kernel `7.2.11-200.fc44`, the baked kumaui
+  binaries needed a newer glibc than the base carried, and the
+  greeter died at its first line (`GLIBC_2.44 not found`) with every
+  gate green — the smoke lap had verified a different store's compose
+  (#121). A recompose this code makes updates the lock itself, so a
+  mismatching tag can only be something the lock does not speak for;
+  the build now names `kuma update` and stops.
+
+- **The user-store/root-store sync survives sudo.** `kuma switch`
+  syncs the built image into root's podman storage before staging,
+  but its "local" read ran podman as the current user — under sudo,
+  root, so the comparison was root's store against itself, the sync
+  never ran, and bootc staged root's stale copy while the answer was
+  "no changes" (#120). When `SUDO_USER` names an invoking user, the
+  sync reads that user's store by name (home and runtime dir from
+  the passwd entry), and after any sync it reads root's store back
+  and refuses to stage unless it now holds the built image.
+
 - **The keyring regression 45.7.0 shipped is fixed: the adopt half is
   back.** The dbus-activation cut (#116) removed niri's only road to
   adopt PAM's half-started keyring daemon — gnome-keyring's autostart

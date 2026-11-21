@@ -1422,10 +1422,18 @@ fn build_image_pinned(config_path: &Path, tag: &str, pin: Pin) -> Result<Option<
         // The composed base. The Containerfile always FROMs the content
         // tag (a `localhost/` tag never touches a registry — the trap a
         // pruned digest fell into during the spike); "honoring the pin"
-        // means making sure that tag still IS the locked image. When it
-        // can't be — recomposed tag, pruned storage, a brand-new machine
-        // — the honest move is to say so, compose fresh, and let the
-        // lock record the move, not to fail a build that can succeed.
+        // means making sure that tag still IS the locked image. When the
+        // tag is GONE — pruned storage, a brand-new machine — the honest
+        // move is to say so, compose fresh, and let the lock record the
+        // move, not to fail a build that can succeed. When the tag is
+        // THERE but matches no lock this build history produced, the
+        // other direction applies: a recompose this code made would have
+        // updated the lock itself, so a mismatching tag came from
+        // somewhere this lock does not speak for, and building on it
+        // ships whatever it happens to be. 45.7.1 composed on a
+        // month-old base that way and booted a greeter its glibc could
+        // not run (#121) — the old "building from what's there" note
+        // read as routine bookkeeping and the build shipped on it.
         let present = compose::image_exists(&declared_base);
         let matches_pin = |digest: &String| {
             lock::base_digest(&declared_base).is_ok_and(|current| current == *digest)
@@ -1439,11 +1447,14 @@ fn build_image_pinned(config_path: &Path, tag: &str, pin: Pin) -> Result<Option<
                 note(&format!("Building from the locked composed base ({declared_base})."));
             }
             (Pin::Follow, Some(_), true) => {
-                note(
-                    "The composed base in storage no longer matches the lock; \
-                     building from what's there (the lock will record the move).",
+                bail!(
+                    "The composed base in storage no longer matches the lock, and \
+                     this lock cannot vouch for a build on it — one composed on a \
+                     stale base this way booted a greeter its glibc could not run \
+                     (#121). Run `kuma update` to recompose the base and move the \
+                     pin; if you know what is in storage and want a fresh compose \
+                     of it instead, remove the tag first (`podman rmi {declared_base}`)."
                 );
-                pinned_digest = None;
             }
             (Pin::Follow, Some(_), false) => {
                 note(
@@ -4973,9 +4984,62 @@ fn live_iso(config_path: &Path, tag: &str, output: &Path) -> Result<()> {
 /// bootc-image-builder runs as root and reads root's containers-storage.
 /// Sync by image ID, not tag existence: the root-side copy goes stale
 /// every time the rootless image is rebuilt. Returns the image ID.
+/// The image ID in the store `kuma build` fills. The plain call runs
+/// podman as the current user, and under sudo that is root — whose store
+/// is the same one bootc reads, so a sync comparing it to itself always
+/// agreed and never ran. Measured 2026-11-21 (#120): `sudo kuma switch`
+/// staged root's stale copy of the tag and answered "no changes" while
+/// the user's fresh build sat un-synced in the store the build actually
+/// filled. When kuma runs under sudo, ask for the invoking user's store
+/// by name.
+fn builder_store_image_id(tag: &str) -> Result<String> {
+    let user = std::env::var("SUDO_USER").ok().filter(|name| name != "root" && !name.is_empty());
+    match user {
+        None => image_id(tag),
+        Some(user) => {
+            let (home, uid) = passwd_home_uid(
+                &host_output(&["getent", "passwd", &user])
+                    .with_context(|| format!("cannot resolve the invoking user {user}"))?,
+            )
+            .with_context(|| format!("cannot read the invoking user's {user} environment"))?;
+            // The store follows the account's home; a custom
+            // XDG_DATA_HOME in the user's own shell would move it, and
+            // this cannot see that — the passwd home is the honest
+            // default. The runtime dir matters to podman even for a
+            // read-only inspect.
+            host_output(&[
+                "sudo",
+                "-u",
+                &user,
+                "env",
+                &format!("HOME={home}"),
+                &format!("XDG_RUNTIME_DIR=/run/user/{uid}"),
+                "podman",
+                "image",
+                "inspect",
+                "--format",
+                "{{.Id}}",
+                tag,
+            ])
+        }
+    }
+}
+
+/// The home directory and uid out of a `getent passwd` line
+/// (`name:x:1000:1000:Gecos:/home/name:/bin/bash`).
+fn passwd_home_uid(line: &str) -> Result<(String, String)> {
+    let fields: Vec<&str> = line.trim().split(':').collect();
+    match (fields.get(5), fields.get(2)) {
+        (Some(home), Some(uid)) if !home.is_empty() => {
+            Ok(((*home).to_string(), (*uid).to_string()))
+        }
+        _ => bail!("unrecognized getent passwd line: {line}"),
+    }
+}
+
 fn sync_image_to_root(tag: &str) -> Result<String> {
-    let local_id =
-        image_id(tag).with_context(|| format!("{tag} not found; run `kuma build` first"))?;
+    let local_id = builder_store_image_id(tag)
+        .with_context(|| format!("{tag} not found; run `kuma build` first"))?;
     let root_id = host_output(&["sudo", "podman", "image", "inspect", "--format", "{{.Id}}", tag])
         .unwrap_or_default();
     if local_id != root_id {
@@ -5023,6 +5087,20 @@ fn sync_image_to_root(tag: &str) -> Result<String> {
                 shell_quote(tag)
             ),
         ])?;
+        // The sync's whole job is making root's store hold THIS image —
+        // the switch below stages whatever the tag resolves to there. A
+        // load that quietly failed partway would leave the old copy
+        // under the tag, and the stage would deploy it as if it were
+        // the build. Read back what is actually there (#120).
+        let synced =
+            host_output(&["sudo", "podman", "image", "inspect", "--format", "{{.Id}}", tag])
+                .unwrap_or_default();
+        if synced.trim() != local_id {
+            bail!(
+                "root storage still does not hold the built {tag} after the sync; \
+                 refusing to stage a different image"
+            );
+        }
         // The load re-tagged the NEW image, which strands the copy root
         // already had — one dangling image (~3 GB) per sync, in a store
         // `kuma clean` prunes only on a bootc machine (elsewhere root
@@ -5431,6 +5509,26 @@ fn path_str(path: &Path) -> Result<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The invoking-user read (#120) is only as good as its getent
+    /// parse: a wrong field would point the store probe at the wrong
+    /// home, and a vacuous sync is exactly the failure the helper
+    /// exists to prevent. The rows a live `getent` produces.
+    #[test]
+    fn a_getent_line_yields_home_and_uid() {
+        let (home, uid) =
+            passwd_home_uid("martin:x:1000:1000:Martin:/var/home/martin:/bin/bash\n").unwrap();
+        assert_eq!(home, "/var/home/martin");
+        assert_eq!(uid, "1000");
+    }
+
+    #[test]
+    fn a_service_account_without_a_home_is_named_not_silently_resolved() {
+        // `greetd:x:973:973:Greeter daemon:/varempty:/sbin/nologin`-shape:
+        // an empty home would have podman probe the caller's store and
+        // answer for the invoked user's.
+        assert!(passwd_home_uid("svc:x:973:973:::").is_err());
+    }
 
     /// The resolution is the one place an untrusted directory could
     /// volunteer a declaration, so its precedence table gets the same
