@@ -73,13 +73,17 @@ writes the override at the staged binary, and restarts the unit only if
 it was running; the lease's retirement removes the override, so
 `kuma upgrade` puts the daemon back on the image's binary. The manual
 road below still works and is the fallback. So the deploy is: commit,
-then
-`cargo build --release` + `cargo install --path .` in the container
-(the CLI comes from `~/.local/bin`, where the kumaui build script
-installs the five siblings too — the stamp gate resolves them beside
-the running kuma, so kuma and the kumaui pair must share one home;
-the daemon runs from
-`target/release`), then `systemctl --user restart kuma-nostrd`.
+then `cargo build --release` in the container, then
+`kuma dev install ~/Documents/kuma` — which stages the CLI and every
+sibling into `~/.local/bin` (the home the stamp gate resolves them
+beside the running kuma) with a receipt, and restarts the daemon only
+if it was running. Do NOT `cargo install --path .`: that deposits
+copies in `~/.cargo/bin`, which PATH resolves ahead of both the
+image's binary and `~/.local/bin`, and a 45.5.0 copy from the Nov 2026
+ritual impersonated the CLI across a whole 45.6.0 upgrade (the
+doctor's `cargo bin` check exists because of that class — found
+2026-11-10, hit again 2026-11-20; the road is retired, and its
+deposits are the one artifact no receipt or gate can see).
 
 ## The desktop shell's dev loop (44.4.0)
 
