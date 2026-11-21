@@ -240,7 +240,14 @@ pub fn compose(config: &Config, tag: &str) -> Result<()> {
     let knob = "kernel.apparmor_restrict_unprivileged_userns";
     let report = |msg: &str| eprintln!("kuma compose: {msg}");
     let read = || -> Option<String> {
-        std::fs::read_to_string(format!("/proc/sys/{knob}")).ok().map(|v| v.trim().to_string())
+        // /proc/sys spells the knob with slashes — the dotted form is for
+        // sysctl(1), and a dotted path under /proc/sys names a file that
+        // does not exist, which made this whole relaxation dead code
+        // (found by adversarial review: the read always returned None
+        // and the block never ran).
+        std::fs::read_to_string(format!("/proc/sys/{}", knob.replace('.', "/")))
+            .ok()
+            .map(|v| v.trim().to_string())
     };
     match read() {
         None => report("no userns knob on this kernel; nothing to relax"),
