@@ -23,15 +23,23 @@ use nostr::event::Event;
 use tungstenite::Message;
 
 use kuma::relay::{EventStore, RateLimiter, Rejected, RelayFilter};
+use kuma::wake::{poll_wait, send_paced, wakeup_pair, RawSocket, WakeSource};
 
 /// The shared server state: each connection's outbound queue and its
-/// subscriptions, found by connection id.
+/// subscriptions, found by connection id. The queue's tuple carries
+/// the wakeup sink — the producer's bell for a connection asleep in
+/// poll — beside the kick flag the broadcaster pulls.
 type Subscriptions = Arc<Mutex<HashMap<u64, Vec<(String, RelayFilter)>>>>;
-type Outbound = Arc<Mutex<HashMap<u64, (SyncSender<Message>, Arc<AtomicBool>)>>>;
+type Outbound =
+    Arc<Mutex<HashMap<u64, (SyncSender<Message>, Arc<AtomicBool>, kuma::wake::WakeSink)>>>;
 
-/// The heartbeat of every connection thread: outbound frames drain on
-/// this cadence. Long enough that an idle relay costs nothing; short
-/// enough that a queued answer goes out before its reader gives up.
+/// How often a connection's loop checked for work when it ran on a
+/// one-second read timeout. The loops sleep in `poll(2)` now — an
+/// enqueue rings the connection's wakeup pipe and the frame leaves
+/// instantly; idle costs no wake at all. The constant survives as the
+/// paced send's budget: the stalled-reader fuse the blocking write
+/// timeout used to arm, since a kicked-full queue and a dead reader
+/// are the same discovery either way.
 const BEAT: Duration = Duration::from_secs(1);
 
 /// How many TCP connections the relay serves at once. Each is an OS
@@ -235,14 +243,24 @@ fn one_connection(
     config.max_message_size = Some(MAX_FRAME_BYTES);
     config.max_frame_size = Some(MAX_FRAME_BYTES);
     let mut socket = tungstenite::accept_with_config(stream, Some(config))?;
-    socket.get_mut().set_read_timeout(Some(BEAT))?;
+    // The poll-based loop needs a nonblocking socket: the thread
+    // sleeps in poll(2) and reads only when the wire is readable, so
+    // an idle connection costs no wake at all — the one-second
+    // read-timeout heartbeat woke every connection every second of
+    // its life (the resource audit's HIGH: a quarter-million CPU
+    // wakes a day across the layer, mostly here). Sends pace through
+    // `say`, whose budget is the stalled-reader fuse.
+    socket.get_mut().set_nonblocking(true).context("setting the socket nonblocking")?;
+    let sock_fd = socket.get_ref().raw_fd().context("the connection's raw fd")?;
     // Bounded, with a kick switch: a reader that stops reading must
     // cost the relay a bounded queue, not an unbounded one. The flag
     // is what a broadcaster pulls when the queue will not take a
-    // frame; the connection closes itself on the next beat.
+    // frame; the connection closes itself the moment the kick's wake
+    // rings its pipe.
     let kicked = Arc::new(AtomicBool::new(false));
     let (tx, rx): (SyncSender<Message>, Receiver<Message>) = sync_channel(QUEUE_CAP);
-    outbound.lock().expect("the outbound map").insert(id, (tx.clone(), kicked.clone()));
+    let (wake, wake_write) = wakeup_pair().context("the connection's wakeup pipe")?;
+    outbound.lock().expect("the outbound map").insert(id, (tx.clone(), kicked.clone(), wake_write));
 
     // The leaving guard: the maps' entries die with this frame, on
     // every exit path. Cleanup after `serve_connection` returns is the
@@ -277,6 +295,7 @@ fn one_connection(
     serve_connection(
         id,
         &mut socket,
+        sock_fd,
         &store,
         &outbound,
         &subscriptions,
@@ -284,13 +303,27 @@ fn one_connection(
         rate_limit,
         &rx,
         &kicked,
+        &wake,
     )
+}
+
+/// One inline frame, at the blocking send's pace: the socket is
+/// nonblocking for the poll loop, so a full kernel send buffer waits
+/// for write-readiness up to BEAT instead of either erroring a
+/// connection the old blocking write would have paced through or
+/// parking the loop on a stalled reader forever.
+fn say(
+    socket: &mut tungstenite::WebSocket<std::net::TcpStream>,
+    message: Message,
+) -> tungstenite::Result<()> {
+    send_paced(socket, message, BEAT)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn serve_connection(
     id: u64,
     socket: &mut tungstenite::WebSocket<std::net::TcpStream>,
+    sock_fd: i32,
     store: &Arc<Mutex<EventStore>>,
     outbound: &Outbound,
     subscriptions: &Subscriptions,
@@ -298,51 +331,82 @@ fn serve_connection(
     rate_limit: usize,
     rx: &Receiver<Message>,
     kicked: &Arc<AtomicBool>,
+    wake: &WakeSource,
 ) -> Result<()> {
+    // The poll set: the wire and this connection's wakeup pipe. An
+    // enqueue rings the pipe and the frame leaves instantly; a frame
+    // on the wire wakes the read. No ping fuse here — the queue and
+    // the kick bound a connection already, and a silent client costs
+    // a parked thread, which is what it cost the spin too, minus the
+    // wakeups.
+    let mut fds = [
+        libc::pollfd { fd: sock_fd, events: libc::POLLIN, revents: 0 },
+        libc::pollfd { fd: wake.fd(), events: libc::POLLIN, revents: 0 },
+    ];
     loop {
-        // Outbound first, on every beat: answers queued by other
-        // connections' events go out before this thread blocks again.
+        // Queue, then pipe, then queue once more: every queued frame
+        // precedes its byte, so this order strands neither — a byte
+        // in the pipe always names a frame the second drain takes.
         for message in rx.try_iter() {
-            socket.send(message)?;
+            say(socket, message)?;
+        }
+        wake.drain();
+        for message in rx.try_iter() {
+            say(socket, message)?;
         }
         // A broadcaster whose queue would not take a frame pulled this:
         // the peer held the socket open and read nothing, and the queue
         // cap decided it had stopped being a subscriber. Gone politely.
         if kicked.load(Ordering::SeqCst) {
-            socket.close(None)?;
+            let _ = socket.close(None);
             return Ok(());
         }
-
+        // Read before parking. The naive shape — poll the fd, then
+        // read one message — stalls: tungstenite's read pulls a whole
+        // TCP segment and keeps the complete frames it did not return
+        // in an internal buffer, so after one big read the raw fd goes
+        // quiet while read() still has answers (measured: the bounded
+        // subscriptions test parked mid-EOSE with eight REQs stranded
+        // in that buffer). A WouldBlock is the only "nothing left"
+        // verdict tungstenite gives — it empties its own buffer before
+        // touching the stream — and it is the poll's trigger.
         let message = match socket.read() {
             Ok(Message::Text(text)) => text.to_string(),
             Ok(Message::Ping(payload)) => {
-                socket.send(Message::Pong(payload))?;
+                say(socket, Message::Pong(payload))?;
                 continue;
             }
             Ok(Message::Pong(_)) | Ok(Message::Binary(_)) => continue,
             Ok(Message::Close(_)) => {
-                socket.close(None)?;
+                // Best effort: the socket is nonblocking and the close
+                // frame's flush may not fit the send buffer — the FIN
+                // on drop carries the same verdict.
+                let _ = socket.close(None);
                 return Ok(());
             }
             Ok(_) => continue,
             Err(tungstenite::Error::Io(e))
                 if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut =>
             {
-                continue
+                // Asleep until the bell or the wire — no beat, no spin.
+                poll_wait(&mut fds, -1).context("polling the connection")?;
+                continue;
             }
             Err(e) => return Err(anyhow::anyhow!(e).context("reading")),
         };
 
         let Ok(frame) = serde_json::from_str::<serde_json::Value>(&message) else {
-            socket.send(Message::text(
-                serde_json::json!(["NOTICE", "frames are JSON arrays"]).to_string(),
-            ))?;
+            say(
+                socket,
+                Message::text(serde_json::json!(["NOTICE", "frames are JSON arrays"]).to_string()),
+            )?;
             continue;
         };
         let Some(word) = frame.as_array().and_then(|a| a.first().and_then(|v| v.as_str())) else {
-            socket.send(Message::text(
-                serde_json::json!(["NOTICE", "unparsable frame"]).to_string(),
-            ))?;
+            say(
+                socket,
+                Message::text(serde_json::json!(["NOTICE", "unparsable frame"]).to_string()),
+            )?;
             continue;
         };
         match word {
@@ -351,10 +415,13 @@ fn serve_connection(
                     match serde_json::from_value(frame.get(1).cloned().unwrap_or_default()) {
                         Ok(event) => event,
                         Err(e) => {
-                            socket.send(Message::text(
-                                serde_json::json!(["NOTICE", format!("unreadable event: {e}")])
-                                    .to_string(),
-                            ))?;
+                            say(
+                                socket,
+                                Message::text(
+                                    serde_json::json!(["NOTICE", format!("unreadable event: {e}")])
+                                        .to_string(),
+                                ),
+                            )?;
                             continue;
                         }
                     };
@@ -428,22 +495,31 @@ fn serve_connection(
                 };
                 match verdict {
                     Ok(()) => {
-                        socket.send(Message::text(
-                            serde_json::json!(["OK", event_id, true, ""]).to_string(),
-                        ))?;
+                        say(
+                            socket,
+                            Message::text(
+                                serde_json::json!(["OK", event_id, true, ""]).to_string(),
+                            ),
+                        )?;
                         broadcast(&event, outbound, subscriptions);
                     }
                     Err(reason) if reason.is_empty() => {
                         // A duplicate answers true: the event IS held,
                         // and the sender is not wrong for sending twice.
-                        socket.send(Message::text(
-                            serde_json::json!(["OK", event_id, true, "duplicate"]).to_string(),
-                        ))?;
+                        say(
+                            socket,
+                            Message::text(
+                                serde_json::json!(["OK", event_id, true, "duplicate"]).to_string(),
+                            ),
+                        )?;
                     }
                     Err(reason) => {
-                        socket.send(Message::text(
-                            serde_json::json!(["OK", event_id, false, reason]).to_string(),
-                        ))?;
+                        say(
+                            socket,
+                            Message::text(
+                                serde_json::json!(["OK", event_id, false, reason]).to_string(),
+                            ),
+                        )?;
                     }
                 }
             }
@@ -451,9 +527,10 @@ fn serve_connection(
                 let Some(subscription_id) =
                     frame.get(1).and_then(|v| v.as_str()).map(str::to_string)
                 else {
-                    socket.send(Message::text(
-                        serde_json::json!(["NOTICE", "REQ wants an id"]).to_string(),
-                    ))?;
+                    say(
+                        socket,
+                        Message::text(serde_json::json!(["NOTICE", "REQ wants an id"]).to_string()),
+                    )?;
                     continue;
                 };
                 let filter = frame.get(2).cloned().unwrap_or_default();
@@ -464,9 +541,12 @@ fn serve_connection(
                 // no subscription behind. The Go original's
                 // rejectFilter; the lane probes it with a firehose.
                 if let Some(reason) = filter.reject_reason() {
-                    socket.send(Message::text(
-                        serde_json::json!(["CLOSED", subscription_id, reason]).to_string(),
-                    ))?;
+                    say(
+                        socket,
+                        Message::text(
+                            serde_json::json!(["CLOSED", subscription_id, reason]).to_string(),
+                        ),
+                    )?;
                     continue;
                 }
                 // Bounded before querying or replaying: each
@@ -483,14 +563,17 @@ fn serve_connection(
                     })
                 };
                 if over_limit {
-                    socket.send(Message::text(
-                        serde_json::json!([
-                            "CLOSED",
-                            subscription_id,
-                            "blocked: too many subscriptions on this connection"
-                        ])
-                        .to_string(),
-                    ))?;
+                    say(
+                        socket,
+                        Message::text(
+                            serde_json::json!([
+                                "CLOSED",
+                                subscription_id,
+                                "blocked: too many subscriptions on this connection"
+                            ])
+                            .to_string(),
+                        ),
+                    )?;
                     continue;
                 }
                 // Replay what is held, then remember the subscription
@@ -505,15 +588,19 @@ fn serve_connection(
                     store.query(&filter)
                 };
                 for event in replay {
-                    socket.send(Message::text(
-                        serde_json::json!(["EVENT", subscription_id, event]).to_string(),
-                    ))?;
+                    say(
+                        socket,
+                        Message::text(
+                            serde_json::json!(["EVENT", subscription_id, event]).to_string(),
+                        ),
+                    )?;
                 }
                 // The frame that ends the catch-up: a client waits on
                 // it to know the replay is over and live frames begin.
-                socket.send(Message::text(
-                    serde_json::json!(["EOSE", subscription_id]).to_string(),
-                ))?;
+                say(
+                    socket,
+                    Message::text(serde_json::json!(["EOSE", subscription_id]).to_string()),
+                )?;
                 let mut subs = subscriptions.lock().expect("the subscription map");
                 let entry = subs.entry(id).or_default();
                 // NIP-01's replace rule: a new REQ with a subscription
@@ -536,13 +623,16 @@ fn serve_connection(
                     .retain(|(sub_id, _)| sub_id != subscription_id);
             }
             other => {
-                socket.send(Message::text(
-                    serde_json::json!([
-                        "NOTICE",
-                        format!("this relay answers EVENT, REQ and CLOSE, not {other}")
-                    ])
-                    .to_string(),
-                ))?;
+                say(
+                    socket,
+                    Message::text(
+                        serde_json::json!([
+                            "NOTICE",
+                            format!("this relay answers EVENT, REQ and CLOSE, not {other}")
+                        ])
+                        .to_string(),
+                    ),
+                )?;
             }
         }
     }
@@ -563,7 +653,10 @@ fn serve_connection(
 /// the pair every lock site takes.
 type MapGuards<'a> = (
     std::sync::MutexGuard<'a, HashMap<u64, Vec<(String, RelayFilter)>>>,
-    std::sync::MutexGuard<'a, HashMap<u64, (SyncSender<Message>, Arc<AtomicBool>)>>,
+    std::sync::MutexGuard<
+        'a,
+        HashMap<u64, (SyncSender<Message>, Arc<AtomicBool>, kuma::wake::WakeSink)>,
+    >,
 );
 
 fn lock_maps<'a>(subscriptions: &'a Subscriptions, outbound: &'a Outbound) -> MapGuards<'a> {
@@ -582,13 +675,29 @@ fn broadcast(event: &Event, outbound: &Outbound, subscriptions: &Subscriptions) 
     let mut kicked: Vec<u64> = Vec::new();
     {
         let (subs, mut queues) = lock_maps(subscriptions, outbound);
+        // The event's serialized form is built ONCE per broadcast, not
+        // once per matched subscription: the json! macro round-trips
+        // the event through a Value tree and back to a string, and
+        // doing that per match under both maps' locks was the
+        // performance audit's lock-hold multiplier. The frame differs
+        // only in sub_id, which splices in as text.
+        let event_json = serde_json::to_string(event).unwrap_or_default();
+        let event_p: Vec<nostr::key::PublicKey> = event.tags.public_keys().collect();
         for (conn_id, conn_subs) in subs.iter() {
             for (sub_id, filter) in conn_subs {
-                if filter.matches(event) {
-                    let frame = serde_json::json!(["EVENT", sub_id, event]).to_string();
-                    if let Some((queue, _)) = queues.get_mut(conn_id) {
+                if filter.matches_with(event, &event_p) {
+                    // The sub_id is client-controlled text: serialize
+                    // it, don't splice it raw — the json! path escaped
+                    // it, and a format! splice would not.
+                    let sub_json = serde_json::to_string(sub_id).unwrap_or_default();
+                    let frame = format!("[\"EVENT\",{sub_json},{event_json}]");
+                    if let Some((queue, _, wake)) = queues.get_mut(conn_id) {
                         match queue.try_send(Message::text(frame)) {
-                            Ok(()) => {}
+                            // Ring the pipe: the connection sleeps in
+                            // poll, and the frame leaves when the bell
+                            // rings, not on the next beat of a spin
+                            // there is no longer a spin to have.
+                            Ok(()) => wake.wake(),
                             Err(TrySendError::Full(_)) => kicked.push(*conn_id),
                             // Already gone; its own teardown holds the map.
                             Err(TrySendError::Disconnected(_)) => {}
@@ -606,8 +715,12 @@ fn broadcast(event: &Event, outbound: &Outbound, subscriptions: &Subscriptions) 
         // helper is what keeps the fix from drifting back).
         let (mut subs, mut queues) = lock_maps(subscriptions, outbound);
         for conn_id in kicked {
-            if let Some((_, kicked)) = queues.remove(&conn_id) {
+            if let Some((_, kicked, wake)) = queues.remove(&conn_id) {
                 kicked.store(true, Ordering::SeqCst);
+                // The kicked connection is asleep in poll like every
+                // other: the flag alone would wait for a frame that
+                // is never coming. Ring its pipe on the way out.
+                wake.wake();
             }
             subs.remove(&conn_id);
         }
@@ -757,7 +870,8 @@ mod tests {
         // broadcast for the two locks.
         let (tx, rx) = std::sync::mpsc::sync_channel(8);
         let kicked = Arc::new(AtomicBool::new(false));
-        outbound.lock().expect("outbound").insert(1, (tx, kicked.clone()));
+        let (_, wake_write) = kuma::wake::wakeup_pair().expect("a wakeup pipe is two fds");
+        outbound.lock().expect("outbound").insert(1, (tx, kicked.clone(), wake_write));
         let filter = RelayFilter::from_json(&serde_json::json!({ "kinds": [24133] }));
         subscriptions
             .lock()
@@ -857,17 +971,29 @@ mod tests {
         let mut saw_close = false;
         for _ in 0..10 {
             match conn.read() {
+                // The relay's own rule, served back at the test: a
+                // read timeout is this loop's heartbeat, never a
+                // close. Counting it was the Nov 2026 test-honesty
+                // audit's HIGH — with the cap deleted, the server
+                // replies NOTICE and goes silent, the client's own
+                // 1-second timeout landed here, and the test passed
+                // with exactly the bug it exists to catch. Continue
+                // on the timeout; count only real ends.
+                Err(tungstenite::Error::Io(e))
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    continue;
+                }
                 Err(tungstenite::Error::ConnectionClosed)
                 | Err(tungstenite::Error::Protocol(_))
+                | Err(tungstenite::Error::Capacity(_))
                 | Err(tungstenite::Error::Io(_)) => {
                     saw_close = true;
                     break;
                 }
                 Ok(_) => {}
-                Err(_) => {
-                    saw_close = true;
-                    break;
-                }
+                Err(e) => panic!("unexpected websocket error: {e:?}"),
             }
         }
         assert!(saw_close, "the oversized frame ends the connection");

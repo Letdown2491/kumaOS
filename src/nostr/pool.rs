@@ -24,9 +24,13 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use nostr::prelude::*;
-use tungstenite::stream::MaybeTlsStream;
+use tungstenite::client::IntoClientRequest;
 use tungstenite::Bytes;
 use tungstenite::Message;
+
+use crate::wake::{
+    poll_readable, poll_wait, send_paced, wakeup_pair, RawSocket, WakeSink, WakeSource,
+};
 
 /// The subscription id every relay thread uses. One subscription per
 /// relay; the id is what the relay echoes back, so it only needs to be
@@ -39,26 +43,47 @@ pub(crate) const SUBSCRIPTION_ID: &str = "kuma-bunker";
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
 const BACKOFF_START: Duration = Duration::from_secs(1);
 
+/// The paced send's budget — the stalled-peer fuse the blocking write
+/// timeout used to arm: a peer that stops reading fills the kernel
+/// send buffer, send_paced waits for write-readiness up to this long,
+/// and then the road tears down into the same backoff a read death
+/// takes.
+const WRITE_PACE: Duration = Duration::from_secs(10);
+
+/// The inbound frame cap, matching the relay's own MAX_FRAME_BYTES: a
+/// bunker's honest traffic is kind-24133 wrappers, and tungstenite's
+/// default (64 MiB) is an invitation a hostile relay should not be
+/// handed.
+const MAX_INBOUND_BYTES: usize = 1_048_576;
+
 /// The frame log's sample period: one frame line per road per period,
 /// suppressed frames counted and named when the sample resumes. The
 /// wire's own rate, not this number, is what a flood's cost would
 /// otherwise be.
 const FRAME_SAMPLE: Duration = Duration::from_secs(10);
 
-/// How a road probes a quiet wire. The beat is one second (the read
-/// timeout); every so many beats the road sends a ping, and so many
-/// pings may go unanswered — no inbound frame of any kind between
-/// them — before the road calls the connection dead and walks off
-/// into the backoff that reconnects it.
+/// How a road probes a quiet wire. Every `ping_every`, the road sends
+/// a ping, and so many pings may go unanswered — no inbound frame of
+/// any kind between them — before the road calls the connection dead
+/// and walks off into the backoff that reconnects it. The intervals
+/// are durations, not beat counts: the loop sleeps in `poll(2)` until
+/// the wire, the wakeup pipe, or the next ping deadline, so idle
+/// costs one wake per ping interval, not one per second.
 #[derive(Clone, Copy)]
 struct Timing {
-    beats_per_ping: u32,
+    ping_every: Duration,
     max_unanswered: u32,
 }
 
 impl Default for Timing {
     fn default() -> Self {
-        Self { beats_per_ping: 30, max_unanswered: 2 }
+        // The fuse the one-second beat used to arm: a ping every
+        // thirty seconds, two unanswered before the third is the walk
+        // — ~90 seconds of silence and the road reconnects. The
+        // guarantees did not move; only the wakes did (86,400 a day
+        // per road down to 2,880, and the pipe makes every enqueue
+        // instant where the beat made it wait a second).
+        Self { ping_every: Duration::from_secs(30), max_unanswered: 2 }
     }
 }
 
@@ -106,6 +131,9 @@ struct Road {
     own: bool,
     app: Option<PublicKey>,
     stop: Arc<AtomicBool>,
+    /// Wakes the road's poll out of its sleep: after every enqueue
+    /// (the frame leaves instantly, not on a beat) and every stop.
+    wake: WakeSink,
     handle: std::thread::JoinHandle<()>,
 }
 
@@ -202,6 +230,8 @@ impl RelayPool {
     ) {
         let stop = Arc::new(AtomicBool::new(false));
         let (outbound, outbound_rx) = sync_channel::<(Event, Fan)>(OUTBOUND_CAP);
+        let (wake_read, wake_write) =
+            wakeup_pair().expect("a wakeup pipe is two fds, this cannot fail sanely");
         let handle = std::thread::spawn({
             let stop = stop.clone();
             let inbound = inbound.clone();
@@ -216,6 +246,7 @@ impl RelayPool {
                     status,
                     outbound: outbound_rx,
                     stop,
+                    wake: wake_read,
                     timing,
                     shed,
                 });
@@ -223,8 +254,10 @@ impl RelayPool {
         });
         // The road keeps the url beside the thread: what drop_app
         // reads to tell a URL nobody serves anymore from one the
-        // declared set still runs.
-        self.roads.push((Road { url, own, app, stop, handle }, outbound));
+        // declared set still runs. The wake sink rides with it — the
+        // producers (the fan-out's send, the stop flags) need to reach
+        // a loop that is asleep in poll, not spinning.
+        self.roads.push((Road { url, own, app, stop, wake: wake_write, handle }, outbound));
     }
 
     fn spawn_own(
@@ -288,6 +321,10 @@ impl RelayPool {
             let stays = road.app.as_ref() != Some(app);
             if !stays {
                 road.stop.store(true, Ordering::SeqCst);
+                // The thread is asleep in poll, not spinning: stop has
+                // to ring the bell or the teardown waits for the next
+                // ping deadline.
+                road.wake.wake();
             }
             stays
         });
@@ -344,7 +381,13 @@ impl RelayPool {
             };
             if mine {
                 match outbound.try_send((event.clone(), fan.clone())) {
-                    Ok(()) => {}
+                    Ok(()) => {
+                        // The wake is what makes this send instant:
+                        // the road sleeps in poll, and the frame it
+                        // just queued leaves when the bell rings, not
+                        // on the next beat of a one-second spin.
+                        road.wake.wake();
+                    }
                     // Full is the shed: the road's queue is at its
                     // bound, the answer's requester times out, and
                     // nothing grows.
@@ -362,6 +405,7 @@ impl RelayPool {
     pub fn shutdown(self) {
         for (road, _) in &self.roads {
             road.stop.store(true, Ordering::SeqCst);
+            road.wake.wake();
         }
         for (road, _) in self.roads {
             let _ = road.handle.join();
@@ -380,6 +424,10 @@ struct RelayWiring {
     status: SyncSender<RelayStatus>,
     outbound: Receiver<(Event, Fan)>,
     stop: Arc<AtomicBool>,
+    /// The wakeup pipe's read end: what makes an enqueue instant and
+    /// a stop honored while the loop sleeps in poll instead of
+    /// spinning on a one-second read timeout.
+    wake: WakeSource,
     timing: Timing,
     shed: Arc<AtomicU64>,
 }
@@ -424,10 +472,31 @@ fn one_relay(w: RelayWiring) {
 
 fn connect_and_serve(w: &RelayWiring) -> Result<()> {
     let url = &w.url;
-    let (mut socket, _response) =
-        tungstenite::connect(url).with_context(|| format!("connecting to {url}"))?;
-    set_read_timeout(&mut socket, Some(Duration::from_secs(1)))?;
-    set_write_timeout(&mut socket, Some(Duration::from_secs(10)))?;
+    // The frame cap the relay's own listener already enforces: a
+    // bunker's honest traffic is kind-24133 wrappers, and tungstenite's
+    // 64 MiB default is, in the tree's own relay-side words, an
+    // invitation. The client reads from relays it chose, but a hostile
+    // relay is still a relay — the cap is one MiB here too.
+    let mut config = tungstenite::protocol::WebSocketConfig::default();
+    config.max_message_size = Some(MAX_INBOUND_BYTES);
+    config.max_frame_size = Some(MAX_INBOUND_BYTES);
+    let (mut socket, _response) = tungstenite::client::connect_with_config(
+        url.as_str().into_client_request().context("the relay URL is not a request")?,
+        Some(config),
+        3,
+    )
+    .with_context(|| format!("connecting to {url}"))?;
+    // The poll-based loop needs a nonblocking socket: the thread
+    // sleeps in poll(2) and reads only when the wire is readable, so
+    // a read never waits and an idle road wakes only at the ping
+    // deadline (the one-second read-timeout spin woke it 86,400 times
+    // a day to learn nothing). Sends pace through send_paced, the
+    // blocking write's ten-second budget spelled for a nonblocking
+    // socket.
+    socket.get_ref().set_raw_nonblocking(true).context("setting the relay socket nonblocking")?;
+    let Some(sock_fd) = socket.get_ref().raw_fd() else {
+        return Err(anyhow!("unsupported relay transport"));
+    };
 
     let filter = serde_json::json!({
         "kinds": [24133],
@@ -436,11 +505,13 @@ fn connect_and_serve(w: &RelayWiring) -> Result<()> {
     socket.send(Message::text(serde_json::json!(["REQ", SUBSCRIPTION_ID, filter]).to_string()))?;
     let _ = w.status.try_send(RelayStatus { url: url.to_string(), state: RelayState::Connected });
 
-    // The probe's books: the beat counter since the last ping, and the
-    // pings sent with no inbound frame between them. Any frame at all
+    // The probe's books: when the last ping went out, and the pings
+    // sent with no inbound frame between them. Any frame at all
     // — pong, event, notice — is proof the wire lives, and zeroes the
-    // unanswered count.
-    let mut beats_since_ping: u32 = 0;
+    // unanswered count. The fuse's guarantees are the one-second
+    // beat's, spelled in durations now that the loop sleeps in poll
+    // instead of counting heartbeats.
+    let mut last_ping = std::time::Instant::now();
     let mut unanswered: u32 = 0;
     // The frame log's sampler: one line per sample period, with the
     // suppressed count named when the sample resumes. Per-frame was a
@@ -450,97 +521,141 @@ fn connect_and_serve(w: &RelayWiring) -> Result<()> {
         std::time::Instant::now().checked_sub(FRAME_SAMPLE).unwrap_or_else(std::time::Instant::now);
     let mut suppressed: u64 = 0;
 
+    // The poll set: the wire and the wakeup pipe. Enqueues and stops
+    // ring the pipe; the ping deadline bounds every sleep; the socket
+    // wakes it the moment a frame arrives.
+    let mut fds = [
+        libc::pollfd { fd: sock_fd, events: libc::POLLIN, revents: 0 },
+        libc::pollfd { fd: w.wake.fd(), events: libc::POLLIN, revents: 0 },
+    ];
+
     loop {
         if w.stop.load(Ordering::SeqCst) {
             let _ = socket.close(None);
             return Ok(());
         }
 
-        // Outbound first, so an answer that arrived while the read was
-        // blocking goes out before anything else is read. The lock is
-        // held for the drain of this beat, never across the read.
-        // The road's own queue: everything in it is the road's to
-        // carry — the fan-out decided that at send time.
-        let mut drained = Vec::new();
-        while let Ok((event, _fan)) = w.outbound.try_recv() {
-            drained.push(event);
-        }
-        for event in drained {
-            socket.send(Message::text(serde_json::json!(["EVENT", event]).to_string()))?;
+        // Outbound first, so an answer that arrived while the loop
+        // slept goes out before anything else is read. Queue, then
+        // pipe, then queue once more — every queued message precedes
+        // its byte, so this order can strand neither.
+        let mut drain_once = || -> Result<()> {
+            let mut drained = Vec::new();
+            while let Ok((event, _fan)) = w.outbound.try_recv() {
+                drained.push(event);
+            }
+            for event in drained {
+                send_paced(
+                    &mut socket,
+                    Message::text(serde_json::json!(["EVENT", event]).to_string()),
+                    WRITE_PACE,
+                )
+                .map_err(|e| anyhow::anyhow!(e).context("publishing to the relay"))?;
+            }
+            Ok(())
+        };
+        drain_once()?;
+        w.wake.drain();
+        drain_once()?;
+
+        // The ping fuse: a ping per interval, and past the allowance
+        // of unanswered pings the road calls the connection dead and
+        // the backoff outside reconnects it. What the fuse is for: a
+        // connection that died in silence — the state every socket is
+        // in after the machine sleeps, where the relay's FIN was lost
+        // mid-suspend — never errors on read. The kernel still calls
+        // it ESTABLISHED; only our own probe can learn the truth.
+        if last_ping.elapsed() >= w.timing.ping_every {
+            last_ping = std::time::Instant::now();
+            unanswered += 1;
+            if unanswered > w.timing.max_unanswered {
+                return Err(anyhow!("the relay went quiet: {unanswered} pings with no answer"));
+            }
+            send_paced(&mut socket, Message::Ping(Bytes::new()), WRITE_PACE)
+                .map_err(|e| anyhow::anyhow!(e).context("pinging the relay"))?;
         }
 
-        match socket.read() {
-            Ok(Message::Text(text)) => {
-                unanswered = 0;
-                let events = events_from_relay_message(&text, SUBSCRIPTION_ID);
-                if last_frame.elapsed() >= FRAME_SAMPLE {
-                    if suppressed > 0 {
+        // Sleep until the wire, the pipe, or the next ping deadline.
+        // Any inbound frame between pings resets the fuse; this is
+        // also why the read below drains until WouldBlock — a TLS
+        // stream may hold already-decrypted frames its kernel socket
+        // no longer reports readable, and leaving one behind would
+        // stall it until the next ping deadline.
+        let budget =
+            w.timing.ping_every.saturating_sub(last_ping.elapsed()).as_millis().clamp(1, 60_000)
+                as i32;
+        poll_wait(&mut fds, budget)?;
+        if poll_readable(&fds[1]) {
+            // The bell: enqueue or stop. The top of the loop drains
+            // both and re-checks stop.
+            continue;
+        }
+        if !poll_readable(&fds[0]) {
+            // Spurious wake or the ping budget elapsed; the fuse
+            // check at the top handles the deadline.
+            continue;
+        }
+        loop {
+            match socket.read() {
+                Ok(Message::Text(text)) => {
+                    unanswered = 0;
+                    let events = events_from_relay_message(&text, SUBSCRIPTION_ID);
+                    if last_frame.elapsed() >= FRAME_SAMPLE {
+                        if suppressed > 0 {
+                            eprintln!(
+                                "kuma-nostrd: {url}: {suppressed} frame(s) arrived between samples"
+                            );
+                            suppressed = 0;
+                        }
                         eprintln!(
-                            "kuma-nostrd: {url}: {suppressed} frame(s) arrived between samples"
+                            "kuma-nostrd: frame: {}",
+                            text.chars().take(120).collect::<String>()
                         );
-                        suppressed = 0;
+                        if !events.is_empty() {
+                            // One line per bunker-addressed event batch:
+                            // when an app's ask never becomes a prompt,
+                            // this is the line that says whether the relay
+                            // ever spoke.
+                            eprintln!(
+                                "kuma-nostrd: relayed {} event(s) from the wire",
+                                events.len()
+                            );
+                        }
+                        last_frame = std::time::Instant::now();
+                    } else {
+                        suppressed += 1;
                     }
-                    eprintln!("kuma-nostrd: frame: {}", text.chars().take(120).collect::<String>());
-                    if !events.is_empty() {
-                        // One line per bunker-addressed event batch:
-                        // when an app's ask never becomes a prompt,
-                        // this is the line that says whether the relay
-                        // ever spoke.
-                        eprintln!("kuma-nostrd: relayed {} event(s) from the wire", events.len());
+                    for event in events {
+                        // The shed, not the block: a relay replaying a
+                        // backlog can read frames off the wire faster than
+                        // the worker plans them, and the channel's bound
+                        // is where the flood stops. A shed event is a
+                        // requester's timeout — the same end a jammed
+                        // queue would give it, without the RSS. The shed
+                        // is counted now, so the silence has a number
+                        // (#82's fix shape 1).
+                        if w.inbound.try_send(event).is_err() {
+                            w.shed.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
-                    last_frame = std::time::Instant::now();
-                } else {
-                    suppressed += 1;
                 }
-                for event in events {
-                    // The shed, not the block: a relay replaying a
-                    // backlog can read frames off the wire faster than
-                    // the worker plans them, and the channel's bound
-                    // is where the flood stops. A shed event is a
-                    // requester's timeout — the same end a jammed
-                    // queue would give it, without the RSS. The shed
-                    // is counted now, so the silence has a number
-                    // (#82's fix shape 1).
-                    if w.inbound.try_send(event).is_err() {
-                        w.shed.fetch_add(1, Ordering::Relaxed);
-                    }
+                Ok(Message::Ping(payload)) => {
+                    unanswered = 0;
+                    send_paced(&mut socket, Message::Pong(payload), WRITE_PACE)
+                        .map_err(|e| anyhow::anyhow!(e).context("answering the relay's ping"))?;
                 }
-            }
-            Ok(Message::Ping(payload)) => {
-                unanswered = 0;
-                socket.send(Message::Pong(payload))?;
-            }
-            Ok(Message::Pong(_)) => unanswered = 0,
-            Ok(_) => unanswered = 0,
-            Err(tungstenite::Error::Io(e))
-                if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut =>
-            {
-                // The read timeout: the loop's heartbeat. What the
-                // beat is for: a connection that died in silence —
-                // the state every socket is in after the machine
-                // sleeps, where the relay's FIN was lost mid-suspend —
-                // never errors on read. The kernel still calls it
-                // ESTABLISHED; only our own probe can learn the truth.
-                // So the beat pings, and pings with no answer at all
-                // are the fuse: past the deadline, the road calls the
-                // connection dead and the backoff outside reconnects
-                // it.
-                beats_since_ping += 1;
-                if beats_since_ping >= w.timing.beats_per_ping {
-                    beats_since_ping = 0;
-                    unanswered += 1;
-                    if unanswered > w.timing.max_unanswered {
-                        return Err(anyhow!(
-                            "the relay went quiet: {unanswered} pings with no answer"
-                        ));
-                    }
-                    socket.send(Message::Ping(Bytes::new()))?;
+                Ok(_) => unanswered = 0,
+                Err(tungstenite::Error::Io(e))
+                    if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut =>
+                {
+                    // The wire is drained: back to poll.
+                    break;
                 }
+                Err(tungstenite::Error::Protocol(
+                    tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
+                )) => return Err(anyhow!("the relay reset the connection")),
+                Err(e) => return Err(anyhow::anyhow!(e).context("reading from the relay")),
             }
-            Err(tungstenite::Error::Protocol(
-                tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
-            )) => return Err(anyhow!("the relay reset the connection")),
-            Err(e) => return Err(anyhow::anyhow!(e).context("reading from the relay")),
         }
     }
 }
@@ -569,45 +684,6 @@ fn events_from_relay_message(text: &str, expected_subscription: &str) -> Vec<Eve
             Err(_) => Vec::new(),
         },
         None => Vec::new(),
-    }
-}
-
-/// The read timeout is the loop's heartbeat: outbound frames go out and
-/// the stop flag is honored on its beat. TLS streams wrap the TcpStream;
-/// the plain arm is what every test and every ws:// relay uses.
-fn set_read_timeout(
-    socket: &mut tungstenite::WebSocket<MaybeTlsStream<std::net::TcpStream>>,
-    timeout: Option<Duration>,
-) -> Result<()> {
-    match socket.get_mut() {
-        MaybeTlsStream::Plain(stream) => {
-            stream.set_read_timeout(timeout).context("setting the relay read timeout")
-        }
-        MaybeTlsStream::Rustls(stream) => {
-            stream.get_ref().set_read_timeout(timeout).context("setting the relay read timeout")
-        }
-        other => Err(anyhow!("unsupported relay transport: {other:?}")),
-    }
-}
-
-/// The write timeout is the stalled-peer fuse: a socket whose peer
-/// stopped reading fills its kernel send buffer and then blocks
-/// `socket.send` forever — no read timeout fires, because nothing
-/// needs to arrive. Ten seconds of a full send buffer is a dead peer
-/// by any honest measure; the error tears the road down into the same
-/// backoff a read death takes.
-fn set_write_timeout(
-    socket: &mut tungstenite::WebSocket<MaybeTlsStream<std::net::TcpStream>>,
-    timeout: Option<Duration>,
-) -> Result<()> {
-    match socket.get_mut() {
-        MaybeTlsStream::Plain(stream) => {
-            stream.set_write_timeout(timeout).context("setting the relay write timeout")
-        }
-        MaybeTlsStream::Rustls(stream) => {
-            stream.get_ref().set_write_timeout(timeout).context("setting the relay write timeout")
-        }
-        other => Err(anyhow!("unsupported relay transport: {other:?}")),
     }
 }
 
@@ -848,7 +924,7 @@ mod tests {
             bunker_pubkey,
             inbound_tx,
             status_tx,
-            Timing { beats_per_ping: 1, max_unanswered: 2 },
+            Timing { ping_every: Duration::from_millis(300), max_unanswered: 2 },
         );
 
         // The first connection lands — the road came up — and after
