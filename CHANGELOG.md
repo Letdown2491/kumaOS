@@ -2,6 +2,111 @@
 
 ## Unreleased
 
+- **The daemon wakes on demand, not on the second.** The nostr layer's
+  roads ran a 1 Hz spin — one wake per second per connection, forever,
+  to keep writes flowing on nonblocking sockets. Every road now polls
+  (2) on its socket and a wakeup pipe: the relay enqueue and the
+  bunker's broadcast ring the pipe and the frame leaves the same
+  instant, the ping deadline is the poll budget, and writes pace
+  against their own ten-second allowance instead of trusting socket
+  timeouts the old shape had to keep resetting. Relay connections poll
+  with no timeout at all — their queue and the kick bound them — so a
+  silent peer costs a parked thread and zero wakeups. Signing no
+  longer waits for the next tick, and an idle machine's daemon stopped
+  ticking. One stall the redesign could have shipped with is already
+  fixed by its own tests: tungstenite holds complete frames it pulled
+  off the wire in an internal buffer the raw fd cannot report, so a
+  poll-the-fd-then-read-one-message loop parked with answers in hand;
+  the loop reads first now and parks only on WouldBlock. This is the
+  release's riskiest change — the wake profile and a signing round
+  trip get a post-upgrade check on hardware.
+
+- **The relay's memory is priced in bytes.** The local relay's store
+  grew its four hardening pieces from the audit's four lenses at once:
+  a seen-set so a replayed event id is answered, not re-held; a byte
+  accounting so the store's 64 MiB ceiling measures what the process
+  actually holds, not how many entries it keeps; filters that match
+  with the p-tag keys precomputed once instead of per subscription
+  walk; and a query that borrows rather than clones the store. The
+  broadcast serializes an event once per fan-out, not once per
+  subscriber, a hostile `sub_id` (injected quotes, absurd lengths)
+  frames safely, and the bunker's socket only starts its beat after
+  the handshake completes.
+
+- **A stale approval cannot outlive the lock it was read under.** The
+  revoke race the audit's two lenses both saw: a decision read before
+  the app's tombstone landed was honored after it, because the bunker
+  re-checked revocation outside the daemon lock. The re-check now
+  happens under it, and a remembered grant is only minted when the
+  app actually received the answer — an approval nobody delivered
+  signs nothing. `remember_key` folds the crypto method into the
+  peer key (`Nip04` and `Nip44` asks no longer share a grant), and a
+  pairing whose URI teaches it a name, image, perms, or url keeps the
+  lesson across a restart instead of dropping it on the floor.
+
+- **Receipts answer for the package they name.** `kuma dev`'s receipt
+  pinned its version to whichever kuma checkout sorted last — a
+  `45.9.0` checkout outranked a `45.10.0` one — and the lease's
+  retirement advice could outlive the binary it named. The version is
+  now the anchored checkout's own, per package, with the mixed-receipt
+  and kumaui-only cases pinned.
+
+- **The uri readers agree, and the parsers refuse the same lies.** The
+  config's relay validation and the nostrconnect parser held two
+  opinions about the same URIs; a cross-check test drives both with
+  the same table. The parser caps relays at eight with duplicates
+  folded, refuses `%+4` as the hex escape it is not, and keeps a
+  relay path's `+` as a plus — only the display fields decode the
+  query-string space, which is what the spec's own `name=My+Client`
+  example sends. The pairing handshake rolls its session back when
+  the signing fails, so a half-pairing cannot stand for a pairing
+  that never answered.
+
+- **The bunker's socket answers fewer hands.** The bind unlinks
+  unconditionally (a check-then-remove race was a planted path's
+  blind spot), connections cap at 64 — every accept was a thread and
+  a runtime, and the socket's clients are this user's own handful —
+  and the handshake's entropy failure is an error, not eight zero
+  bytes wearing an id.
+
+- **Backup and restore refuse what they cannot vouch for.** A restic
+  `--include` pattern carrying a glob metacharacter is refused rather
+  than silently widened; the dangerous env keys live in one table the
+  root loop's pattern, the verb's scan, and the test all read; and
+  the compose path restores the AppArmor userns knob it relaxed, even
+  when the compose died on its way there.
+
+- **The policy flusher waits on a condvar.** The periodic flush ticked
+  whether anything was dirty or not; the engine now notifies the
+  flusher from the record and decide paths, and the flusher sleeps
+  through clean cycles. The prompts' flood test waits on the sheds —
+  the queue's length can sit at the cap while later asks are still
+  registering — and the hardening stanzas are asserted as full line
+  sets per unit class, so a template reflow that drops a sandbox line
+  fails the suite instead of the machine.
+
+- **Small blunt fixes.** The sandbox masks `/run/dbus` beside
+  `/run/user` (the system bus was still dialable) and its comments
+  say so; the socket protocol's bind no longer races its own unlink;
+  the heal's account file rides the shared private write instead of a
+  hand-rolled tmp a symlink could race; the flatpak converger uninstalls
+  the declaration's drops in one invocation instead of one vendor round
+  trip per app; the ISO build's staging tree cleans up on failure via
+  trap; the relay unit's `MemoryMax` note names the queue caps it
+  reconciles with; the nostr-cli's log truncation takes chars and
+  only adds the ellipsis when something was cut; and the greeter
+  check's test asserts its speed-up actually rewrote the script.
+
+- **The published road's fixture derivation is one action.** The
+  previous-release derivation two published laps carried as
+  byte-copied run blocks — and which had already drifted once — lives
+  in `/.github/actions/previous-release`, read by both.
+
+- **CI counts what runs.** The ledger's needs include the heavy laps,
+  a skipped lap is a red one, and nextest is pinned by SHA rather
+  than by tag; the scope check fails a PR that declares several
+  disjoint scopes and annotates instead of whispering.
+
 - **The relay's doors are scoped, ordered, and bounded.** The scoping
   door accepted `authors`/`ids` as sufficient scoping and the match
   enforced neither — a subscription naming one dead id or one
@@ -22,8 +127,9 @@
   profile writes, deletes, relay lists, and Blossom `delete` for the
   full remember window. Grants now remember the exact kind — and for
   Blossom auth, the exact verb — and out-of-range kinds (an `as u16`
-  truncation) alias nothing. Existing grants re-ask once after the
-  upgrade. (#114)
+  truncation) alias nothing. Remembered grants are in-memory only, so
+  a daemon restart clears them all; the upgrade re-asks anything
+  remembered before it. (#114)
 
 - **A revoked app cannot re-pair after a restart.** The re-arm walk
   seeded revocation tombstones through a handle that was already
