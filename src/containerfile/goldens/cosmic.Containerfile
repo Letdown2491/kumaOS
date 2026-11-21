@@ -24,6 +24,9 @@ RUN rm /etc/xdg/autostart/com.system76.CosmicInitialSetup.desktop
 RUN printf 'COSMIC_DISABLE_OVERLAY_SCANOUT=1\nCOSMIC_DISABLE_DIRECT_SCANOUT=1\n' >> /etc/environment
 RUN test -f /usr/lib64/security/pam_gnome_keyring.so \
     && grep -q pam_gnome_keyring /etc/pam.d/cosmic-greeter /usr/lib/pam.d/cosmic-greeter 2>/dev/null
+RUN test -f /usr/share/dbus-1/services/org.freedesktop.secrets.service \
+    && rm /usr/share/dbus-1/services/org.freedesktop.secrets.service \
+    && test ! -e /usr/share/dbus-1/services/org.freedesktop.secrets.service
 COPY kargs-desktop.toml /usr/lib/bootc/kargs.d/10-kuma-desktop.toml
 COPY fastfetch-config.jsonc /etc/xdg/fastfetch/config.jsonc
 COPY fastfetch-logo.txt /usr/lib/kuma/fastfetch-logo.txt
@@ -167,8 +170,8 @@ RUN . /usr/lib/os-release \
     esac \
     && sed -i \
         -e 's|^NAME=.*|NAME="kumaOS"|' \
-        -e "s|^PRETTY_NAME=.*|PRETTY_NAME=\"kumaOS 45.6.0${CODENAME:+ ($CODENAME)}\"|" \
-        -e "s|^VERSION=.*|VERSION=\"45.6.0${CODENAME:+ ($CODENAME)}\"|" \
+        -e "s|^PRETTY_NAME=.*|PRETTY_NAME=\"kumaOS 45.7.0${CODENAME:+ ($CODENAME)}\"|" \
+        -e "s|^VERSION=.*|VERSION=\"45.7.0${CODENAME:+ ($CODENAME)}\"|" \
         -e 's|^ID=.*|ID=kuma|' \
         -e 's|^DEFAULT_HOSTNAME=.*|DEFAULT_HOSTNAME="kumaos"|' \
         -e 's|^ANSI_COLOR=.*|ANSI_COLOR="0;38;2;126;224;168"|' \
@@ -186,7 +189,7 @@ COPY kuma.toml /usr/lib/kuma/kuma.toml
 
 LABEL io.kuma.image="1"
 LABEL io.kuma.builder=<version-and-commit>
-LABEL org.opencontainers.image.version="45.6.0"
+LABEL org.opencontainers.image.version="45.7.0"
 COPY suid-golden /usr/lib/kuma/suid.golden
 
 RUN found=$(find /usr -xdev -type f -perm /6000 | LC_ALL=C sort); \

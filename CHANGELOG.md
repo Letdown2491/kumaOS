@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+## v45.7.0 (2026-11-21)
+
+- **The keyring cannot lose the race it kept losing.** A 45.6.0 boot
+  (2026-11-20) produced a locked session keyring behind a locked
+  bunker: the greeter's PAM unlocked the keyring at login, a
+  dbus-activated instance claimed `org.freedesktop.secrets` in the
+  same second, PAM's unlocked daemon died on GLib assertion failures,
+  and the locked replacement held the bus name for the session
+  (#116). The image now removes the dbus activation file
+  (`org.freedesktop.secrets.service`) so PAM's spawn is the only
+  creator the Secret Service has — a client that asks while no daemon
+  owns the name fails fast, and the bunker daemon's startup retries
+  already answer that window — instead of arming a locked competitor
+  no password can reach. `kuma-nostr unlock` still cannot open a
+  locked keyring (it reads through it), so the failure now has three
+  honest roads instead of one silent one: the daemon's status
+  document carries a `keyring_locked` fact (asked only for a locked
+  gate, so the poll cadence pays nothing while things work), the
+  doctor's bunker-locked advice branches on it instead of claiming
+  the keyring is open, the doctor's locked-collection error names the
+  bootstrap road, and `docs/nostr.md` documents the two-step unlock a
+  password-holding human runs.
+
+- **The dev ritual stopped teaching the road that shadows the CLI.**
+  `cargo install --path .` deposits copies in `~/.cargo/bin` that PATH
+  resolves ahead of both the image's binary and the receipted staging
+  area — a 45.5.0 copy impersonated the CLI across the whole 45.6.0
+  upgrade while the image's binary was correct the entire time (#117).
+  AGENTS.md's dev loop now names `kuma dev install` as the only
+  staging road and the cargo-bin deposit as the one artifact no
+  receipt or gate can see; the doctor's `cargo bin` check was already
+  patrolling for it.
+
+- **kumaUI v0.10.0 rides.** The kuma-shell action's pin moves to the
+  v0.10.0 commit, and this image's staging gate verifies the five
+  siblings against it.
+
 ## v45.6.0 (2026-11-21)
 
 - **The daemon wakes on demand, not on the second.** The nostr layer's
