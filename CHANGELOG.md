@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v45.6.0 (2026-11-21)
+
 - **The daemon wakes on demand, not on the second.** The nostr layer's
   roads ran a 1 Hz spin — one wake per second per connection, forever,
   to keep writes flowing on nonblocking sockets. Every road now polls
