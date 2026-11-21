@@ -724,6 +724,18 @@ impl<S: super::vault::SecretStore> Daemon<S> {
                         "the bunker is locked; unlock it and the pairing can land"
                     ));
                 }
+                let parsed = match super::bunker::parse_nostrconnect_uri(&uri) {
+                    Ok(parts) => parts,
+                    Err(e) => return err_response(anyhow!("the URI did not parse: {e}")),
+                };
+                let client_hex = parsed.client_pubkey.to_string();
+                let existing = self.engine.apps().into_iter().find(|a| a.pubkey == client_hex);
+                if existing.as_ref().is_some_and(|a| a.revoked_at.is_some()) {
+                    return err_response(anyhow!(
+                        "this app is revoked; unrevoke it before pairing again"
+                    ));
+                }
+                let already_paired = existing.is_some();
                 match self.bunker.as_mut().expect("checked").start_handshake(&uri) {
                     Ok((handshake, parts)) => {
                         if let Some(pool) = self.pool.as_mut() {
@@ -750,6 +762,32 @@ impl<S: super::vault::SecretStore> Daemon<S> {
                             None => Err(anyhow!("the bunker is not running")),
                         };
                         if let Err(e) = published {
+                            // Roll the half-pairing back before answering,
+                            // unless the app was already paired before this
+                            // Connect attempt (a failed re-handshake must
+                            // not destroy a pre-existing live pairing).
+                            // drop_app is the revocation's own teardown —
+                            // same machinery, no tombstone, because the
+                            // pairing never happened to forgive.
+                            if !already_paired {
+                                if let Some(pool) = self.pool.as_mut() {
+                                    for url in pool.drop_app(&parts.client_pubkey) {
+                                        self.relay_states.remove(&url);
+                                    }
+                                }
+                                // The session rides in at start_handshake
+                                // (the pubkey enters bunker.sessions before
+                                // anything is published), and a session the
+                                // tombstone-less bunker still holds is one
+                                // it treats as paired: a request over a
+                                // declared relay would route to Ask and
+                                // re-pair the app in the engine. Evict the
+                                // session to match the roads and the record.
+                                if let Some(bunker) = self.bunker.as_mut() {
+                                    bunker.evict(&parts.client_pubkey.to_string());
+                                }
+                                self.engine.delete(&parts.client_pubkey.to_string());
+                            }
                             return err_response(anyhow!("the handshake was not published: {e}"));
                         }
                         Response::Ok(OkResponse::Connect {
@@ -921,9 +959,17 @@ impl<S: super::vault::SecretStore> Daemon<S> {
             match PublicKey::parse(&paired.pubkey) {
                 Ok(pubkey) => {
                     if paired.revoked_at.is_some() {
-                        if let Some(bunker) = self.bunker.as_mut() {
-                            bunker.mark_revoked(&pubkey);
-                        }
+                        // On the local handle, never through `self` —
+                        // teardown_bunker emptied `self.bunker` at the
+                        // top of this function and the armed bunker is
+                        // only assigned back at the end, so the
+                        // as_mut() this loop used to consult was None
+                        // on every iteration and every tombstone died
+                        // at the restart it was set to survive. A
+                        // revoked app could then re-pair with a live
+                        // secret, which is the one thing revocation
+                        // exists to refuse.
+                        bunker.mark_revoked(&pubkey);
                     } else {
                         seeded.push(pubkey);
                     }
@@ -1422,6 +1468,81 @@ mod tests {
         ));
     }
 
+    /// The pairing's steps are not atomic by nature — subscribe, pair,
+    /// publish — so the Connect verb owes the machine a rollback when
+    /// the last step fails: a handshake that reached no client pairs
+    /// nobody, or the panel shows an app the engine honors and no
+    /// client can complete. The pool is the part that can fail, so the
+    /// test removes it and asks for the pairing anyway.
+    #[tokio::test]
+    async fn a_failed_publish_leaves_no_half_pairing() {
+        let mut daemon = daemon().await;
+        daemon.handle(decode(r#"{"cmd":"setup","mode":{"how":"generate"}}"#).unwrap()).await;
+        daemon.pool = None;
+        let client = Keys::generate().public_key();
+        let uri = format!("nostrconnect://{client}?relay=wss%3A%2F%2Frelay.example&secret=x");
+        let response =
+            daemon.handle(decode(&format!(r#"{{"cmd":"connect","uri":"{uri}"}}"#)).unwrap()).await;
+        assert!(matches!(response, Response::Err(_)), "the publish failure must answer Err");
+        assert!(
+            daemon.engine.apps().is_empty(),
+            "a handshake that reached no client pairs nobody: {:?}",
+            daemon.engine.apps()
+        );
+        // The bunker's own session book is the third place the pairing
+        // lived: a session the rollback forgets would route a request
+        // over a declared relay to Ask and re-pair the app.
+        let bunker = daemon.bunker.as_ref().expect("the armed bunker");
+        assert!(!bunker.is_paired(&client), "the rollback evicts the session");
+    }
+
+    #[tokio::test]
+    async fn connect_refuses_a_revoked_app_without_polluting_sessions() {
+        let mut daemon = daemon().await;
+        daemon.handle(decode(r#"{"cmd":"setup","mode":{"how":"generate"}}"#).unwrap()).await;
+        let client = Keys::generate().public_key();
+        daemon.engine.pair_with_metadata(&client, None, None, None, None);
+        daemon.handle(decode(&format!(r#"{{"cmd":"revoke","app":"{client}"}}"#)).unwrap()).await;
+
+        let uri = format!("nostrconnect://{client}?relay=wss%3A%2F%2Frelay.example&secret=x");
+        let response =
+            daemon.handle(decode(&format!(r#"{{"cmd":"connect","uri":"{uri}"}}"#)).unwrap()).await;
+        assert!(
+            matches!(response, Response::Err(_)),
+            "nostrconnect:// must refuse a revoked app: {response:?}"
+        );
+        let bunker = daemon.bunker.as_ref().expect("the armed bunker");
+        assert!(
+            !bunker.is_paired(&client),
+            "refused nostrconnect:// must not insert the revoked pubkey into bunker.sessions"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_re_connect_preserves_an_already_paired_app() {
+        let mut daemon = daemon().await;
+        daemon.handle(decode(r#"{"cmd":"setup","mode":{"how":"generate"}}"#).unwrap()).await;
+        let client = Keys::generate().public_key();
+        daemon.engine.pair_with_metadata(&client, Some("existing".into()), None, None, None);
+        daemon.bunker.as_mut().expect("the armed bunker").seed([client]);
+        daemon.pool = None;
+
+        let uri = format!("nostrconnect://{client}?relay=wss%3A%2F%2Frelay.example&secret=x");
+        let response =
+            daemon.handle(decode(&format!(r#"{{"cmd":"connect","uri":"{uri}"}}"#)).unwrap()).await;
+        assert!(matches!(response, Response::Err(_)), "publish failure still returns Err");
+        assert!(
+            daemon
+                .engine
+                .apps()
+                .iter()
+                .any(|a| a.pubkey == client.to_string() && a.revoked_at.is_none()),
+            "a failed re-connect must not delete an already-paired app"
+        );
+        let bunker = daemon.bunker.as_ref().expect("the armed bunker");
+        assert!(bunker.is_paired(&client), "the pre-existing session stays intact");
+    }
+
     #[tokio::test]
     async fn a_revoked_app_stays_refused_after_a_restart() {
         use nostr::nips::nip44::Nip44;
@@ -1460,6 +1581,34 @@ mod tests {
                 assert!(plaintext.contains("not paired"), "{plaintext}");
             }
             other => panic!("a revoked app is refused, not gated: {other:?}"),
+        }
+
+        // GetPublicKey is refused by the engine's pairing record; the
+        // tombstone on the bunker earns its keep one verb over, at
+        // Connect — the pairing handshake itself, which the engine
+        // never sees. The secret is live (the vault's own), so a
+        // bunker that lost its tombstones to a restart would answer
+        // Paired and hand a revoked app the keys back. This is the
+        // assertion that caught the as_mut()-on-None bug: without the
+        // tombstones riding in, Connect paired.
+        let secret =
+            daemon.vault.secrets().last().expect("the mint's outstanding secret").to_string();
+        let connect = NostrConnectMessage::Request {
+            id: "connect-after-revoke".into(),
+            method: NostrConnectMethod::Connect,
+            params: vec![bunker_pubkey.to_string(), secret],
+        };
+        let content = app_keys.nip44_encrypt(&bunker_pubkey, &connect.as_json()).unwrap();
+        let connect_event = EventBuilder::new(Kind::NostrConnect, content)
+            .tag(Tag::public_key(bunker_pubkey))
+            .finalize(&app_keys)
+            .unwrap();
+        match daemon.plan_bunker_event(&connect_event) {
+            Some(crate::nostr::bunker::Plan::Answer(response)) => {
+                let plaintext = app_keys.nip44_decrypt(&bunker_pubkey, &response.content).unwrap();
+                assert!(plaintext.contains("revoked"), "{plaintext}");
+            }
+            other => panic!("a revoked app's connect is refused, not paired: {other:?}"),
         }
     }
 
