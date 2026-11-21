@@ -116,8 +116,8 @@ pub(crate) const KUMA_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Parser)]
 #[command(name = "kuma", version = VERSION, about = "Your system is one file.")]
 struct Cli {
-    /// Path to the kuma config file [default: ./kuma.toml, else
-    /// ~/.config/kuma/kuma.toml when the current directory has none]
+    /// Path to the kuma config file [default: ~/.config/kuma/kuma.toml,
+    /// else ./kuma.toml; when both exist the home one wins and says so]
     #[arg(long, global = true)]
     config: Option<PathBuf>,
 
@@ -1224,7 +1224,7 @@ fn resolve_config(explicit: Option<PathBuf>) -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
         .map(|base| base.join("kuma/kuma.toml"));
-    let was_explicit = explicit.is_none();
+    let implicit = explicit.is_none();
     let (resolved, shadowed) = resolve_config_against(explicit, &cwd, xdg);
     if let Some(shadowed) = shadowed {
         eprintln!(
@@ -1234,11 +1234,12 @@ fn resolve_config(explicit: Option<PathBuf>) -> PathBuf {
             shadowed.display(),
             shadowed.display()
         );
-    } else if !was_explicit
-        && resolved == cwd.join("kuma.toml")
-        && std::env::var_os("SUDO_USER").is_some()
-        && unsafe { libc::geteuid() } == 0
-    {
+    } else if sudo_note_warrants(
+        implicit,
+        resolved == cwd.join("kuma.toml"),
+        std::env::var_os("SUDO_USER").is_some(),
+        unsafe { libc::geteuid() } == 0,
+    ) {
         // Under sudo (Fedora's env_reset), HOME is /root and root's home has
         // no declaration, so what resolves is the file in the invoking
         // user's working directory — now honored by a root process. The
@@ -1257,6 +1258,17 @@ fn resolve_config(explicit: Option<PathBuf>) -> PathBuf {
         );
     }
     resolved
+}
+
+/// Whether the sudo note warrants: the declaration resolved by
+/// fallback — nothing passed explicitly, and no home declaration
+/// anywhere — while the caller is root through sudo, which makes the
+/// working directory's file the one being honored. Every factor
+/// spelled as an argument so the truth table has a test that does not
+/// have to stage a sudo session. An explicit `--config` is the one
+/// shape that stays silent: naming the file IS the acknowledgment.
+fn sudo_note_warrants(implicit: bool, resolved_local: bool, sudo_user: bool, root: bool) -> bool {
+    implicit && resolved_local && sudo_user && root
 }
 
 /// Whether a path is there — including when the honest answer is "cannot
@@ -5498,6 +5510,29 @@ mod tests {
             resolve_config_against(None, dir.path(), Some(dir.path().join("xdg/kuma/kuma.toml")));
         assert_eq!(path, dir.path().join("kuma.toml"));
         assert_eq!(shadowed, None);
+    }
+
+    /// The sudo note's truth table. The first pass at this inverted the
+    /// explicit flag — the warning was silent for exactly the shape it
+    /// existed to name (implicit resolution onto the invoking user's
+    /// ./kuma.toml) and fired for the shape that needed no warning (an
+    /// explicit --config IS the acknowledgment). The predicate takes
+    /// the four facts as arguments, so the table is held without
+    /// staging a sudo session.
+    #[test]
+    fn the_sudo_note_fires_for_the_implicit_local_shape_and_nothing_else() {
+        // (implicit, resolved_local, sudo_user, root) -> warrants
+        assert!(sudo_note_warrants(true, true, true, true), "the shape: implicit, local, root under sudo");
+        // Anything explicit is already an acknowledgment.
+        assert!(!sudo_note_warrants(false, true, true, true));
+        // Not a root process: nothing to warn about.
+        assert!(!sudo_note_warrants(true, true, true, false));
+        // Plain sudo without SUDO_USER, or no sudo at all.
+        assert!(!sudo_note_warrants(true, true, false, true));
+        // The home declaration won, or nothing resolved to local.
+        assert!(!sudo_note_warrants(true, false, true, true));
+        // And everything off stays off.
+        assert!(!sudo_note_warrants(false, false, false, false));
     }
 
     #[test]
