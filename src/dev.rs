@@ -89,17 +89,30 @@ impl Receipt {
         Ok(())
     }
 
-    /// The newest version any checkout in this receipt claims.
+    /// The lease's version: the KUMA checkout's, not the max across
+    /// every checkout a mixed install staged. The lapse comparison is
+    /// against the image's kuma version — a kumaui checkout's 0.4.x
+    /// says nothing about when kuma's lease lapses, and letting its
+    /// number into a max either holds the lease open forever (a
+    /// version scheme that outruns kuma's) or retires a kumaui-only
+    /// install the day it landed (0.4.1 loses to every image, and the
+    /// next `kuma upgrade` silently deletes its binaries). A receipt
+    /// that staged no `kuma` binary has no lease against the image at
+    /// all: it retires by hand (`kuma dev uninstall`), never as an
+    /// upgrade's side effect.
     pub fn version(&self) -> &str {
-        // Numeric, not lexicographic: "45.10.0" sorts below "45.9.0"
-        // as a string, and a multi-checkout receipt would report the
-        // OLDER version as the newest.
-        self.checkouts
-            .iter()
-            .filter_map(|c| dotted(&c.version).map(|d| (d, c.version.as_str())))
-            .max_by_key(|(numeric, _)| numeric.clone())
-            .map(|(_, version)| version)
-            .unwrap_or("")
+        // The kuma checkout is the one that staged the binary named
+        // `kuma`: the binary's commit ties it to exactly one checkout.
+        let commit = self.binaries.iter().find(|b| b.name == "kuma").map(|b| b.commit.as_str());
+        match commit {
+            Some(commit) => self
+                .checkouts
+                .iter()
+                .find(|c| c.commit == commit)
+                .map(|c| c.version.as_str())
+                .unwrap_or(""),
+            None => "",
+        }
     }
 
     /// Remove everything the receipt staged, then the receipt itself.
@@ -928,25 +941,53 @@ ExecStart=/var/home/myuser/.local/bin/kuma-nostrd --relay wss://stale.example
         })
         .to_string();
         let receipt: Receipt = serde_json::from_str(&text).expect("the written shape reads back");
-        assert_eq!(receipt.version(), "45.2.0", "the lease's version is the checkouts' max");
+        assert_eq!(receipt.version(), "45.2.0", "the lease's version is the kuma checkout's");
         assert_eq!(receipt.binaries[0].name, "kuma");
         assert_eq!(receipt.binaries[0].sha256.len(), 64);
 
-        // Two checkouts, one older: the newest decides when the lease
-        // lapses — retiring while any staged tree is still ahead of the
-        // image would remove binaries the image cannot replace yet.
-        let two: Receipt = serde_json::from_str(
+        // A mixed receipt: kumaui's 0.4.x must not enter the lease's
+        // version. The lapse compare is against the image's KUMA
+        // version; a second checkout's own scheme says nothing about
+        // when kuma's lease lapses (and 0.4.1 against every image is
+        // the shape that retired a kumaui-only install as an
+        // upgrade's side effect — the bug this pins).
+        let mixed: Receipt = serde_json::from_str(
             &serde_json::json!({
                 "installed_at": "",
                 "checkouts": [
-                    {"path": "/a", "version": "45.2.0", "commit": "aaaaaaa"},
-                    {"path": "/b", "version": "45.3.0", "commit": "bbbbbbb"}
+                    {"path": "/home/me/kuma", "version": "45.2.0", "commit": "aaaaaaa"},
+                    {"path": "/home/me/kumaui", "version": "0.4.1", "commit": "bbbbbbb"}
                 ],
-                "binaries": [],
+                "binaries": [
+                    {"name": "kuma", "from": "/home/me/kuma/target/release/kuma",
+                     "commit": "aaaaaaa", "version": "45.2.0", "sha256": "f".repeat(64)},
+                    {"name": "kuma-shell", "from": "/home/me/kumaui/target/release/kuma-shell",
+                     "commit": "bbbbbbb", "version": "0.4.1", "sha256": "f".repeat(64)}
+                ],
             })
             .to_string(),
         )
         .unwrap();
-        assert_eq!(two.version(), "45.3.0");
+        assert_eq!(mixed.version(), "45.2.0", "kumaui's 0.4.x stays out of the lease");
+
+        // A receipt that staged no kuma binary has no lease against
+        // the image: version() answers nothing, and `lapsed` never
+        // fires — the retirement is by hand, not by an upgrade.
+        let kumaui_only: Receipt = serde_json::from_str(
+            &serde_json::json!({
+                "installed_at": "",
+                "checkouts": [
+                    {"path": "/home/me/kumaui", "version": "0.4.1", "commit": "bbbbbbb"}
+                ],
+                "binaries": [
+                    {"name": "kuma-shell", "from": "/home/me/kumaui/target/release/kuma-shell",
+                     "commit": "bbbbbbb", "version": "0.4.1", "sha256": "f".repeat(64)}
+                ],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(kumaui_only.version(), "", "no kuma binary, no image lease");
+        assert!(!lapsed(&kumaui_only), "an install without kuma never auto-lapses");
     }
 }

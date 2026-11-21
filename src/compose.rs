@@ -239,6 +239,9 @@ pub fn compose(config: &Config, tag: &str) -> Result<()> {
     // removes the one layer the sandbox cannot be argued with.
     let knob = "kernel.apparmor_restrict_unprivileged_userns";
     let report = |msg: &str| eprintln!("kuma compose: {msg}");
+    // What the knob read before the relax — the machine's own posture,
+    // which the compose has no business changing permanently.
+    let mut knob_was: Option<String> = None;
     let read = || -> Option<String> {
         // /proc/sys spells the knob with slashes — the dotted form is for
         // sysctl(1), and a dotted path under /proc/sys names a file that
@@ -261,6 +264,10 @@ pub fn compose(config: &Config, tag: &str) -> Result<()> {
             match wrote {
                 Ok(s) if s.success() && back == "0" => {
                     report("knob relaxed; read-back says 0");
+                    // Remembered only when the relax took: restoring a
+                    // knob the write never moved would set it to a
+                    // value it already had, which is at best noise.
+                    knob_was = Some(v);
                 }
                 _ => report(&format!(
                     "the write did not take (read-back: {back}); if the compose dies \
@@ -290,7 +297,7 @@ pub fn compose(config: &Config, tag: &str) -> Result<()> {
     // and set filecaps; rootless-privileged is still confined to the
     // user's own storage. The package cache lives in a named volume so
     // recomposes don't re-download Fedora.
-    run_host(&[
+    let composed = run_host(&[
         "podman",
         "run",
         "--rm",
@@ -316,7 +323,19 @@ pub fn compose(config: &Config, tag: &str) -> Result<()> {
         "--cachedir=/cache",
         "/work/kuma-base.yaml",
         "/work/out/kuma-base",
-    ])?;
+    ]);
+    // The knob goes back whatever the relax moved it from, composed or
+    // not: the relax was the compose sandbox's, and leaving the machine
+    // with a userns gate held open after the sandbox exited is a
+    // posture change nobody approved (the audit's AppArmor finding —
+    // the old value was read and then dropped).
+    if let Some(old) = &knob_was {
+        report(&format!("restoring the userns knob to {old}"));
+        let _ = std::process::Command::new("sudo")
+            .args(["sysctl", "-q", "-w", &format!("{knob}={old}")])
+            .status();
+    }
+    composed?;
 
     // The OCI directory the compose wrote becomes a first-class image in
     // podman storage; `podman pull` prints the image ID last.

@@ -871,16 +871,23 @@ pub fn doctor(json: bool, as_report: bool) -> Result<()> {
         // like a system unit can. A person's own ~/.config/systemd/user is
         // deliberately not read; that is theirs.
         check_enablements(Path::new("/etc/systemd/user"), &mut report);
-        check_snapshots(&mut report);
+        // The baked declaration read once for the four checks that
+        // grade from it — four `Config::load` calls of the same file
+        // in one run was the doctor re-reading a three-KB TOML each
+        // time it changed neighborhoods. check_snapshots is the one
+        // that names an unreadable file; the rest stay silent on None
+        // because it already said so.
+        let baked = Config::load(Path::new(BAKED_CONFIG)).ok();
+        check_snapshots(&mut report, baked.as_ref());
         check_shell(&mut report);
         check_niri_shadow(&mut report);
-        check_backup(&mut report);
-        check_nostr(&mut report);
+        check_backup(&mut report, baked.as_ref());
+        check_nostr(&mut report, baked.as_ref());
         check_boot_health(&mut report);
         check_boot_titles(Path::new(crate::bootentries::ENTRIES), Path::new("/"), &mut report);
         check_encryption(&mut report);
         check_hibernate(&mut report);
-        check_etc_drift(&mut report);
+        check_etc_drift(&mut report, baked.as_ref());
         check_keymap(&mut report);
         check_mime_defaults(&mut report);
         check_oo7_posture(&mut report);
@@ -2140,6 +2147,28 @@ fn idle_watcher_failure(log: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The running shell's main PID, or None when there is not one: "0"
+/// and empty are systemd's answers for none. Two checks read the same
+/// property to scope the same unit's evidence, so one helper.
+fn shell_main_pid() -> Option<String> {
+    let pid = host_output_any(&[
+        "systemctl",
+        "--user",
+        "show",
+        "kuma-shell.service",
+        "-p",
+        "MainPID",
+        "--value",
+    ])
+    .ok()?;
+    let pid = pid.trim().to_string();
+    if pid.is_empty() || pid == "0" {
+        None
+    } else {
+        Some(pid)
+    }
+}
+
 /// The idle watcher's failure line, if the running shell's journal
 /// carries one.
 ///
@@ -2156,17 +2185,7 @@ fn idle_watcher_failure(log: &str) -> Option<String> {
 /// that names no PID falls back to the whole boot, where the older,
 /// conservative reading applies.
 fn shell_idle_broken() -> Option<Option<String>> {
-    let pid = host_output_any(&[
-        "systemctl",
-        "--user",
-        "show",
-        "kuma-shell.service",
-        "-p",
-        "MainPID",
-        "--value",
-    ])
-    .ok()?;
-    let pid = pid.trim();
+    let pid = shell_main_pid()?;
     // A running unit's MainPID is its process; "0" (or empty) is
     // systemd's answer for none — leave the read unscoped rather than
     // asking the journal for a process that does not exist.
@@ -2175,9 +2194,7 @@ fn shell_idle_broken() -> Option<Option<String>> {
             .into_iter()
             .map(String::from)
             .collect();
-    if !pid.is_empty() && pid != "0" {
-        args.push(format!("_PID={pid}"));
-    }
+    args.push(format!("_PID={pid}"));
     let log = host_output_any(&args).ok()?;
     Some(idle_watcher_failure(&log))
 }
@@ -2219,17 +2236,7 @@ fn configured_idle_lock(text: &str) -> Option<u64> {
 }
 
 fn shell_env_missing() -> Option<String> {
-    let pid = host_output_any(&[
-        "systemctl",
-        "--user",
-        "show",
-        "kuma-shell.service",
-        "-p",
-        "MainPID",
-        "--value",
-    ])
-    .ok()?;
-    let pid = pid.trim();
+    let pid = shell_main_pid()?;
     if pid.is_empty() || pid == "0" {
         return None;
     }
@@ -2399,8 +2406,11 @@ fn check_shell(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
 /// Neither is answerable from `Result=`, which is why the converger
 /// stamps only on a run that actually copied something, and why this
 /// grades the stamp rather than the unit.
-fn check_backup(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
-    let Ok(config) = Config::load(Path::new(BAKED_CONFIG)) else {
+fn check_backup(
+    report: &mut impl FnMut(Grade, &str, String, Option<Action>),
+    baked: Option<&Config>,
+) {
+    let Some(config) = baked else {
         // check_snapshots already named an unreadable baked declaration;
         // saying it twice in one report is noise.
         return;
@@ -2587,13 +2597,16 @@ fn check_backup(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
 /// machine taking no snapshots at all. Both choices are right for the
 /// machine and wrong for the person, who otherwise learns on the one day
 /// they wanted a file back. This is the check that asks out loud.
-fn check_snapshots(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
-    let config = match Config::load(Path::new(BAKED_CONFIG)) {
-        Ok(config) => config,
+fn check_snapshots(
+    report: &mut impl FnMut(Grade, &str, String, Option<Action>),
+    baked: Option<&Config>,
+) {
+    let config = match baked {
+        Some(config) => config,
         // The build validated this file before baking it in, so a copy
         // that won't load is worth naming even though this check can't
         // say more than that.
-        Err(_) => {
+        None => {
             report(Grade::Warn, "snapshots", format!("cannot read {BAKED_CONFIG}"), None);
             return;
         }
@@ -2784,9 +2797,13 @@ fn scan_etc(paths: &[String], image_root: &Path, live_root: &Path) -> EtcScan {
 /// baked declaration, because config-diff on a real system reports dozens
 /// of legitimately-local files (machine-id, fstab, ssh host keys) and a
 /// check that cries wolf teaches you to ignore it.
-fn check_etc_drift(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
-    // The machine's own declaration says what its image owns.
-    let Ok(config) = Config::load(Path::new(BAKED_CONFIG)) else {
+fn check_etc_drift(
+    report: &mut impl FnMut(Grade, &str, String, Option<Action>),
+    baked: Option<&Config>,
+) {
+    // The machine's own declaration says what its image owns. Passed
+    // in read-once (check_snapshots names it when it will not load).
+    let Some(config) = baked else {
         return;
     };
     // "/usr" and "/" in production; parameterized so the states this
@@ -3533,8 +3550,11 @@ fn check_boot_titles(
 /// Everything here assumes a socket that might not answer: the doctor
 /// runs as the user in the session, so the check is real, and a
 /// refusal is a Warn with the fix — never a Fail, never a crash.
-fn check_nostr(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
-    let Ok(config) = Config::load(Path::new(BAKED_CONFIG)) else {
+fn check_nostr(
+    report: &mut impl FnMut(Grade, &str, String, Option<Action>),
+    baked: Option<&Config>,
+) {
+    let Some(config) = baked else {
         // check_snapshots already named an unreadable baked declaration.
         return;
     };
@@ -4415,8 +4435,9 @@ fn signature_key_for(policy_text: &str, repo: &str) -> Option<String> {
 /// Deliberately not a YAML parse. These files are three lines, kuma has
 /// no YAML dependency and would not gain one for this, and the question
 /// asked here is narrow enough that a prefix over the scope lines answers
-/// it. The cost is that a scope buried in a comment would count; the
-/// alternative was a check that failed working machines.
+/// it. The cost is that this is not a real YAML reader — a scope line
+/// whose colon hides inside quoting tricks would not match — but the
+/// plain shapes, quoted or not, commented after or not, all answer.
 fn sigstore_attachments_cover(text: &str, repo: &str) -> bool {
     // Every prefix of the repository that could legally be a scope, plus
     // the catch-all, so the widest working configuration still passes.
@@ -4439,7 +4460,10 @@ fn sigstore_attachments_cover(text: &str, repo: &str) -> bool {
             if indent > scope_indent {
                 if let Some((k, v)) = trimmed.split_once(':') {
                     let val = v.split('#').next().unwrap_or("").trim();
-                    if k.trim() == "use-sigstore-attachments" && val == "true" {
+                    // YAML spells booleans three ways, and a machine
+                    // that wrote `True` is a machine whose attachments
+                    // work — casing is not a posture.
+                    if k.trim() == "use-sigstore-attachments" && val.eq_ignore_ascii_case("true") {
                         return true;
                     }
                 }
@@ -4447,7 +4471,12 @@ fn sigstore_attachments_cover(text: &str, repo: &str) -> bool {
             }
             active_indent = None;
         }
-        if let Some(key) = trimmed.strip_suffix(':') {
+        // A scope line can carry a trailing comment (`ghcr.io: # the
+        // company registry`), and that machine works — the comment is
+        // stripped before the colon is looked for, or the file that
+        // documents its own scope fails the check it satisfies.
+        let no_comment = trimmed.split('#').next().unwrap_or("").trim();
+        if let Some(key) = no_comment.strip_suffix(':') {
             let key = key.trim().trim_matches(['"', '\'']);
             if scopes.iter().any(|s| s == key) {
                 active_indent = Some(indent);
@@ -5934,6 +5963,21 @@ mod tests {
             ),
             repo
         ));
+        // The shapes a real registries.d carries and the parser used
+        // to grade as Fail: a scope line with a trailing comment, and
+        // YAML's other boolean spellings. Both machines work.
+        assert!(sigstore_attachments_cover(
+            &format!(
+                "docker:\n  {repo}: # the company registry\n    use-sigstore-attachments: true\n"
+            ),
+            repo
+        ));
+        for casing in ["True", "TRUE"] {
+            assert!(sigstore_attachments_cover(
+                &format!("docker:\n  {repo}:\n    use-sigstore-attachments: {casing}\n"),
+                repo
+            ));
+        }
     }
 
     /// The file kuma actually ships has to satisfy the check kuma

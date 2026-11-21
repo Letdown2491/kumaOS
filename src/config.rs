@@ -1189,6 +1189,57 @@ pub(crate) mod tests {
     pub(crate) fn is_local_declaration(path: &Path) -> bool {
         path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with("kuma.toml"))
     }
+    /// The relay rule lives twice: `validate_relay` here for the
+    /// declaration's relays, and `parse_nostrconnect_uri` in the lib
+    /// for the relays a pasted URI invites — two copies, because the
+    /// system tool does not link the nostr layer, and twins drift.
+    /// This table is the anti-drift: every case is accepted or refused
+    /// by BOTH, the URI's through the percent-encoding its paste rides.
+    #[test]
+    fn the_declaration_and_the_uri_refuse_the_same_relays() {
+        use kuma::nostr::bunker::parse_nostrconnect_uri;
+
+        let cases: &[(&str, bool)] = &[
+            ("wss://relay.example", true),
+            ("wss://relay.example/path", true),
+            ("ws://127.0.0.1:7777", true),
+            ("ws://localhost", true),
+            ("ws://[::1]:7777", true),
+            ("ws://10.0.0.1", false),
+            ("ws://[::1", false),
+            ("ftp://relay.example", false),
+            ("relay.example", false),
+            ("wss://ev il", false),
+            ("wss://a$b", false),
+            ("wss://a%b", false),
+            ("wss://user@host", false),
+            ("wss://relay.example/../other", false),
+        ];
+        let client = "a".repeat(64);
+        for (relay, ok) in cases {
+            assert_eq!(validate_relay(relay).is_ok(), *ok, "validate_relay({relay})");
+            // The invited side: percent-encoded into the URI, validated
+            // after the decode — the side a `%20` could smuggle
+            // through, if the two rules ever disagreed.
+            let encoded: String = relay
+                .bytes()
+                .map(|b| {
+                    if b.is_ascii_alphanumeric() || b"-.~".contains(&b) {
+                        (b as char).to_string()
+                    } else {
+                        format!("%{b:02X}")
+                    }
+                })
+                .collect();
+            let uri = format!("nostrconnect://{client}?relay={encoded}&secret=beat");
+            assert_eq!(
+                parse_nostrconnect_uri(&uri).is_ok(),
+                *ok,
+                "parse_nostrconnect_uri disagrees with validate_relay on {relay}"
+            );
+        }
+    }
+
     #[test]
     fn other_users_carry_the_user_schema_minus_the_name() {
         // The spec's shape: same schema, same defaults, the username as

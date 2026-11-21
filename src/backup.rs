@@ -119,26 +119,59 @@ fn restic_argv_within(
         // three readers share is uppercase) all refuse before the
         // export rather than after meaning something. The character
         // class spells its letters out, because a locale whose
-        // collation widens [A-Z] would otherwise widen the gate.
+        // collation widens [A-Z] would otherwise widen the gate. The
+        // dangerous names render from DANGEROUS_KEYS — the same table
+        // ambiguous_values and the test read.
         "while IFS= read -r line || [ -n \"$line\" ]; do \
            case \"$line\" in \"\"|\\#*) continue ;; esac; \
            case \"$line\" in *=*) ;; *) \
              echo \"kuma: refusing malformed line in $1\" >&2; exit 1 ;; esac; \
            key=${{line%%=*}}; \
            case \"$key\" in \
-             \"\"|[0-9]*|PATH|HOME|SHELL|IFS|USER|LOGNAME|BASH_ENV|ENV|RESTIC_PASSWORD_COMMAND|LD_*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_]*) \
+             \"\"|[0-9]*|{}|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_]*) \
                echo \"kuma: refusing unsafe key in $1\" >&2; exit 1 ;; \
            esac; \
            export \"$line\"; \
          done < \"$1\"; export RESTIC_REPOSITORY=\"$2\"; \
          export RESTIC_CACHE_DIR=/var/cache/restic; install -d -m 0700 /var/cache/restic; \
          shift 2; exec {}restic \"$@\"",
+        dangerous_key_pattern(),
         seconds.map(|s| format!("timeout {s} ")).unwrap_or_default()
     );
     let mut argv: Vec<String> =
         ["sudo", "sh", "-c", &open, "_", secret, repo].iter().map(|s| s.to_string()).collect();
     argv.extend(args.iter().map(|a| a.to_string()));
     argv
+}
+
+/// The env keys a credential file must not carry: the names that
+/// change what executes (or what the shell is) rather than what is
+/// read. One table, three readers — `ambiguous_values`' scan, the
+/// root loop's case pattern, and the test that pins both — so a name
+/// added lands everywhere at once instead of in whichever copy the
+/// author remembered.
+const DANGEROUS_KEYS: &[&str] = &[
+    "PATH",
+    "HOME",
+    "SHELL",
+    "IFS",
+    "USER",
+    "LOGNAME",
+    "BASH_ENV",
+    "ENV",
+    "RESTIC_PASSWORD_COMMAND",
+];
+
+/// The case pattern for those names, plus the `LD_` prefix class: the
+/// loader's keys are a family, not a name.
+fn dangerous_key_pattern() -> String {
+    let mut pattern = String::new();
+    for key in DANGEROUS_KEYS {
+        pattern.push_str(key);
+        pattern.push('|');
+    }
+    pattern.push_str("LD_*");
+    pattern
 }
 
 /// Keys whose values three different readers would not agree about.
@@ -193,18 +226,7 @@ pub fn ambiguous_values(text: &str) -> Vec<String> {
             let dangerous_key = k.is_empty()
                 || !k.starts_with(|c: char| c.is_ascii_uppercase())
                 || !k.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-                || matches!(
-                    k,
-                    "PATH"
-                        | "HOME"
-                        | "SHELL"
-                        | "IFS"
-                        | "USER"
-                        | "LOGNAME"
-                        | "BASH_ENV"
-                        | "ENV"
-                        | "RESTIC_PASSWORD_COMMAND"
-                )
+                || DANGEROUS_KEYS.contains(&k)
                 || k.starts_with("LD_");
             if trimmed != line
                 || key != k
@@ -546,6 +568,19 @@ fn restore_path(
     if path.contains("..") {
         bail!("{path} contains `..`; name the path without it");
     }
+    // restic's `--include` value is a glob pattern, not a literal: a
+    // path carrying `*`, `?` or `[` would match whatever the pattern
+    // finds and restore files nobody named — a bracketed filename is
+    // a character class to restic and a filename to the person. The
+    // verb restores one named path; anything a glob would widen into
+    // is refused the way the `..` walk is.
+    if path.contains(['*', '?', '[']) {
+        bail!(
+            "{path} carries a glob character (`*`, `?` or `[`); restic reads \
+               --include as a pattern and would restore whatever matches. \
+               Name the one path to restore."
+        );
+    }
     let (secret, repo) = ready(config)?;
     let snapshot = from.unwrap_or("latest");
     let live = Path::new(path).exists();
@@ -710,24 +745,14 @@ mod tests {
         assert!(script.contains("refusing malformed line"), "{script}");
         assert!(script.contains("*=*)"), "a line without = refuses: {script}");
         assert!(script.contains("\"\"|[0-9]*"), "empty and digit-led keys refuse: {script}");
-        for key in [
-            "PATH",
-            "HOME",
-            "SHELL",
-            "IFS",
-            "USER",
-            "LOGNAME",
-            "RESTIC_PASSWORD_COMMAND",
-            "LD_",
-            "BASH_ENV",
-            "ENV",
-        ] {
+        // The test reads DANGEROUS_KEYS itself — a hand-copied list
+        // here was a third copy of the names, exactly the drift the
+        // table exists to prevent. The prefix class and the alphabet
+        // stay spelled out: they are pattern shapes, not names.
+        for key in DANGEROUS_KEYS {
             assert!(script.contains(key), "the loop must refuse {key}: {script}");
         }
-        assert!(
-            script.contains("*[!ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_]"),
-            "the class spells its letters out: {script}"
-        );
+        assert!(script.contains("|LD_*|"), "the loader prefix class refuses: {script}");
     }
 
     /// A line that changes under trim is its own refusal, and a CRLF
@@ -803,6 +828,16 @@ mod tests {
             assert!(
                 err.contains("absolute") || err.contains(".."),
                 "{bad} should be refused before anything runs: {err}"
+            );
+        }
+        // restic's --include is a pattern: a glob character in the
+        // named path would restore whatever matches, not what the
+        // person named. Refused with the same teeth.
+        for glob in ["/var/home/me/[notes]", "/var/*/etc", "/etc/passwo?"] {
+            let err = restore_path(&declared, glob, None, false, false).unwrap_err().to_string();
+            assert!(
+                err.contains("glob"),
+                "{glob} should be refused as a pattern, not resolved: {err}"
             );
         }
     }

@@ -137,7 +137,11 @@ impl Lock {
              # package versions are a record to diff, not pins to install.\n\
              # `kuma update` is what moves this file.\n\n{body}"
         );
-        std::fs::write(path, text).with_context(|| format!("cannot write {}", path.display()))
+        // The private write, not std::fs::write: the lock's digest is
+        // interpolated into `FROM name@…` — a tampered lock is a build
+        // injection, so it is created at 0600, never through a symlink,
+        // and renamed into place whole.
+        kuma::write_private(path, &text).with_context(|| format!("cannot write {}", path.display()))
     }
 
     /// `name@sha256:…` for the declaration's base, or None when this lock
