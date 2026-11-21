@@ -22,7 +22,7 @@
 //! holds a key. The metadata it necessarily sees — which app asked
 //! which bunker, how often — is the trust fact concepts.md discloses.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use nostr::event::Event;
 use nostr::key::PublicKey;
@@ -59,6 +59,14 @@ pub const MAX_LIMIT: usize = 100;
 /// single-digit events per minute — sits four orders of magnitude
 /// under it.
 pub const MAX_EVENTS: usize = 50_000;
+
+/// The store's byte ceiling, beside the count ceiling: a count alone
+/// caps at 50,000 × the 1 MiB frame cap — a ~48 GiB worst case the
+/// memory audit priced — while the unit's `MemoryMax=256M` is the
+/// real ceiling and would OOM the relay to enforce it. 64 MiB for
+/// the store leaves the unit budget to threads and queues, and is
+/// still four orders of magnitude above honest occupancy.
+pub const MAX_STORE_BYTES: usize = 64 * 1024 * 1024;
 
 /// The door's config: the three numbers an operator or the interop
 /// lane can set, and the defaults the original carries.
@@ -101,6 +109,10 @@ pub enum Rejected {
 pub struct Stored {
     pub event: Event,
     received_at: u64,
+    /// The event's serialized size, priced once at insert — the byte
+    /// budget below spends it, and pricing a stored event after the
+    /// fact would mean re-serializing it on every eviction beat.
+    bytes: usize,
 }
 
 /// The subscription filter subset the bunker flow uses: kinds, the
@@ -196,6 +208,17 @@ impl RelayFilter {
 
     /// Whether an event answers this subscription.
     pub fn matches(&self, event: &Event) -> bool {
+        let event_p: Vec<PublicKey> = event.tags.public_keys().collect();
+        self.matches_with(event, &event_p)
+    }
+
+    /// The same match with the event's p-tag keys precomputed by the
+    /// caller. The broadcast walk evaluates many filters against one
+    /// event, and the nostr crate's `public_keys()` re-parses hex on
+    /// every walk — the walk pays that once here instead of once per
+    /// filter, which at the advertised caps was the performance
+    /// audit's second per-broadcast tax.
+    pub fn matches_with(&self, event: &Event, event_p: &[PublicKey]) -> bool {
         if self.unsatisfiable {
             return false;
         }
@@ -210,12 +233,17 @@ impl RelayFilter {
         if !self.authors.is_empty() && self.authors.iter().all(|a| *a != event.pubkey) {
             return false;
         }
-        if !self.ids.is_empty() && !self.ids.iter().any(|i| *i == event.id.to_string()) {
-            return false;
+        // The hex form is rendered once per evaluation, not once per
+        // held id: the ids filter may name thousands, and an
+        // allocation per held id per event was the audit's first
+        // per-broadcast tax.
+        if !self.ids.is_empty() {
+            let id_hex = event.id.to_string();
+            if !self.ids.iter().any(|i| *i == id_hex) {
+                return false;
+            }
         }
-        if !self.p.is_empty()
-            && !self.p.iter().any(|p| event.tags.public_keys().any(|tag| tag == *p))
-        {
+        if !self.p.is_empty() && !self.p.iter().any(|p| event_p.iter().any(|tag| tag == p)) {
             return false;
         }
         let created = event.created_at.as_secs();
@@ -237,6 +265,17 @@ impl RelayFilter {
 /// The lock is the caller's; this type is the memory and the rules.
 pub struct EventStore {
     events: Vec<Stored>,
+    /// Dedup ids, beside the Vec: the linear scan this replaces ran
+    /// against up to MAX_EVENTS held ids per insert under the store's
+    /// one global mutex — the concurrency audit's CPU-amplification
+    /// finding. Kept in unison with `events` by construction: every
+    /// removal path rebuilds it, removals are already O(n) drains, so
+    /// the rebuild adds no order of magnitude.
+    seen: HashSet<nostr::event::EventId>,
+    /// Running sum of `events[*].bytes`, maintained at insert and
+    /// every removal — the byte budget reads it in O(1) instead of
+    /// re-summing 50,000 events per shed.
+    bytes_held: usize,
     config: RelayConfig,
 }
 
@@ -248,7 +287,7 @@ impl Default for EventStore {
 
 impl EventStore {
     pub fn new(config: RelayConfig) -> Self {
-        Self { events: Vec::new(), config }
+        Self { events: Vec::new(), seen: HashSet::new(), bytes_held: 0, config }
     }
 
     /// The door's first questions — signature, kind, timestamp window
@@ -290,10 +329,16 @@ impl EventStore {
     /// then the pubkey's budget, then this — and one schnorr per event
     /// is its ceiling, not two.
     pub fn insert_admitted(&mut self, event: Event, now: u64) -> Result<bool, Rejected> {
-        if self.events.iter().any(|s| s.event.id == event.id) {
+        if self.seen.contains(&event.id) {
             return Err(Rejected::Duplicate);
         }
-        self.events.push(Stored { event, received_at: now });
+        // The size is priced once, here: the byte budget below spends
+        // it, and a stored event's serialized length is the honest
+        // measure of what holding it costs.
+        let bytes = serde_json::to_vec(&event).map(|v| v.len()).unwrap_or(0);
+        self.events.push(Stored { event, received_at: now, bytes });
+        self.seen.insert(self.events[self.events.len() - 1].event.id);
+        self.bytes_held += bytes;
         // The per-pubkey budget bounds one key, not the aggregate: a
         // flood of throwaway keys is bounded only here. The cap sheds
         // the oldest received — arrival order is push order, so the
@@ -301,9 +346,18 @@ impl EventStore {
         // into "the flood's oldest events age out early". A real relay
         // carries single-digit connections of single-event-per-minute
         // traffic; the cap is orders of magnitude above that.
-        let excess = self.events.len().saturating_sub(MAX_EVENTS);
-        if excess > 0 {
-            self.events.drain(0..excess);
+        // Two ceilings shed the same way, whichever binds first:
+        // count (MAX_EVENTS) and bytes (MAX_STORE_BYTES). A stored
+        // event cannot exceed the 1 MiB frame cap, so the byte shed
+        // always terminates above empty.
+        let mut excess = self.events.len().saturating_sub(MAX_EVENTS);
+        while excess > 0 || self.bytes_held > MAX_STORE_BYTES {
+            let dropped = self.events.remove(0);
+            self.seen.remove(&dropped.event.id);
+            self.bytes_held = self.bytes_held.saturating_sub(dropped.bytes);
+            if excess > 0 {
+                excess -= 1;
+            }
         }
         Ok(true) // fresh, held
     }
@@ -312,7 +366,12 @@ impl EventStore {
     /// beat; also cheap enough to call before every query.
     pub fn evict(&mut self, now: u64) {
         let ttl = self.config.ttl_secs;
+        let before = self.events.len();
         self.events.retain(|stored| now.saturating_sub(stored.received_at) < ttl);
+        if self.events.len() != before {
+            self.seen = self.events.iter().map(|s| s.event.id).collect();
+            self.bytes_held = self.events.iter().map(|s| s.bytes).sum();
+        }
     }
 
     /// The events matching a filter, newest first, newest `limit` —
@@ -320,18 +379,16 @@ impl EventStore {
     /// wants the freshest answer first and a limit that kept the
     /// oldest would keep the stalest.
     pub fn query(&self, filter: &RelayFilter) -> Vec<Event> {
-        let mut matched: Vec<Event> = self
-            .events
-            .iter()
-            .filter(|stored| filter.matches(&stored.event))
-            .map(|stored| stored.event.clone())
-            .collect();
-        matched.sort_by_key(|event| std::cmp::Reverse(event.created_at.as_secs()));
+        // Sort and truncate on references; only the kept events are
+        // cloned. Cloning every match and truncating after gave a
+        // `limit` query a cost of O(matches) clones to send O(limit)
+        // events — under the same mutex every insert contends on.
+        let mut matched: Vec<&Stored> =
+            self.events.iter().filter(|stored| filter.matches(&stored.event)).collect();
+        matched.sort_by_key(|stored| std::cmp::Reverse(stored.event.created_at.as_secs()));
         let limit = filter.limit.unwrap_or(MAX_LIMIT).min(MAX_LIMIT);
-        if matched.len() > limit {
-            matched.truncate(limit);
-        }
-        matched
+        matched.truncate(limit);
+        matched.into_iter().map(|stored| stored.event.clone()).collect()
     }
 
     /// How many events are held — the eviction beat's reason to run.
