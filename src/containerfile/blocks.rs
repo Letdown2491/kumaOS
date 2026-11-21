@@ -5192,7 +5192,11 @@ ExecStart={exec_line}
 # names it, and a namespace that cannot mount a missing path fails the
 # unit before the daemon runs. The `+` runs this one command unsandboxed
 # — ProtectHome would refuse the write the daemon itself would need.
-ExecStartPre=+/usr/bin/mkdir -p %h/.local/state/kuma-nostr
+# Created at 0700 from birth: the pairings and the ask log land here
+# (see policy.rs's private writer), and a dir born at umask width is
+# world-traversable until the first write narrows it — an empty
+# enumerable directory is still an account-list-shaped oracle.
+ExecStartPre=+/usr/bin/mkdir -m 0700 -p %h/.local/state/kuma-nostr
 # A bunker that exits zero is still a bunker that stopped answering.
 Restart=always
 # Same case as the relay's: a crash-loop at the default 100 ms spin is
