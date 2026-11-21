@@ -146,6 +146,14 @@ async fn default_collection_locked(conn: &Connection) -> Result<bool> {
         .context("cannot read the default collection's lock state")
 }
 
+/// The lock's message, named once: the vault-read bail below and the
+/// doctor's road-finder both speak it, and two copies of one sentence
+/// drift. The doctor matches on this string — it is this layer's own
+/// contract, not an upstream's mood.
+pub(crate) const LOCKED_COLLECTION_MSG: &str = "the login collection is locked; the vault cannot \
+                                                be read behind the lock — unlock the keyring and \
+                                                retry";
+
 /// Load the payload, or `None` when no vault exists here yet. A locked
 /// collection is neither: the empty search it answers is an error naming
 /// the lock, so no caller mistakes a shut wall for an empty store.
@@ -157,11 +165,20 @@ pub async fn load(attributes: &HashMap<String, String>) -> Result<Option<Vec<u8>
         Some(item) => Ok(Some(item_secret(&conn, item, &session).await?)),
         None => {
             if default_collection_locked(&conn).await? {
-                bail!("the login collection is locked; the vault cannot be read behind the lock — unlock the keyring and retry");
+                bail!("{LOCKED_COLLECTION_MSG}");
             }
             Ok(None)
         }
     }
+}
+
+/// The default collection's lock state, asked fresh: what the status
+/// document carries when the vault is locked, so advice can tell a
+/// shut vault from a shut session. A private function above answers
+/// for a connection it already holds; this is the standalone ask.
+pub(crate) async fn collection_locked() -> Result<bool> {
+    let conn = connect().await?;
+    default_collection_locked(&conn).await
 }
 
 /// Write the payload, replacing whatever was there.

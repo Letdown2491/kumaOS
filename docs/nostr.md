@@ -122,6 +122,32 @@ guest at the keyboard, a script you didn't watch. It does not protect
 against someone already running as your user inside your unlocked
 session, and nothing running there could.
 
+### When the keyring itself comes up locked
+
+Rare, but it has a shape: the greeter's PAM unlocks the keyring at login,
+and if a dbus-activated keyring instance wins the session's bus name in
+the seconds around that unlock, the instance your session talks to can be
+a locked one — and `kuma-nostr unlock` cannot help, because it re-reads
+the vault through the keyring rather than opening the keyring. The
+doctor names this explicitly when it sees it ("the session's keyring
+itself came up locked"). The fix is a two-step bootstrap only you can
+run, because the password is yours:
+
+```console
+$ systemctl --user stop 'dbus-:1.2-org.freedesktop.secrets@*.service'
+$ printf '%s' 'your login password' | gnome-keyring-daemon --unlock --components=secrets
+```
+
+The first step removes the locked instance from the bus (`--unlock`
+refuses to act while any secret service is running); the second starts a
+fresh daemon and unlocks the login keyring as part of the bootstrap —
+the PAM path in miniature. Then `kuma-nostr unlock` works, because the
+keyring it reads through is open. Note the `printf '%s'` shape: no
+trailing newline, because the daemon reads the password verbatim. If
+this happens on more boots than the one that named the bug, say
+something — the race is supposed to be an image-level fix away, not a
+ritual you keep.
+
 You can also arm an inactivity lock: give the daemon a window (an hour at
 minimum) with `--inactivity-lock-secs`, and it locks itself when nothing
 has used or fed it for that long. This is off by default. Starting the

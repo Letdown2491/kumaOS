@@ -281,6 +281,14 @@ pub struct VaultFact {
     /// nothing about a switch nobody configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inactivity: Option<InactivityFact>,
+    /// Whether the session's keyring itself is locked, asked only for
+    /// a locked gate: an open vault read its key through the keyring
+    /// already, so the fact adds nothing there. This is the difference
+    /// between "unlock costs nothing" and "unlock cannot work" — the
+    /// 2026-11-20 boot had a locked keyring answering a doctor that
+    /// claimed the opposite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyring_locked: Option<bool>,
 }
 
 /// The inactivity switch's state at the moment `status` asked: the
@@ -585,6 +593,11 @@ impl<S: super::vault::SecretStore> Daemon<S> {
                                 connected,
                                 uri,
                                 inactivity: self.inactivity_fact(),
+                                keyring_locked: if unlocked {
+                                    None
+                                } else {
+                                    self.vault.keyring_locked().await
+                                },
                             },
                             shed: self.pool.as_ref().map(|p| p.shed()).unwrap_or(0),
                         })

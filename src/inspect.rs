@@ -3819,16 +3819,42 @@ fn check_nostr(
                         signer_grade(json_strings(&status["vault"]["connected"]).as_deref());
                     report(grade, "nostr", wording, None);
                 }
-                (_, Some(false)) => report(
-                    Grade::Warn,
-                    "nostr",
-                    "the bunker is locked; it pairs but signs nothing".into(),
-                    Some(Action::new(
-                        "unlock",
-                        "kuma-nostr unlock".to_string(),
-                        "the keyring is open in this session, so unlocking costs nothing",
-                    )),
-                ),
+                (_, Some(false)) => {
+                    // The keyring fact decides the road: a shut vault
+                    // behind an open keyring is one `unlock` away from
+                    // working, and the same warning behind a shut
+                    // keyring is advice that cannot work — the
+                    // 2026-11-20 boot had a locked keyring under a
+                    // doctor that claimed the opposite. Absent (an
+                    // older daemon across a dev install, or a store
+                    // with no keyring) keeps the open wording: absent
+                    // facts are not failing ones.
+                    match vault["keyring_locked"].as_bool() {
+                        Some(true) => report(
+                            Grade::Warn,
+                            "nostr",
+                            "the bunker is locked, and the session's keyring itself came up \
+                             locked; it pairs but signs nothing"
+                                .into(),
+                            Some(Action::new(
+                                "bootstrap the keyring",
+                                "docs/nostr.md",
+                                "a locked keyring is beyond every CLI — the doc names the \
+                                 two-step unlock a password-holding human runs",
+                            )),
+                        ),
+                        _ => report(
+                            Grade::Warn,
+                            "nostr",
+                            "the bunker is locked; it pairs but signs nothing".into(),
+                            Some(Action::new(
+                                "unlock",
+                                "kuma-nostr unlock".to_string(),
+                                "the keyring is open in this session, so unlocking costs nothing",
+                            )),
+                        ),
+                    }
+                }
                 _ => report(
                     Grade::Warn,
                     "nostr",
@@ -3858,12 +3884,32 @@ fn check_nostr(
                 }
             }
         }
-        Err(e) => report(
-            Grade::Warn,
-            "nostr",
-            format!("the daemon did not answer a status ask: {e}"),
-            None,
-        ),
+        Err(e) => {
+            // The locked collection's error is this layer's own
+            // message — secrets.rs names it once so the match cannot
+            // drift — and it is the one status failure whose road is
+            // not `kuma-nostr unlock`: the keyring itself is shut, so
+            // unlocking the bunker cannot work until a human opens
+            // the session's keyring. 2026-11-20's boot left this
+            // branch silent about exactly that.
+            let keyring_shut =
+                e.to_string().contains(crate::nostr::secrets::LOCKED_COLLECTION_MSG);
+            report(
+                Grade::Warn,
+                "nostr",
+                format!("the daemon did not answer a status ask: {e}"),
+                if keyring_shut {
+                    Some(Action::new(
+                        "bootstrap the keyring",
+                        "docs/nostr.md",
+                        "the vault read died on the locked login collection; `kuma-nostr \
+                         unlock` cannot open a locked keyring — the doc names the road",
+                    ))
+                } else {
+                    None
+                },
+            );
+        }
     }
 
     // The loudest thing in the layer, by name — one warning for the

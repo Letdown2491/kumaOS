@@ -146,6 +146,14 @@ pub trait SecretStore {
     /// returns; that is what "delete the vault" means and the caller
     /// should have said so already.
     async fn remove(&self) -> Result<()>;
+    /// Whether the session's keyring itself is locked, asked fresh —
+    /// the fact that decides whether an `unlock` costs nothing or
+    /// cannot work. `None` where the question has no answer: a memory
+    /// store has no keyring behind it, and an ask that failed names no
+    /// state worth pretending to know.
+    async fn keyring_locked(&self) -> Option<bool> {
+        None
+    }
 }
 
 /// An in-memory store: the vault's behaviors without a Secret Service.
@@ -265,6 +273,15 @@ impl<S: SecretStore> Vault<S> {
 
     pub fn is_unlocked(&self) -> bool {
         self.key.is_some()
+    }
+
+    /// The keyring's own lock state, through the store: what the
+    /// status document carries when the gate is shut, so advice can
+    /// tell a shut vault from a shut session. Asked only for a locked
+    /// gate — an open one read its key through the keyring already —
+    /// so the poll cadence pays nothing while things work.
+    pub async fn keyring_locked(&self) -> Option<bool> {
+        self.store.keyring_locked().await
     }
 
     /// The outstanding one-time secrets, for arming the bunker's
@@ -538,6 +555,10 @@ impl SecretStore for KeyringStore {
 
     async fn remove(&self) -> Result<()> {
         super::secrets::remove(&attributes_map()).await
+    }
+
+    async fn keyring_locked(&self) -> Option<bool> {
+        super::secrets::collection_locked().await.ok()
     }
 }
 

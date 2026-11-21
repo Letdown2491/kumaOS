@@ -494,6 +494,27 @@ pub(crate) fn keyring_pam(service: &str) -> String {
     )
 }
 
+/// Dbus activation is the second road a Secret Service daemon takes
+/// into a session, and the one that carries no password: any client
+/// asking for `org.freedesktop.secrets` in the window before PAM's
+/// spawned daemon owns the name pulls a fresh, LOCKED instance up
+/// through activation, and that instance can take the bus name —
+/// measured on a 45.6.0 boot (2026-11-20): PAM's unlocked daemon died
+/// on GLib assertion failures with a dbus-activated locked instance
+/// holding the name, and the session's keyring stayed locked behind a
+/// lock nobody held a password for. Removing the activation file
+/// leaves PAM's spawn as the only creator; a client that asks while no
+/// daemon owns the name fails fast instead of arming a competitor, and
+/// the daemon's own startup retries already answer that window (its
+/// first ask rode a NoReply that day and was retried into the lock
+/// message). gnome-keyring's own autostart entries keep their
+/// exec-conditions and still adopt a PAM-spawned daemon; only the
+/// activation road is cut.
+pub(crate) fn keyring_no_activation() -> String {
+    "RUN test -f /usr/share/dbus-1/services/org.freedesktop.secrets.service \\\n    && rm /usr/share/dbus-1/services/org.freedesktop.secrets.service \\\n    && test ! -e /usr/share/dbus-1/services/org.freedesktop.secrets.service\n"
+        .to_string()
+}
+
 /// Two lint warnings' worth of build litter, swept before the verdict.
 ///
 /// Installing packages leaves behind runtime state that a booted machine
@@ -3843,6 +3864,9 @@ fn desktop_niri(e: &mut Emitter<'_>) {
     e.copy(&mimeapps, "/etc/xdg/mimeapps.list");
     e.copy(&dconf_profile, "/etc/dconf/profile/user");
     e.raw(&keyring_pam("greetd"));
+    // And the activation road cut, so the PAM spawn is the only thing
+    // that can create the daemon this layer's unlock depends on.
+    e.raw(&keyring_no_activation());
     // The lock screen's own service, beside the other PAM stack this
     // layer touches. Inert until kuma-shell is what kuma-shell.service
     // runs; see KUMA_LOCK_PAM for why it ships ahead of that switch.
@@ -4016,6 +4040,10 @@ fn desktop_cosmic(e: &mut Emitter<'_>) {
     // greetd's: asserting /etc/pam.d/greetd here would pass while
     // the stack COSMIC logs in through went unchecked.
     e.raw(&keyring_pam("cosmic-greeter"));
+    // Same cut as the niri face: the activation road carries no
+    // password, and COSMIC's session asks the Secret Service as early
+    // as niri's does.
+    e.raw(&keyring_no_activation());
     e.copy(&kargs, "/usr/lib/bootc/kargs.d/10-kuma-desktop.toml");
     e.copy(&fastfetch, "/etc/xdg/fastfetch/config.jsonc");
     e.copy(&fastfetch_logo, "/usr/lib/kuma/fastfetch-logo.txt");
