@@ -5021,16 +5021,37 @@ fn invoking_user_env() -> Result<Option<(String, Vec<String>)>> {
 /// except under sudo, where the plain call answers root's — the same
 /// store bootc reads — and every comparison becomes a store agreeing
 /// with itself (#120, measured 2026-11-21).
-fn builder_podman_output(args: &[&str]) -> Result<String> {
-    match invoking_user_env()? {
-        None => host_output(args),
+/// The argv for a podman call against the store `kuma build` fills:
+/// plain podman as the current user, or — under sudo, where the plain
+/// call would answer root's store and every comparison becomes a store
+/// agreeing with itself (#120) — the invoking user's environment via
+/// sudo. Pure so the prefix regression that killed the publish road's
+/// delta lane (2026-11-21: `image inspect` ran with no `podman` in
+/// front of it) is pinned by a test instead of by a memory.
+fn podman_argv(args: &[&str], invoking: Option<(&str, &[String])>) -> Vec<String> {
+    let mut argv = Vec::with_capacity(args.len() + 6);
+    match invoking {
+        None => argv.push("podman".to_string()),
         Some((user, env)) => {
-            let mut argv: Vec<&str> = vec!["sudo", "-u", &user, "env"];
-            argv.extend(env.iter().map(|e| e.as_str()));
-            argv.extend(args.iter().copied());
-            host_output(&argv)
+            argv.extend([
+                "sudo".to_string(),
+                "-u".to_string(),
+                user.to_string(),
+                "env".to_string(),
+            ]);
+            argv.extend(env.iter().cloned());
+            argv.push("podman".to_string());
         }
     }
+    argv.extend(args.iter().map(|a| a.to_string()));
+    argv
+}
+
+fn builder_podman_output(args: &[&str]) -> Result<String> {
+    let invoking = invoking_user_env()?;
+    let argv =
+        podman_argv(args, invoking.as_ref().map(|(user, env)| (user.as_str(), env.as_slice())));
+    host_output(&argv)
 }
 
 fn builder_store_image_id(tag: &str) -> Result<String> {
@@ -5559,6 +5580,27 @@ mod tests {
             passwd_home_uid("testuser:x:1000:1000:Test User:/home/testuser:/bin/bash\n").unwrap();
         assert_eq!(home, "/home/testuser");
         assert_eq!(uid, "1000");
+    }
+
+    /// The publish road's delta lane died on the store probe running
+    /// `image inspect` with no `podman` in front of it — the prefix
+    /// existed in the code this replaced and did not survive the
+    /// refactor. Every argv shape pinned.
+    #[test]
+    fn the_builder_podman_argv_always_leads_with_podman() {
+        let inspect = ["image", "inspect", "--format", "{{.Id}}", "localhost/kuma:latest"];
+        // As the current user: a plain podman call.
+        assert_eq!(podman_argv(&inspect, None)[0], "podman");
+        assert_eq!(podman_argv(&inspect, None).len(), inspect.len() + 1);
+        // Under sudo: the invoking user's environment, then podman,
+        // then the arguments — podman still ahead of "image".
+        let env =
+            vec!["HOME=/home/testuser".to_string(), "XDG_RUNTIME_DIR=/run/user/1000".to_string()];
+        let argv = podman_argv(&inspect, Some(("testuser", env.as_slice())));
+        assert_eq!(argv[..3].to_vec(), ["sudo", "-u", "testuser"]);
+        let podman_at = argv.iter().position(|a| a == "podman").unwrap();
+        assert_eq!(argv[podman_at + 1], "image");
+        assert_eq!(*argv.last().unwrap(), "localhost/kuma:latest");
     }
 
     #[test]
