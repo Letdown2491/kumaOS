@@ -151,8 +151,15 @@ pub fn governing(axis: Axis) -> anyhow::Result<Governs> {
     match local {
         Some((primary_uid, home)) => {
             let path = home.join(".config/kuma/kuma.toml");
-            let text = match std::fs::read_to_string(&path) {
-                Ok(text) => {
+            // One open, and everything about the file is judged on the
+            // handle: the metadata is fstat of the very fd the text is
+            // read from, so the mode-and-ownership verdict and the
+            // opinion it vouches for cannot disagree about which file
+            // they are talking about. Reading by path and stating by
+            // path left a gap a rename could drive a converger
+            // through — vet one file, converge another.
+            let text = match std::fs::File::open(&path) {
+                Ok(mut file) => {
                     // The opinion is about to be executed by a root
                     // converger, so the file speaking for the primary
                     // account must be the primary account's own, and
@@ -161,8 +168,22 @@ pub fn governing(axis: Axis) -> anyhow::Result<Governs> {
                     // local account can rewrite — is not the owner's
                     // opinion, and treating it as such would let one
                     // account author what root converges for another.
-                    refuse_foreign_opinion(&path, primary_uid)?;
-                    Some(text)
+                    let meta = file.metadata().map_err(|e| {
+                        anyhow::anyhow!(
+                            "the local declaration {} cannot be stated: {e}",
+                            path.display()
+                        )
+                    })?;
+                    refuse_foreign_opinion(&path, &meta, primary_uid)?;
+                    use std::io::Read as _;
+                    let mut buf = String::new();
+                    file.read_to_string(&mut buf).map_err(|e| {
+                        anyhow::anyhow!(
+                            "the local declaration {} cannot be read: {e}",
+                            path.display()
+                        )
+                    })?;
+                    Some(buf)
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                 Err(e) => {
@@ -182,11 +203,15 @@ pub fn governing(axis: Axis) -> anyhow::Result<Governs> {
 /// read as an opinion: group- or world-writable, or owned by anyone
 /// but the primary account, is refused as an authority error — loud,
 /// like every other way the local declaration can be wrong.
-fn refuse_foreign_opinion(path: &Path, primary_uid: u32) -> anyhow::Result<()> {
+fn refuse_foreign_opinion(
+    path: &Path,
+    meta: &std::fs::Metadata,
+    primary_uid: u32,
+) -> anyhow::Result<()> {
+    // The metadata rides in from the caller's open handle (fstat), so
+    // the verdict and the text that follows it answer for the same
+    // inode.
     use std::os::unix::fs::MetadataExt;
-    let meta = std::fs::metadata(path).map_err(|e| {
-        anyhow::anyhow!("the local declaration {} cannot be stated: {e}", path.display())
-    })?;
     if meta.mode() & 0o022 != 0 {
         return Err(anyhow::anyhow!(
             "the local declaration {} is group- or world-writable (mode {:o}); refusing it as an opinion any local account could rewrite",
