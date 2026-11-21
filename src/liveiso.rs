@@ -337,6 +337,10 @@ dnf install -y --setopt=install_weak_deps=False \
     squashfs-tools xorriso mtools dosfstools >/dev/null
 
 work=$(mktemp -d)
+# Every exit cleans up, not just the success one: a failed xorriso
+# used to leave the multi-GB staging tree behind — the mktemp trap the
+# verb's own /var/tmp discipline exists to avoid.
+trap 'rm -rf "$work"' EXIT
 mkdir -p "$work"/iso-root/{images/pxeboot,LiveOS} "$work"/EFI
 
 # Same single-kernel reasoning as the live Containerfile: two kernels
@@ -507,8 +511,6 @@ xorriso -as mkisofs \
     -iso-level 3 \
     -o "$out/$label.iso" \
     "$work/iso-root"
-
-rm -rf "$work"
 "##;
 
 #[cfg(test)]

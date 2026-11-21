@@ -22,12 +22,12 @@
 //!   can build the thing you are in.
 //! - The environment is cleared and re-allowed, not filtered: the
 //!   child gets PATH, HOME, TERM, LANG and the proxy variables, and
-//!   nothing else. The session's other sockets arrive by environment
-//!   variable — the bus, the Wayland and X surfaces, XDG_RUNTIME_DIR
-//!   (where the nostr signer's socket lives), the agent sockets — and
-//!   each is a contact surface, not a convenience. A script that
-//!   cannot see your home has no business holding your keys, and no
-//!   business talking to your session either.
+//!   nothing else — and no bus address of any kind, because the bus
+//!   doors are closed at the mount (`/run/user` and `/run/dbus` are
+//!   tmpfs). The session's sockets are contact surfaces, not
+//!   conveniences. A script that cannot see your home has no business
+//!   holding your keys, and no business talking to your session
+//!   either.
 //!
 //! Two modes. `no-home` is the shape above with the network up — an
 //! install needs its registry. `airlock` adds `--unshare-net`: loopback
@@ -89,11 +89,12 @@ pub(crate) fn bwrap_argv(mode: Mode, cwd: &Path, home: &str, command: &[String])
         "/proc",
         "--tmpfs",
         "/tmp",
-        // The session socket door, closed at the mount: /run/user
+        // The session socket doors, closed at the mount: /run/user
         // holds the bus, the Wayland surface, and the nostr signer's
         // socket, and connect(2) succeeds through a read-only bind —
         // the --ro-bind above does NOT keep a hostile postinstall from
-        // dialing the session. Masked, not /run wholesale: Fedora's
+        // dialing the session. /run/dbus is the system bus's door and
+        // gets the same tmpfs. Masked, not /run wholesale: Fedora's
         // resolv.conf is a symlink into /run/systemd/resolve, and a
         // bare /run tmpfs would strand every build's DNS. The
         // process namespace is unshared with it, so the fresh /proc
@@ -101,6 +102,8 @@ pub(crate) fn bwrap_argv(mode: Mode, cwd: &Path, home: &str, command: &[String])
         // cmdlines.
         "--tmpfs",
         "/run/user",
+        "--tmpfs",
+        "/run/dbus",
         "--tmpfs",
         home,
         "--bind",
@@ -112,13 +115,11 @@ pub(crate) fn bwrap_argv(mode: Mode, cwd: &Path, home: &str, command: &[String])
     .iter()
     .map(|s| s.to_string())
     .collect();
-    // The environment is cleared, not filtered: the session's other
-    // sockets arrive by environment variable — the bus, the Wayland
-    // and X surfaces, and XDG_RUNTIME_DIR, where the nostr signer's
-    // socket lives — and each is a contact surface, not a
-    // convenience. The allowlist is what a build actually uses: where
-    // binaries live, the terminal and locale for their output, and
-    // the proxy pair an install may need to reach its registry.
+    // The environment is cleared, not filtered: the proxy pair an
+    // install may need to reach its registry, the terminal and locale
+    // for output — and no bus address. The bus doors are masked at
+    // the mount (/run/user, /run/dbus); an address variable with no
+    // socket behind it would be a lie the child discovers later.
     args.push("--clearenv".to_string());
     let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
     args.extend(["--setenv".to_string(), "PATH".to_string(), path]);
@@ -222,16 +223,17 @@ mod tests {
             args.iter().enumerate().filter(|(_, a)| *a == "--tmpfs").map(|(i, _)| i).collect();
         assert_eq!(
             tmpfses.len(),
-            3,
-            "tmp, /run/user (the session socket door), and the home are the three tmpfs mounts: {args:?}"
+            4,
+            "tmp, /run/user and /run/dbus (the socket doors), and the home are the four tmpfs mounts: {args:?}"
         );
         assert_eq!(args[tmpfses[0] + 1], "/tmp");
         assert_eq!(args[tmpfses[1] + 1], "/run/user");
-        assert_eq!(args[tmpfses[2] + 1], "/var/home/x");
+        assert_eq!(args[tmpfses[2] + 1], "/run/dbus");
+        assert_eq!(args[tmpfses[3] + 1], "/var/home/x");
         let bind_at = args.iter().position(|a| a == "--bind").unwrap();
         // Later mounts win: the cwd bind must come after the tmpfs
         // home, or the project directory would be empty too.
-        assert!(tmpfses[2] < bind_at, "{args:?}");
+        assert!(tmpfses[3] < bind_at, "{args:?}");
         assert!(
             args.windows(2).any(|w| w == ["--unshare-pid", "--proc"] || w == ["--proc", "--unshare-pid"]),
             "the process namespace is unshared, so /proc shows the sandbox's own processes: {args:?}"

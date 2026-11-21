@@ -13,6 +13,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
@@ -44,10 +45,15 @@ pub fn default_socket_path() -> Result<PathBuf> {
 
 /// Bind the listening socket: unlink a stale path first (a daemon that
 /// died without cleanup must not wedge the next one), bind, chmod 0600.
+/// The unlink is unconditional, not check-then-remove: between an
+/// `exists()` and the remove, a planted path lands exactly in the
+/// blind spot — remove-then-bind treats NotFound as the fresh state
+/// it is and refuses to act on anything it did not observe.
 pub fn bind(path: &Path) -> Result<UnixListener> {
-    if path.exists() {
-        std::fs::remove_file(path)
-            .with_context(|| format!("removing the stale socket at {}", path.display()))?;
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(anyhow!("removing the stale socket at {}: {e}", path.display())),
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -64,22 +70,42 @@ pub fn bind(path: &Path) -> Result<UnixListener> {
 /// one thread with a tokio runtime of its own; the daemon behind them
 /// is a mutex, because the verbs are short and the vault's answer must
 /// be the vault's truth.
+///
+/// Connections are capped: every accept is a thread and a runtime, and
+/// the socket's clients are this user's CLI and panel — a handful. A
+/// loop that spawns per accept, against a socket a local process can
+/// hammer, is a thread-flood the peer gate cannot see (the peers are
+/// the user's own, by definition).
 pub fn serve<S: SecretStore + Send + 'static>(
     listener: UnixListener,
     daemon: Arc<Mutex<Daemon<S>>>,
 ) {
+    const MAX_CONNECTIONS: usize = 64;
+    let live = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                let daemon = daemon.clone();
                 if !peer_is_self(&stream) {
                     eprintln!("kuma-nostrd: refused a peer that is not this user");
                     continue;
                 }
+                // The cap, checked at accept: a refused connection's
+                // client sees the hangup — the same end a wedged
+                // daemon would give it, minus the wedge.
+                if live.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
+                    live.fetch_sub(1, Ordering::SeqCst);
+                    eprintln!(
+                        "kuma-nostrd: connection cap ({MAX_CONNECTIONS}) full; refusing a connection"
+                    );
+                    continue;
+                }
+                let daemon = daemon.clone();
+                let live = live.clone();
                 std::thread::spawn(move || {
                     if let Err(e) = one_connection(stream, daemon) {
                         eprintln!("kuma-nostrd: connection ended: {e}");
                     }
+                    live.fetch_sub(1, Ordering::SeqCst);
                 });
             }
             Err(e) => {

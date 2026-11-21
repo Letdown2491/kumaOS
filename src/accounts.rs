@@ -182,20 +182,14 @@ fn heal_from(
         // immutable bit), and the heal stopping loudly names it.
         std::fs::set_permissions(machine_users_d, std::fs::Permissions::from_mode(0o700))
             .context("cannot tighten the machine account directory to 0700")?;
-        let tmp = machine_users_d.join(format!(".{name}.kuma-heal"));
-        // A tmp a kill left behind would make create_new refuse this
-        // and every later heal.
-        let _ = std::fs::remove_file(&tmp);
-        (|| -> std::io::Result<()> {
-            let mut f =
-                std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
-            use std::io::Write as _;
-            f.write_all(account_file(name, extra).as_bytes())?;
-            f.sync_all()?;
-            drop(f);
-            std::fs::rename(&tmp, &file)
-        })()
-        .context("cannot write the heal's account file")?;
+        // The shared private write rather than a hand-rolled tmp: the
+        // heal's tmp name used to be a fixed `.NAME.kuma-heal`, which a
+        // planted symlink could race the remove-then-create around.
+        // write_private creates at 0600 with O_NOFOLLOW and renames
+        // into place — the same discipline the nostr state files and
+        // kuma.lock keep.
+        kuma::write_private(&file, &account_file(name, extra))
+            .context("cannot write the heal's account file")?;
         moved.push(format!(
             "{name}: the ride names this account and no dropin carries \
                             it; the converger's machine-state loop will"
@@ -327,8 +321,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let machine = dir.path().join("machine-users.d");
         std::fs::create_dir_all(&machine).unwrap();
-        // What a kill between write and rename leaves behind.
-        let tmp = machine.join(".deltauser.kuma-heal");
+        // What a kill between write and rename leaves behind, under
+        // the shared private write's tmp naming.
+        let tmp = machine.join(".deltauser.kuma-tmp");
         std::fs::write(&tmp, "half").unwrap();
         let text = ride("[other_users.deltauser]\npassword_hash = \"$6$hash\"\n");
         heal_from(Some(&text), &dir.path().join("no-image"), &machine).unwrap();

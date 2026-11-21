@@ -460,7 +460,20 @@ fn render(value: &serde_json::Value) -> Result<()> {
                 println!(
                     "{}  {}  {}  {}",
                     entry["at"].as_u64().unwrap_or(0),
-                    entry["app"].as_str().unwrap_or("?").get(..16).unwrap_or("?").to_string() + "…",
+                    // Char-boundary truncation: `get(..16)` on a
+                    // multi-byte value never failed, but the fallback
+                    // traded the whole field for a bare "?" — take
+                    // chars instead, ellipsis only when something was
+                    // cut.
+                    {
+                        let app = entry["app"].as_str().unwrap_or("?");
+                        let short: String = app.chars().take(16).collect();
+                        if app.chars().count() > 16 {
+                            format!("{short}…")
+                        } else {
+                            short
+                        }
+                    },
                     entry["summary"].as_str().unwrap_or("?"),
                     entry["verdict"].as_str().unwrap_or("?")
                 );
