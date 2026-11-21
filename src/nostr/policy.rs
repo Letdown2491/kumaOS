@@ -103,7 +103,10 @@ fn is_sensitive(method: &NostrConnectMethod, params: &[String]) -> bool {
                 params.first().and_then(|json| blossom_auth_verb(json)).as_deref(),
                 Some("get" | "upload" | "list")
             ),
-            Some(kind) => !SAFE_KINDS.contains(&(kind as u16)),
+            // try_from, not `as u16`: `as` truncates, so 65536 + 1 or
+            // 65536 + 24242 would alias SAFE_KINDS (and skip the
+            // Blossom delete check above).
+            Some(kind) => !u16::try_from(kind).is_ok_and(|k| SAFE_KINDS.contains(&k)),
             None => true,
         },
         _ => false,
@@ -799,8 +802,9 @@ impl Engine {
         };
         if matches!(decision, Decision::Allow) {
             if let Some(duration) = remember {
-                let key = remember_key(&prompt.app, &prompt.method);
-                inner.remembered.insert(key, unix_now() + duration.as_secs());
+                if let Some(key) = remember_key(&prompt.app, &prompt.method, &prompt.params) {
+                    inner.remembered.insert(key, unix_now() + duration.as_secs());
+                }
             }
         }
         // The channel is the single arbiter of who decides: a send
@@ -890,10 +894,9 @@ impl super::bunker::Gate for Engine {
             // expired entry answers the same as an absent one, but a
             // map that is only ever consulted is never only grown.
             inner.remembered.retain(|_, until| *until > unix_now());
-            let trusted_here = inner
-                .remembered
-                .get(&remember_key(app, method))
-                .is_some_and(|until| *until > unix_now());
+            let trusted_here = remember_key(app, method, params).is_some_and(|key| {
+                inner.remembered.get(&key).is_some_and(|until| *until > unix_now())
+            });
             let allowed_without_asking =
                 trusted_everywhere || trusted_here || (level == Level::Basic && !sensitive);
             if allowed_without_asking {
@@ -1150,8 +1153,25 @@ fn summarize(method: &NostrConnectMethod, params: &[String]) -> String {
     }
 }
 
-fn remember_key(app: &PublicKey, method: &NostrConnectMethod) -> String {
-    format!("{}:{method:?}", app)
+/// Scope remembered standing grants so `SignEvent` remembers only the
+/// specific event kind (and for kind 24242 Blossom auth, the specific
+/// `t` verb). Without this scoping, remembering a harmless kind-1 note
+/// would silently approve sensitive kinds (profile, contacts, deletes,
+/// relay lists, Blossom delete) for the full remember window.
+fn remember_key(app: &PublicKey, method: &NostrConnectMethod, params: &[String]) -> Option<String> {
+    match method {
+        NostrConnectMethod::SignEvent => {
+            let json = params.first()?;
+            let kind = u16::try_from(event_kind(json)?).ok()?;
+            if kind == 24242 {
+                let verb = blossom_auth_verb(json)?;
+                Some(format!("{app}:{method:?}:{kind}:{verb}"))
+            } else {
+                Some(format!("{app}:{method:?}:{kind}"))
+            }
+        }
+        _ => Some(format!("{app}:{method:?}")),
+    }
 }
 
 pub(crate) fn unix_now() -> u64 {
@@ -1427,6 +1447,80 @@ mod tests {
         assert!(matches!(second, Decision::Allow));
         assert!(engine.prompts().is_empty());
         assert!(engine.activity().iter().any(|e| e.verdict.contains("remembered")));
+    }
+
+    #[tokio::test]
+    async fn remember_sign_event_is_scoped_to_event_kind_and_blossom_verb() {
+        let engine = engine();
+        let app = app();
+
+        // Approve a harmless kind-1 note with --remember.
+        let note = vec![r#"{"kind":1,"content":"hello"}"#.to_string()];
+        let engine_for_ask = engine.clone();
+        let note_for_ask = note.clone();
+        let ask = tokio::spawn(async move {
+            engine_for_ask.decide(&app, &NostrConnectMethod::SignEvent, &note_for_ask).await
+        });
+        tokio::task::yield_now().await;
+        engine.approve(&engine.prompts()[0].id, Some(Duration::from_secs(3600))).unwrap();
+        assert!(matches!(ask.await.unwrap(), Decision::Allow));
+
+        // Another kind-1 note rides the remembered grant without asking.
+        let second_note = engine.decide(&app, &NostrConnectMethod::SignEvent, &note).await;
+        assert!(matches!(second_note, Decision::Allow));
+        assert!(engine.prompts().is_empty());
+
+        // A sensitive kind-0 profile write MUST still prompt, not ride
+        // the kind-1 remember grant.
+        let engine_for_profile = engine.clone();
+        let profile_ask = tokio::spawn(async move {
+            engine_for_profile.decide(&app, &NostrConnectMethod::SignEvent, &profile_write()).await
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(engine.prompts().len(), 1, "kind-0 must still prompt after remembering kind-1");
+        engine.deny(&engine.prompts()[0].id).unwrap();
+        assert!(matches!(profile_ask.await.unwrap(), Decision::Deny(_)));
+
+        // Remembering Blossom upload (kind 24242, t=upload) must not
+        // auto-approve Blossom delete (kind 24242, t=delete).
+        let upload = vec![r#"{"kind":24242,"tags":[["t","upload"]]}"#.to_string()];
+        let delete = vec![r#"{"kind":24242,"tags":[["t","delete"]]}"#.to_string()];
+        let engine_for_upload = engine.clone();
+        let upload_ask = tokio::spawn(async move {
+            engine_for_upload.decide(&app, &NostrConnectMethod::SignEvent, &upload).await
+        });
+        tokio::task::yield_now().await;
+        engine.approve(&engine.prompts()[0].id, Some(Duration::from_secs(3600))).unwrap();
+        assert!(matches!(upload_ask.await.unwrap(), Decision::Allow));
+
+        let engine_for_delete = engine.clone();
+        let delete_ask = tokio::spawn(async move {
+            engine_for_delete.decide(&app, &NostrConnectMethod::SignEvent, &delete).await
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(
+            engine.prompts().len(),
+            1,
+            "blossom delete must still prompt after remembering blossom upload"
+        );
+        engine.deny(&engine.prompts()[0].id).unwrap();
+        assert!(matches!(delete_ask.await.unwrap(), Decision::Deny(_)));
+    }
+
+    #[test]
+    fn out_of_range_event_kind_is_sensitive_and_never_aliases_safe_kinds() {
+        assert!(!is_sensitive(&NostrConnectMethod::SignEvent, &[r#"{"kind":1}"#.to_string()]));
+        assert!(
+            is_sensitive(&NostrConnectMethod::SignEvent, &[r#"{"kind":65537}"#.to_string()]),
+            "65536 + 1 must not truncate to safe kind 1"
+        );
+        assert!(
+            is_sensitive(
+                &NostrConnectMethod::SignEvent,
+                &[r#"{"kind":89778,"tags":[["t","delete"]]}"#.to_string()]
+            ),
+            "65536 + 24242 must not truncate to safe kind 24242 or skip the Blossom delete check"
+        );
     }
 
     #[tokio::test]
