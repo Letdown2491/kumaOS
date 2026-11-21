@@ -1100,7 +1100,10 @@ fn redact_declaration(text: &str) -> Option<String> {
     // declaration over it would be its own kind of wrong.
     let survived = out.lines().any(|line| {
         let Some((key, _)) = line.split_once('=') else { return false };
-        let key = key.trim().trim_matches('"');
+        // TOML spells bare keys bare, but quoted keys ride in both
+        // quote flavors: 'password_hash' and "password_hash" are the
+        // same key to the parser, and the redactor refuses neither.
+        let key = key.trim().trim_matches(['"', '\'']);
         SECRET_KEYS.contains(&key) && !line.contains(REDACTED)
     });
     if survived {
@@ -2990,10 +2993,19 @@ fn prune_command(lines: &[(String, String)], home: Option<&std::path::Path>) -> 
         .iter()
         .map(|(mime, handler)| format!(r"'\#^{}={};\?$#d'", sed_bre(mime), sed_bre(handler)))
         .collect();
+    // The fallback spells ~ because a tilde inside quotes does not
+    // expand — the single-quoted absolute path is quoted (with any
+    // embedded single quote escaped), the tilde fallback is left bare
+    // for the shell to expand.
     let target = home
-        .map(|h| h.join(".config/mimeapps.list").display().to_string())
+        .map(|h| {
+            format!(
+                "'{}'",
+                h.join(".config/mimeapps.list").display().to_string().replace('\'', r"'\''")
+            )
+        })
         .unwrap_or_else(|| "~/.config/mimeapps.list".to_string());
-    format!("sed -i -e {} '{}'", drops.join(" -e "), target)
+    format!("sed -i -e {} {}", drops.join(" -e "), target)
 }
 
 fn sed_bre(text: &str) -> String {
@@ -3049,7 +3061,9 @@ mod mime_tests {
             "sed -i -e '\\#^text/plain=org\\.gnome\\.Nautilus\\.desktop;\\?$#d' \
              '/var/home/myuser/.config/mimeapps.list'"
         );
-        // Two dead lines ride as two -e expressions, one command.
+        // Two dead lines ride as two -e expressions, one command. The
+        // fallback target rides bare: a tilde inside quotes does not
+        // expand, and ~ is the whole point of the fallback.
         let two = prune_command(
             &[("text/plain".into(), "a.desktop".into()), ("image/png".into(), "b.desktop".into())],
             None,
@@ -3057,7 +3071,7 @@ mod mime_tests {
         assert_eq!(
             two,
             "sed -i -e '\\#^text/plain=a\\.desktop;\\?$#d' \
-             -e '\\#^image/png=b\\.desktop;\\?$#d' '~/.config/mimeapps.list'"
+             -e '\\#^image/png=b\\.desktop;\\?$#d' ~/.config/mimeapps.list"
         );
         // The escape-injection facet: the fields are FILE TEXT from a
         // user-writable file. Control characters left at plain(), BRE
@@ -3070,8 +3084,18 @@ mod mime_tests {
         let hostile =
             prune_command(&[("application/x-`id`.type".into(), "a$(reboot).desktop".into())], None);
         assert!(hostile.starts_with("sed -i -e '\\#^application/x-`id`"));
-        assert!(hostile.ends_with("'~/.config/mimeapps.list'"));
-        assert_eq!(hostile.matches('\'').count(), 4, "only the two quoting pairs");
+        assert!(hostile.ends_with("~/.config/mimeapps.list"));
+        assert_eq!(hostile.matches('\'').count(), 2, "only the one -e quoting pair");
+        // A home directory carrying a single quote escapes it instead of
+        // breaking out of the single-quoted path.
+        let quoted_home = prune_command(
+            &[("text/plain".into(), "a.desktop".into())],
+            Some(std::path::Path::new("/var/home/o'brien")),
+        );
+        assert!(
+            quoted_home.ends_with(r"'/var/home/o'\''brien/.config/mimeapps.list'"),
+            "embedded single quotes in home path are shell-escaped: {quoted_home}"
+        );
     }
 }
 
@@ -4394,9 +4418,6 @@ fn signature_key_for(policy_text: &str, repo: &str) -> Option<String> {
 /// it. The cost is that a scope buried in a comment would count; the
 /// alternative was a check that failed working machines.
 fn sigstore_attachments_cover(text: &str, repo: &str) -> bool {
-    if !text.contains("use-sigstore-attachments") {
-        return false;
-    }
     // Every prefix of the repository that could legally be a scope, plus
     // the catch-all, so the widest working configuration still passes.
     let mut scopes = vec!["default-docker".to_string()];
@@ -4404,9 +4425,36 @@ fn sigstore_attachments_cover(text: &str, repo: &str) -> bool {
     for n in 1..=parts.len() {
         scopes.push(parts[..n].join("/"));
     }
-    text.lines()
-        .map(|l| l.trim().trim_end_matches(':').trim())
-        .any(|key| scopes.iter().any(|s| s == key))
+    // Track the indentation of a matching scope block so an unrelated
+    // sibling registry carrying `use-sigstore-attachments: true` cannot
+    // satisfy a matching scope that omits or disables it.
+    let mut active_indent: Option<usize> = None;
+    for raw in text.lines() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = raw.len() - raw.trim_start().len();
+        if let Some(scope_indent) = active_indent {
+            if indent > scope_indent {
+                if let Some((k, v)) = trimmed.split_once(':') {
+                    let val = v.split('#').next().unwrap_or("").trim();
+                    if k.trim() == "use-sigstore-attachments" && val == "true" {
+                        return true;
+                    }
+                }
+                continue;
+            }
+            active_indent = None;
+        }
+        if let Some(key) = trimmed.strip_suffix(':') {
+            let key = key.trim().trim_matches(['"', '\'']);
+            if scopes.iter().any(|s| s == key) {
+                active_indent = Some(indent);
+            }
+        }
+    }
+    false
 }
 
 fn check_signature_policy(report: &mut impl FnMut(Grade, &str, String, Option<Action>)) {
@@ -5865,6 +5913,27 @@ mod tests {
             repo
         ));
         assert!(!sigstore_attachments_cover(&format!("docker:\n  {repo}:\n    x: y\n"), repo));
+        // The value is the answer: an explicit false under a matching
+        // scope is a refusal, not coverage — a contains() over the key
+        // alone read exactly that as covered (adversarial review).
+        assert!(!sigstore_attachments_cover(
+            &format!("docker:\n  {repo}:\n    use-sigstore-attachments: false\n"),
+            repo
+        ));
+        // A sibling registry's `use-sigstore-attachments: true` does
+        // not cover our repo when our own scope disables or omits it.
+        assert!(!sigstore_attachments_cover(
+            &format!(
+                "docker:\n  ghcr.io/somebody-else:\n    use-sigstore-attachments: true\n  {repo}:\n    use-sigstore-attachments: false\n"
+            ),
+            repo
+        ));
+        assert!(!sigstore_attachments_cover(
+            &format!(
+                "docker:\n  {repo}:\n    x: y\n  ghcr.io/somebody-else:\n    use-sigstore-attachments: true\n"
+            ),
+            repo
+        ));
     }
 
     /// The file kuma actually ships has to satisfy the check kuma
