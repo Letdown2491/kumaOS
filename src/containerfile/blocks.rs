@@ -553,6 +553,16 @@ After=graphical-session-pre.target
 ExecStart=/usr/bin/gnome-keyring-daemon --start --foreground --components=secrets
 Restart=on-failure
 RestartSec=2s
+Slice=session.slice
+
+[Install]
+# The graphical session, the same trigger as the bunker's: PAM's unlock
+# happens at login auth, strictly before this target starts, and an ssh
+# or serial login — which runs no PAM unlock — must not start this unit
+# at all. A non-graphical login that started it would put a locked daemon
+# on the bus, and the day's later graphical login could never register
+# the unlocked one behind it.
+WantedBy=graphical-session.target
 "#;
 
 /// The preset that turns the keyring adopt on for every account: the

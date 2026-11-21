@@ -4427,6 +4427,67 @@ smoke_boot() {
     [ -z "$failed" ] || bad "failed units: $(echo "$failed" | tr '\n' ' ')"
     ok "no failed units"
 
+    # ---- the keyring chain ----
+    # The 45.7.0 lesson (#116): an image-level keyring change validated by
+    # build gates alone shipped a desktop whose bunker could not read its
+    # keyring, and the fact only surfaced as a warn on a real machine's
+    # first boot. This lap replays the load-bearing half of a login inside
+    # this guest, with the same argv the real chain runs, and asserts
+    # every link: PAM's spawn (`--daemonize --login`, the password on
+    # stdin — the kuma account's, the same one gsudo uses), then the adopt
+    # unit, then the collection's Locked property through the bus name.
+    # A locked `false` here means the adoption PRESERVED the unlock — the
+    # one mechanism no offline check can see and the exact link a hand
+    # test on a live machine left in doubt.
+    #
+    # Order matters, and each step is asserted in its turn. The whole
+    # lap is the desktop faces' own: minimal ships no keyring, and a
+    # missing unit file is the face's honest answer, not a failure.
+    if guest 'test -f /usr/lib/systemd/user/kuma-keyring.service'; then
+    local value
+    # The adopt must not run on a non-graphical login. WantedBy=
+    # graphical-session.target is what keeps an ssh session from putting
+    # a locked daemon on the bus — a squat that would lock out the day's
+    # later graphical login's PAM unlock for good.
+    value=$(guest 'systemctl --user is-active kuma-keyring.service')
+    [ "$value" = "inactive" ] || bad "kuma-keyring.service is '$value' on an ssh login; it must start only with the graphical session"
+    ok "the adopt unit did not start on an ssh login"
+    # The preset enablement reached the account: a unit whose [Install]
+    # section is missing or whose preset file lost the enable line fails
+    # here, and used to fail SILENTLY — preset on a unit with no
+    # [Install] section enables nothing and the gap only shows at the
+    # graphical login this stage cannot otherwise see.
+    value=$(guest 'systemctl --user is-enabled kuma-keyring.service')
+    [ "$value" = "enabled" ] || bad "kuma-keyring.service is '$value' for the booted account; the preset did not reach it"
+    ok "the adopt unit is enabled for the account"
+    # PAM's half of the login, byte-for-byte the greetd stack's spawn.
+    guest 'printf "%s" kuma | gnome-keyring-daemon --daemonize --login' \
+        || bad "the PAM-equivalent keyring spawn failed"
+    sleep 2
+    # The adopt, byte-for-byte the unit's own ExecStart.
+    guest 'systemctl --user start kuma-keyring.service' \
+        || bad "kuma-keyring.service failed to start"
+    guest 'systemctl --user is-active kuma-keyring.service' >/dev/null \
+        || bad "kuma-keyring.service is not active after start"
+    # The verdict: the login collection answers through the bus name, and
+    # it is UNLOCKED — the unlock survived the adoption. A locked or
+    # absent collection here is the 45.7.0 regression in miniature.
+    value=$(guest 'busctl --user get-property org.freedesktop.secrets /org/freedesktop/secrets/aliases/default org.freedesktop.Secret.Collection Locked')
+    [ "$value" = "b false" ] || bad "the login collection reports Locked '$value' after the adopt (wanted: b false)"
+    ok "the PAM unlock survived the adopt: the collection is unlocked on the bus"
+    # The bunker link, since it is the warn the machine actually showed:
+    # started after the unlock — the ordering a graphical login gives it —
+    # its journal must carry no Secret Service failure at all.
+    guest 'systemctl --user start kuma-nostrd.service' \
+        || bad "kuma-nostrd.service failed to start"
+    sleep 4
+    value=$(guest 'journalctl --user -u kuma-nostrd.service --since "-2 min" --no-pager | grep -c "Secret Service" || true')
+    [ "${value:-0}" -eq 0 ] || bad "the bunker's journal carries Secret Service failures after an unlocked adopt"
+    ok "the bunker answered its startup asks with no Secret Service failure"
+    else
+        note "keyring lap skipped: this face ships no kuma-keyring.service"
+    fi
+
     # ---- the hardening floor ----
     # The image's own posture, asserted from the guest so a quiet
     # regression reports itself. The sysctl values mirror
