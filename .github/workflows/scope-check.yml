@@ -6,7 +6,21 @@
 # than to untangle at review.
 #
 # No Scope line is not a failure: the convention is new, and an
-# unscoped PR earns a notice instead of a gate. The job needs no
+# unscoped PR earns a notice instead of a gate. Two things are gates,
+# and both are loud: changed files outside every declared prefix, and
+# MORE THAN ONE Scope: line — the grep matches any line starting with
+# Scope:, including one quoted inside a fenced code block (a PR
+# documenting the convention would otherwise widen its own gate by
+# illustrating it), so ambiguity fails closed instead of unioning.
+#
+# Known boundary, stated rather than hidden: this job triggers on
+# pull_request only, so a direct push to main faces no scope check.
+# Within this repo's rules a push to main is a deliberate act by the
+# one account that owns the tree; the convention lives in
+# CONTRIBUTING.md ("Pull request scope"), which is also where a
+# future enforcement change would be argued.
+#
+# The job needs no
 # third-party action: the diff comes from git, the body from the
 # event payload read through an env indirection (never interpolated
 # into shell — a PR body is attacker-controlled text, and this repo's
@@ -41,14 +55,26 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          # Count first: every line starting with Scope: counts —
+          # including one inside a code fence, which is exactly the
+          # quoted-scope shape that must not union silently.
+          scope_lines=$(printf '%s\n' "$PR_BODY" | grep -c -E '^[[:space:]]*Scope:' || true)
+          if [ "$scope_lines" -gt 1 ]; then
+            echo "::error::more than one Scope: line in the PR body ($scope_lines) — declare one line, comma-separated, or indent a quoted example so it does not start the line"
+            exit 1
+          fi
+          if [ "$scope_lines" -eq 0 ]; then
+            echo "::notice title=scope check::no Scope: line in the PR body; the convention is new and nothing is enforced yet"
+            exit 0
+          fi
           printf '%s\n' "$PR_BODY" | grep -E '^[[:space:]]*Scope:' \
             | sed 's/^[[:space:]]*Scope:[[:space:]]*//' | tr ',' '\n' \
             | sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's:/*$::' \
-            | sed '/^$/d' > scopes.txt || true
+            | sed '/^$/d' > scopes.txt
           git diff --name-only "$BASE...$HEAD" > changed.txt
 
           if [ ! -s scopes.txt ]; then
-            echo "note: no Scope: line in the PR body; the convention is new and nothing is enforced yet" >&2
+            echo "::notice title=scope check::the body's Scope: line declares no paths; nothing is enforced yet"
             exit 0
           fi
 

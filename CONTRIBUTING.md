@@ -72,13 +72,15 @@ $ scripts/test.sh --test golden     # any cargo test filter
 ```
 
 CI runs formatting, tests, clippy at `-D warnings`, shellcheck, actionlint,
-and the image stage on every committed example, desktops included. That
-covers the compose and both desktop arms, so the build-time guards in them
-run on a push.
+the dependency audit, the doc tests, and the image stage on every committed
+example, desktops included. That covers the compose and both desktop arms,
+so the build-time guards in them run on a push.
 
 The `boot`, `boot-delta`, `install`, `hibernate`, `dead-disk`, and `iso`
-jobs run there
-too, for pushes to main and on a daily schedule. All of them ride the niri
+jobs are the heavy tier: they run on a daily schedule and on a manual
+dispatch, never on a push (the tier switch at the top of `ci.yml` decides;
+a push gate that slow would be ignored within a week). All of them ride the
+niri
 example except `dead-disk`, which builds a declaration of its own so the
 restore has a machine to bring back; `boot-delta` is `boot` plus the delta
 lap, kept as a separate job so a failure names the question it failed. They
@@ -87,7 +89,10 @@ grounds that they need KVM and sudo, which turned out to be one udev rule:
 a hosted runner has `/dev/kvm` and the runner user is simply not in the
 `kvm` group. The daily run exists because the base kuma builds on moves
 without anyone pushing, so a boot can break on a tree that was green
-yesterday. COSMIC is built on every push and not booted; that is what
+yesterday — and the daily run's ledger job reads every verdict the
+schedule can produce, heavy laps and fast tier alike, and counts a
+`skipped` lap as red, because a skipped lap is a failed precondition
+wearing a shrug. COSMIC is built on every push and not booted; that is what
 calling it experimental means here.
 
 `published.yml` is separate: it installs and boots what is on the registry,
@@ -145,8 +150,28 @@ identity. Dependabot raises the bumps; reviewing the diff between two SHAs
 is the review.
 
 A separate job runs `cargo audit` against the committed `Cargo.lock`, on every
-push and again weekly, because a dependency becomes vulnerable when the
+push and again on the daily heartbeat, because a dependency becomes
+vulnerable when the
 advisory lands rather than when someone next touches the tree.
+
+## Pull request scope
+
+A pull request declares the area it touches with a `Scope:` line at the
+start of a line in its body — `Scope: src/nostr/, .github/workflows/release.yml`
+— and the `scope-check` workflow fails if any changed file sits outside
+every declared prefix. The rules of the line: exactly one `Scope:` line
+(two is a gate, not a union — a second line inside a code fence is
+illustration, and the check cannot tell quotation from declaration);
+comma-separated paths; trailing slashes optional. No `Scope:` line earns a
+notice, not a gate, while the convention settles. Direct pushes to main
+face no scope check by design — a push to main is the deliberate act this
+workflow exists to make reviewable in advance, not to police in hindsight.
+
+## Release notes
+
+The changelog is the release's record and needs no companion document: if a
+release is worth announcing, the announcement is written from the changelog
+at announcement time and lives wherever the announcement lives.
 
 **Changing the declaration's shape.** New fields inside a known section
 defend themselves — `deny_unknown_fields` makes an older kuma refuse them on

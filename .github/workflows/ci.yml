@@ -196,9 +196,15 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
-          tool: cargo-nextest
+          # Pinned, not floated: the ci profile's flaky-result = "fail"
+          # needs nextest >= 0.9.131 (March 2026), and this repo's own
+          # doctrine elsewhere is that a moving tag must not decide
+          # what a gate means. This is the one tool whose version
+          # defines the flaky policy, so it gets the same treatment
+          # every other pin in this file gets.
+          tool: cargo-nextest@0.9.152
       - run: cargo fmt --check
       # nextest runs the unit/integration battery under the ci profile
       # (two retries; a flaky pass is an explicit FAIL — see
@@ -766,7 +772,15 @@ jobs:
   # shape a person can mute without going blind.
   ledger:
     runs-on: ubuntu-24.04
-    needs: [when, boot, boot-delta, upgrade-fallback, install, hibernate, dead-disk, iso, doc-tests]
+    # Everything the schedule can turn red: the six heavy laps, the
+    # sibling build they all precondition on, and the fast tier's
+    # test/interop/audit/doc-tests, which run on the same schedule.
+    # siblings is the load-bearing one: when it fails, every heavy lap
+    # reports "skipped" — and a verdict that reads skipped as green is
+    # the #99 class in its worst form, a false green published to the
+    # thread. The red counter below counts skipped, and the audit's
+    # Nov 2026 full-audit flagged exactly that shape here.
+    needs: [when, siblings, test, interop, doc-tests, audit, boot, boot-delta, upgrade-fallback, install, hibernate, dead-disk, iso]
     if: >-
       always() &&
       needs.when.outputs.heavy == 'true' &&
@@ -791,7 +805,10 @@ jobs:
           title="[nightly] main's boot laps went red"
           number=$(gh issue list -R "$REPO" --state open --search "$title in:title" --json number --jq '.[0].number' || true)
           verdicts=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.key != "when") | "\(.key): \(.value.result)"] | join(", ")')
-          red=$(echo "$NEEDS" | jq '[to_entries[] | select(.key != "when") | .value.result | select(. == "failure" or . == "cancelled")] | length')
+          # skipped counts as red: it means a precondition lap failed
+          # and this lap never ran, which is a red night wearing a
+          # shrug — never a green one.
+          red=$(echo "$NEEDS" | jq '[to_entries[] | select(.key != "when") | .value.result | select(. == "failure" or . == "cancelled" or . == "skipped")] | length')
           if [ "$red" -gt 0 ]; then
             body="the nightly battery went red at $(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
