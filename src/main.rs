@@ -4998,10 +4998,17 @@ fn sync_image_to_root(tag: &str) -> Result<String> {
             "bash",
             "-c",
             &format!(
-                "set -o pipefail; podman save --format oci-archive {tag} | sudo podman load \
+                // The tag is a CLI argument, so it arrives in the shell
+                // string quoted — the same courtesy vm_apply extends
+                // over ssh. An unquoted interpolation lets the
+                // argument's own characters split the command, and this
+                // one runs its second half under sudo.
+                "set -o pipefail; podman save --format oci-archive {} | sudo podman load \
                  && sudo podman rm -f kuma-sync-unpack \
-                 && sudo podman create --name kuma-sync-unpack {tag} true \
-                 && sudo podman rm -f kuma-sync-unpack"
+                 && sudo podman create --name kuma-sync-unpack {} true \
+                 && sudo podman rm -f kuma-sync-unpack",
+                shell_quote(tag),
+                shell_quote(tag)
             ),
         ])?;
         // The load re-tagged the NEW image, which strands the copy root
