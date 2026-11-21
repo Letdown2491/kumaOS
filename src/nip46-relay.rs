@@ -847,10 +847,13 @@ mod tests {
         plain(&mut conn).set_read_timeout(Some(BEAT)).unwrap();
 
         let oversized = "x".repeat(MAX_FRAME_BYTES + 1);
-        conn.send(Message::text(oversized)).unwrap();
-        // The server's read of the frame errors on the cap, and the
-        // connection ends: the next read on the client side sees the
-        // close rather than an answer.
+        // The send is allowed to fail: the server rejects the frame at
+        // the cap and closes, and the reset can land mid-write — the
+        // connection ending is the assertion, and it may surface on
+        // the write side before the read loop below sees it. (The
+        // rolling lap's musl runner lost this race; the glibc runner
+        // won it. A race is not a pass/fail.)
+        let _ = conn.send(Message::text(oversized));
         let mut saw_close = false;
         for _ in 0..10 {
             match conn.read() {

@@ -711,8 +711,16 @@ mod tests {
         assert!(script.contains("*=*)"), "a line without = refuses: {script}");
         assert!(script.contains("\"\"|[0-9]*"), "empty and digit-led keys refuse: {script}");
         for key in [
-            "PATH", "HOME", "SHELL", "IFS", "USER", "LOGNAME", "RESTIC_PASSWORD_COMMAND", "LD_",
-            "BASH_ENV", "ENV",
+            "PATH",
+            "HOME",
+            "SHELL",
+            "IFS",
+            "USER",
+            "LOGNAME",
+            "RESTIC_PASSWORD_COMMAND",
+            "LD_",
+            "BASH_ENV",
+            "ENV",
         ] {
             assert!(script.contains(key), "the loop must refuse {key}: {script}");
         }

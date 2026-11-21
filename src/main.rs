@@ -5522,7 +5522,10 @@ mod tests {
     #[test]
     fn the_sudo_note_fires_for_the_implicit_local_shape_and_nothing_else() {
         // (implicit, resolved_local, sudo_user, root) -> warrants
-        assert!(sudo_note_warrants(true, true, true, true), "the shape: implicit, local, root under sudo");
+        assert!(
+            sudo_note_warrants(true, true, true, true),
+            "the shape: implicit, local, root under sudo"
+        );
         // Anything explicit is already an acknowledgment.
         assert!(!sudo_note_warrants(false, true, true, true));
         // Not a root process: nothing to warn about.
