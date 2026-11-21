@@ -935,7 +935,7 @@ impl Config {
             // wanting and is tracked, not smuggled into this one.
             if matches!(self.system.desktop, Desktop::None) {
                 bail!(
-                    "nostr.enable requires a desktop: the bunker's unit is a user unit \\
+                    "nostr.enable requires a desktop: the bunker's unit is a user unit \
                      under the graphical session, and a headless machine has none"
                 );
             }
@@ -945,7 +945,7 @@ impl Config {
             match self.nostr.inactivity_lock_secs {
                 None | Some(0) => {}
                 Some(secs) if secs < 3600 => bail!(
-                    "nostr.inactivity_lock_secs is {secs}s; the floor is one hour (3600), \\
+                    "nostr.inactivity_lock_secs is {secs}s; the floor is one hour (3600), \
                      because a fuse shorter than that trips on lunch"
                 ),
                 Some(_) => {}
@@ -1076,15 +1076,15 @@ fn validate_relay(relay: &str) -> Result<()> {
             let loopback = matches!(host, "127.0.0.1" | "::1" | "localhost");
             if !loopback {
                 bail!(
-                    "nostr relay {relay:?} is ws:// to a non-loopback host: that is \\
-                     plaintext on the wire, and the metadata alone (which app, which \\
-                     bunker, how often) is not kuma's to leak. Point wss:// at it, or \\
+                    "nostr relay {relay:?} is ws:// to a non-loopback host: that is \
+                     plaintext on the wire, and the metadata alone (which app, which \
+                     bunker, how often) is not kuma's to leak. Point wss:// at it, or \
                      ws:// at 127.0.0.1, ::1, or localhost only"
                 );
             }
         }
         other => bail!(
-            "nostr relay {relay:?} has scheme {other:?}; relays are wss://, or ws:// \\
+            "nostr relay {relay:?} has scheme {other:?}; relays are wss://, or ws:// \
              to loopback only"
         ),
     }
