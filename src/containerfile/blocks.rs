@@ -307,6 +307,35 @@ pub const COSIGN_PUB_PATH: &str = "/etc/pki/containers/kuma.pub";
 /// succeed and the policy would reject every image kuma has ever
 /// published. Verified against the live registry in both directions, with
 /// the real key and with a wrong one.
+/// The nostr preset's lines, explicit both ways for each unit the
+/// image carries: a preset with no opinion leaves a unit's existing
+/// enablement standing, so a disarm must be spoken, not implied by
+/// silence. The build's nostr block and the delta's preset rewrite
+/// render both from here — the preset file is the on/off fact, and
+/// two hand-written copies of the fact is how one side's disable
+/// comes to mean the other's enable on the machine being upgraded.
+pub(crate) fn nostr_preset_lines(
+    armed_nostrd: bool,
+    armed_relay: bool,
+    carries_nostrd: bool,
+    carries_relay: bool,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if carries_nostrd {
+        lines.push(format!(
+            "{} kuma-nostrd.service",
+            if armed_nostrd { "enable" } else { "disable" }
+        ));
+    }
+    if carries_relay {
+        lines.push(format!(
+            "{} nip46-relay.service",
+            if armed_relay { "enable" } else { "disable" }
+        ));
+    }
+    lines
+}
+
 pub(crate) fn signature_policy() -> String {
     let repo = crate::published_repo();
     format!(
@@ -1616,10 +1645,13 @@ install_declared() {
 }
 converge() {
     install_declared || install_declared --no-static-deltas
-    while read -r app; do
-        grep -qxF "$app" "$declared" \
-            || flatpak uninstall --system --assumeyes --noninteractive "$app" || true
-    done < "$state"
+    # One uninstall invocation for everything the declaration dropped:
+    # per-app calls each paid a full vendor round trip, and a
+    # declaration that dropped a fleet paid a fleet of them. comm
+    # reads the installed names minus the declared ones; xargs -r
+    # skips the empty case (a declaration that dropped nothing).
+    comm -23 <(sort "$state") <(sort "$declared") \
+        | xargs -r -d '\n' flatpak uninstall --system --assumeyes --noninteractive || true
     cp "$declared" "$state"
 }
 # The state file is written only by a run that finished, so equal lists
@@ -5349,16 +5381,15 @@ fn nostr(e: &mut Emitter<'_>) {
 
     // The preset file, explicit both ways for both units: a preset with
     // no opinion leaves a unit's existing enablement standing, so the
-    // relay's disarm must be spoken, not implied by silence.
+    // relay's disarm must be spoken, not implied by silence. Rendered
+    // by the shared `nostr_preset_lines` — the delta side rewrites the
+    // same file, and two hand-written copies of the on/off fact is how
+    // one side's disable comes to mean the other's enable.
     let armed_nostrd = config.nostr.enable;
     let armed_relay = config.nostr.enable && config.nostr.relay.enable;
     let preset = e.stage(
         "50-kuma-nostr.preset",
-        format!(
-            "{} kuma-nostrd.service\n{} nip46-relay.service\n",
-            if armed_nostrd { "enable" } else { "disable" },
-            if armed_relay { "enable" } else { "disable" },
-        ),
+        nostr_preset_lines(armed_nostrd, armed_relay, true, true).join("\n") + "\n",
     );
     e.copy(&preset, "/usr/lib/systemd/user-preset/50-kuma-nostr.preset");
     // --global because the bunker is session furniture for every
@@ -5460,7 +5491,12 @@ Restart=always
 RestartSec=5
 # The daemon's ceiling, for the same reason the bunker's: a session
 # daemon that runs for weeks takes a cap, so its bugs fail loudly
-# instead of quietly eating the desktop.
+# instead of quietly eating the desktop. Reconciled with the relay's
+# queue caps, which bound COUNT (1,000 frames per connection, 512
+# connections) and not bytes: their worst case with 1 MiB frames is
+# a fantasy, but this ceiling is the honest byte bound — a peer
+# spraying oversized frames dies here at 256 MiB, loudly and per
+# unit, which is the failure shape the caps promise.
 MemoryMax=256M
 Slice=session.slice
 

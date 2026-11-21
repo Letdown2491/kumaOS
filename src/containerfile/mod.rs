@@ -884,7 +884,34 @@ mod tests {
             ),
             "the declared relays are the daemon's road, in declaration order: {unit}"
         );
-        assert!(unit.contains("ProtectSystem=strict"), "the sandbox is the point: {unit}");
+        // The hardening is a SET, not a floor: each line below was
+        // settled against what the bunker actually touches, and a
+        // line that silently drops out of the template (a reflow, a
+        // paste) should fail the suite, not the machine's posture.
+        for line in [
+            "NoNewPrivileges=yes",
+            "ProtectSystem=strict",
+            "ProtectHome=read-only",
+            "ReadWritePaths=%h/.local/state/kuma-nostr %t",
+            "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+            "PrivateTmp=yes",
+            "ProtectKernelTunables=yes",
+            "ProtectKernelModules=yes",
+            "ProtectControlGroups=yes",
+            "ProtectClock=yes",
+            "ProtectHostname=yes",
+            "LockPersonality=yes",
+            "MemoryDenyWriteExecute=yes",
+            "RestrictRealtime=yes",
+            "RestrictSUIDSGID=yes",
+            "SystemCallFilter=@system-service",
+            "SystemCallErrorNumber=EPERM",
+            "CapabilityBoundingSet=",
+            "SystemCallArchitectures=native",
+            "MemoryMax=256M",
+        ] {
+            assert!(unit.contains(line), "the sandbox is the point: {unit} lacks {line}");
+        }
         assert!(
             unit.contains("ExecStartPre=+/usr/bin/mkdir -m 0700 -p %h/.local/state/kuma-nostr"),
             "the state dir exists before the sandbox mounts, at 0700 from birth — \
@@ -913,7 +940,10 @@ mod tests {
              keep_daily = 3\nkeep_weekly = 2\nkeep_monthly = 1\n",
             dir.path(),
         );
-        for (unit, paths) in [
+        // The hardening core every convergence unit carries, asserted
+        // as a set per unit: a floor assert (`ProtectSystem=strict`
+        // alone) passes a template that silently lost its other lines.
+        for (unit, write_paths) in [
             ("kuma-backup.service", "ReadWritePaths=/var/lib/kuma /var/cache/restic"),
             (
                 "kuma-restore.service",
@@ -923,14 +953,14 @@ mod tests {
             ("kuma-brew-setup.service", "ReadWritePaths=/var/home/linuxbrew"),
         ] {
             let text = std::fs::read_to_string(dir.path().join(unit)).unwrap();
-            assert!(
-                text.contains("NoNewPrivileges=yes") && text.contains("ProtectSystem=strict"),
-                "the sandbox is the point: {unit}: {text}"
-            );
-            assert!(
-                text.contains(paths),
-                "{unit} writes exactly its settled surface ({paths}): {text}"
-            );
+            for line in
+                ["NoNewPrivileges=yes", "ProtectSystem=strict", "PrivateTmp=yes", write_paths]
+            {
+                assert!(
+                    text.contains(line),
+                    "the sandbox is the point: {unit} lacks {line}: {text}"
+                );
+            }
         }
     }
 
@@ -2147,11 +2177,13 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
         let bin = dir.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
         let script = dir.path().join("check");
-        std::fs::write(
-            &script,
-            GREETER_CHECK.replace("SECONDS + 120", "SECONDS + 4").replace("settle=3", "settle=1"),
-        )
-        .unwrap();
+        // The speed-up rides two literal replaces; if the check's text
+        // drifts, a silent no-op would run the real 120s deadline in
+        // the suite. Assert the rewrite happened.
+        let script_body =
+            GREETER_CHECK.replace("SECONDS + 120", "SECONDS + 4").replace("settle=3", "settle=1");
+        assert_ne!(script_body, GREETER_CHECK, "the test's speed-up no longer matches the check");
+        std::fs::write(&script, script_body).unwrap();
         for (name, body, want) in [
             ("healthy", "case \"$1\" in is-failed) exit 3 ;; *) exit 0 ;; esac", true),
             // is-failed answers yes: the unit gave up.
@@ -3214,7 +3246,11 @@ for a in \"$@\"; do printf '%s\\n' \"$a\"; done
     #[test]
     fn flatpak_sync_removes_only_what_it_installed() {
         assert!(FLATPAK_SYNC_SCRIPT.contains("flatpak uninstall --system"));
-        assert!(FLATPAK_SYNC_SCRIPT.contains(r#"done < "$state""#));
+        // The removal list is one uninstall invocation over the
+        // installed-minus-declared diff — the state file is still the
+        // only source of candidates, batched so a dropped fleet pays
+        // one vendor round trip.
+        assert!(FLATPAK_SYNC_SCRIPT.contains(r#"comm -23 <(sort "$state") <(sort "$declared")"#));
         assert!(
             !FLATPAK_SYNC_SCRIPT.contains("flatpak list"),
             "removal candidates must come from the state file, never from what is installed"

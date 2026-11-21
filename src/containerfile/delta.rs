@@ -552,21 +552,19 @@ pub(crate) fn compile(
             // Explicit both ways for every unit the base carries: a
             // preset with no opinion leaves a unit's existing
             // enablement standing, and the relay must not survive its
-            // own disarm by silence.
-            let mut lines: Vec<String> = Vec::new();
+            // own disarm by silence. The same renderer the build's
+            // block uses — the two sides of this file cannot drift.
+            let lines = super::blocks::nostr_preset_lines(
+                armed_nostrd,
+                armed_relay,
+                units.nostrd,
+                units.relay,
+            );
             let mut preset_units: Vec<&str> = Vec::new();
             if units.nostrd {
-                lines.push(format!(
-                    "{} kuma-nostrd.service",
-                    if armed_nostrd { "enable" } else { "disable" }
-                ));
                 preset_units.push("kuma-nostrd.service");
             }
             if units.relay {
-                lines.push(format!(
-                    "{} nip46-relay.service",
-                    if armed_relay { "enable" } else { "disable" }
-                ));
                 preset_units.push("nip46-relay.service");
             }
             let preset = e.stage("50-kuma-nostr.preset", lines.join("\n") + "\n");
@@ -961,6 +959,35 @@ mod tests {
         assert!(install.contains("amd-ucode-firmware"), "{install}");
         // The one package the release kept is already there.
         assert!(!install.contains("amd-gpu-firmware"), "{install}");
+    }
+
+    /// The preset renderer, pinned directly: the build's block and the
+    /// delta's rewrite share it, so this is the one table both sides
+    /// must keep answering. Carried-and-armed speaks enable, carried-
+    /// and-disarmed speaks disable, and nothing is ever silent — a
+    /// preset's silence leaves old links standing.
+    #[test]
+    fn the_nostr_preset_lines_speak_both_ways() {
+        let lines = |nostrd: bool, relay: bool, carries: (bool, bool)| {
+            super::super::blocks::nostr_preset_lines(nostrd, relay, carries.0, carries.1)
+        };
+        assert_eq!(
+            lines(true, true, (true, true)),
+            vec!["enable kuma-nostrd.service", "enable nip46-relay.service"]
+        );
+        assert_eq!(
+            lines(false, false, (true, true)),
+            vec!["disable kuma-nostrd.service", "disable nip46-relay.service"]
+        );
+        // Mixed: the relay disarmed under an armed daemon, the shape
+        // the disarm-by-silence bug lived in.
+        assert_eq!(
+            lines(true, false, (true, true)),
+            vec!["enable kuma-nostrd.service", "disable nip46-relay.service"]
+        );
+        // A unit the image does not carry earns no line at all.
+        assert_eq!(lines(true, true, (true, false)), vec!["enable kuma-nostrd.service"]);
+        assert!(lines(true, true, (false, false)).is_empty());
     }
 
     #[test]
