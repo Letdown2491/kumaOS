@@ -45,6 +45,16 @@ pub struct Lock {
     /// base move (`kuma update`) and the release move (`kuma upgrade`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub release: Option<Release>,
+    /// The image ID the last full build produced, in the store that
+    /// build ran against. `kuma switch` syncs "the built image" into
+    /// root's storage, and a tag name cannot identify that image — two
+    /// stores can hold different images under the same tag, which is
+    /// exactly how a month-old compose got staged over a fresh one
+    /// (#120). The record is taken from the image that just came out;
+    /// a lock without it (older schema, delta lane) leaves the sync
+    /// guessing by store instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
     pub resolved: Resolved,
 }
 
@@ -447,6 +457,10 @@ pub fn record(config_path: &Path, declared_base: &str, digest: String, tag: &str
         locked_at: utc_now(),
         base: Base { reference: declared_base.to_string(), digest },
         release: None,
+        // Asked while the image is certainly in this store — the same
+        // store `resolved_rpms` just read. A failure here costs the
+        // sync its record, not the lock its purpose.
+        image: host_output(&["podman", "image", "inspect", "--format", "{{.Id}}", tag]).ok(),
         resolved: Resolved { rpm },
     };
     let path = path_for(config_path);
@@ -468,7 +482,7 @@ pub fn record(config_path: &Path, declared_base: &str, digest: String, tag: &str
 /// The digest is validated like [`for_config`] validates a hand-edited
 /// one: it is interpolated into a FROM line, which is an injection
 /// surface like any other.
-pub fn record_release(config_path: &Path, release: Release) -> Option<Lock> {
+pub fn record_release(config_path: &Path, release: Release, tag: &str) -> Option<Lock> {
     if !is_digest(&release.digest) {
         eprintln!("release digest {:?} is malformed; no lock written", release.digest);
         return None;
@@ -481,11 +495,17 @@ pub fn record_release(config_path: &Path, release: Release) -> Option<Lock> {
             locked_at: String::new(),
             base: Base { reference: release.reference.clone(), digest: release.digest.clone() },
             release: None,
+            // A delta build re-points the release, not the image: the
+            // sync's record stays the last full build's.
+            image: None,
             resolved: Resolved { rpm: BTreeMap::new() },
         },
     };
     lock.locked_at = utc_now();
     lock.release = Some(release);
+    // A delta build also produced an image — this one — so the sync's
+    // record moves with it, not with the last full build's.
+    lock.image = host_output(&["podman", "image", "inspect", "--format", "{{.Id}}", tag]).ok();
     if let Err(err) = lock.save(&path) {
         eprintln!("{err:#}; continuing without a lock");
         return None;
@@ -541,6 +561,7 @@ mod tests {
                 digest: digest.into(),
             },
             release: None,
+            image: None,
             resolved: Resolved {
                 rpm: rpms.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect(),
             },
@@ -740,6 +761,38 @@ mod tests {
         let back = Lock::load(&path).unwrap();
         assert_eq!(back.base.digest, digest('a'));
         assert_eq!(back.resolved.rpm["fish"], "4.0.2-1.fc44.x86_64");
+    }
+
+    /// The image record drives `kuma switch`'s sync (#120): the sync
+    /// must move the image the last build produced, and a tag name
+    /// cannot say that — two stores hold different images under one
+    /// tag. Present serializes and reads back; absent (an older lock,
+    /// the delta lane before it recorded) loads as None so the sync
+    /// falls back to probing stores instead of failing to load.
+    #[test]
+    fn the_image_record_round_trips_and_loads_absent_from_older_locks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kuma.lock");
+        let mut with_image = lock(&digest('a'), &[("fish", "4.0.2-1.fc44.x86_64")]);
+        with_image.image =
+            Some("a407cc452db55890379045cc61fcc1118054f0c0670b6d82a6a1c8eb1899dcec".into());
+        with_image.save(&path).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("image ="));
+        assert_eq!(
+            Lock::load(&path).unwrap().image.as_deref(),
+            Some("a407cc452db55890379045cc61fcc1118054f0c0670b6d82a6a1c8eb1899dcec")
+        );
+
+        // A lock written before the field existed: schema still current,
+        // record absent, load unharmed.
+        let text = std::fs::read_to_string(&path).unwrap();
+        let without =
+            text.lines().filter(|l| !l.starts_with("image =")).collect::<Vec<_>>().join("\n");
+        let older = dir.path().join("older.lock");
+        std::fs::write(&older, without).unwrap();
+        let back = Lock::load(&older).unwrap();
+        assert_eq!(back.image, None);
+        assert_eq!(back.base.digest, digest('a'));
     }
 
     /// The digest is interpolated into `FROM name@…`, so a newline in it

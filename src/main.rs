@@ -726,7 +726,7 @@ fn run(
             Ok(())
         }
         Cmd::Build { tag, json: _ } => build(config_path, &tag, json),
-        Cmd::Switch { tag, yes, json: _ } => switch(&tag, yes, json),
+        Cmd::Switch { tag, yes, json: _ } => switch(config_path, &tag, yes, json),
         Cmd::Vm { tag, output, no_run, rebuild, apply } => {
             vm(&tag, &output, no_run, rebuild, apply)
         }
@@ -1580,13 +1580,18 @@ fn switch_staged_response(tag: &str, reboot: Action) -> response::Response {
     response::Response::new().field("staged", true).field("tag", tag).action(reboot)
 }
 
-fn switch(tag: &str, yes: bool, json: bool) -> Result<()> {
+fn switch(config_path: &Path, tag: &str, yes: bool, json: bool) -> Result<()> {
+    // The lock's record of the built image drives the sync: the tag
+    // names different images in different stores, and "the built one"
+    // is the fact worth syncing (#120). No lock — first build, foreign
+    // machine — leaves the sync probing stores instead.
+    let built = lock::for_config(config_path).and_then(|lock| lock.image);
     if !yes {
         // The dry run must tell the truth: with nothing built, the switch
         // it describes could only fail. Same passwordless check the bare
         // `kuma` probe uses; the --yes path gets its error from stage().
-        let built = image_id(tag).is_ok();
-        let actions = if built {
+        let exists = image_id(tag).is_ok();
+        let actions = if exists {
             vec![Action::new(
                 "apply",
                 "kuma switch --yes",
@@ -1595,17 +1600,17 @@ fn switch(tag: &str, yes: bool, json: bool) -> Result<()> {
         } else {
             vec![Action::new("build", "kuma build", "build the system image from the declaration")]
         };
-        let prose = if !built {
+        let prose = if !exists {
             format!("{tag} is not built; there is nothing to switch to yet.\n")
         } else {
             format!(
                 "Would sync {tag} into root podman storage, then run (as root):\n\n  bootc switch --transport containers-storage {tag}\n\nRe-run with --yes to apply. The change takes effect on next boot;\nthe previous deployment stays available for `kuma rollback`.\n"
             )
         };
-        switch_preview_response(tag, built, &actions).print(json, &prose);
+        switch_preview_response(tag, exists, &actions).print(json, &prose);
         return Ok(());
     }
-    if !stage(tag)? {
+    if !stage(tag, built.as_deref())? {
         bail!("nothing staged; the system already runs this image (did `kuma build` succeed?)");
     }
     let reboot = reboot_action();
@@ -1615,11 +1620,13 @@ fn switch(tag: &str, yes: bool, json: bool) -> Result<()> {
 
 /// Sync the image into root storage and stage it with bootc. False when
 /// nothing new was staged — the system already runs this image.
-fn stage(tag: &str) -> Result<bool> {
+fn stage(tag: &str, built: Option<&str>) -> Result<bool> {
     // bootc runs as root and resolves containers-storage against ROOT's
     // storage; without this sync it would deploy whatever stale copy the
-    // last `kuma vm` left there — silently.
-    let local_id = sync_image_to_root(tag)?;
+    // last `kuma vm` left there — silently. `built` is the lock's record
+    // of what the last build produced when the caller has it, so the
+    // sync syncs THAT image rather than whatever the tag names locally.
+    let local_id = sync_image_to_root(tag, built)?;
     run_host(&["sudo", "bootc", "switch", "--transport", "containers-storage", tag])?;
     // switch is a no-op when the origin spec is unchanged (every switch
     // after the first!) — bootc upgrade is what re-pulls the origin and
@@ -2005,7 +2012,7 @@ fn update(config_path: &Path, tag: &str, yes: bool, json: bool) -> Result<()> {
         .print(json, &format!("\nBuilt {tag}."));
         return Ok(());
     }
-    let staged = stage(tag)?;
+    let staged = stage(tag, after.as_ref().and_then(|l| l.image.as_deref()))?;
     let response = update_staged_response(
         tag,
         staged,
@@ -2675,8 +2682,12 @@ fn upgrade_delta_apply(
     // failed stage leaves nothing behind.
     scaffold.reclaim_now();
 
+    // The record of what this build produced, for the sync and the
+    // lock — the same fact `record`/`record_release` write below.
+    let built_id = image_id(DEFAULT_TAG).ok();
+
     note("Staging the upgrade image...");
-    if !stage(DEFAULT_TAG)? {
+    if !stage(DEFAULT_TAG, built_id.as_deref())? {
         // Nothing staged: bootc resolved the origin in root's storage
         // and found nothing newer than the booted deployment. For a
         // rebuild that reproduced the machine's own image — same
@@ -2739,6 +2750,7 @@ fn upgrade_delta_apply(
             digest: digest.clone(),
             version: Some(version.clone()),
         },
+        DEFAULT_TAG,
     );
 
     let reboot = reboot_action();
@@ -3509,7 +3521,9 @@ fn vm(tag: &str, output: &Path, no_run: bool, rebuild: bool, apply: bool) -> Res
 }
 
 fn build_disk(tag: &str, output: &Path) -> Result<()> {
-    let local_id = sync_image_to_root(tag)?;
+    // No lock record here: disk builds run as the invoking user, whose
+    // store the probe reads anyway.
+    let local_id = sync_image_to_root(tag, None)?;
     // One read of the baked declaration answers both questions it is
     // asked here: the hash the provenance record carries, and the shell
     // the convenience account gets. Two `podman run`s over a multi-GB
@@ -3707,7 +3721,7 @@ fn iso(config_path: &Path, tag: &str, output: &Path) -> Result<()> {
     std::fs::create_dir_all(output)
         .with_context(|| format!("cannot create {}", output.display()))?;
     let output = std::fs::canonicalize(output)?;
-    let local_id = sync_image_to_root(tag)?;
+    let local_id = sync_image_to_root(tag, None)?;
     let bib_config = output.join("iso-config.toml");
     std::fs::write(&bib_config, iso_config_toml(&config))?;
 
@@ -4795,7 +4809,7 @@ fn install(disk: Option<&Path>, request: install::Request) -> Result<()> {
         // existed it got installed *instead* of the image just built,
         // and where it did not the build fell through to
         // `docker://localhost/...` and a refused connection.
-        sync_image_to_root(image)?;
+        sync_image_to_root(image, None)?;
     }
 
     // Read before, compared after. Installing to a file leaves a boot
@@ -4984,45 +4998,43 @@ fn live_iso(config_path: &Path, tag: &str, output: &Path) -> Result<()> {
 /// bootc-image-builder runs as root and reads root's containers-storage.
 /// Sync by image ID, not tag existence: the root-side copy goes stale
 /// every time the rootless image is rebuilt. Returns the image ID.
-/// The image ID in the store `kuma build` fills. The plain call runs
-/// podman as the current user, and under sudo that is root — whose store
-/// is the same one bootc reads, so a sync comparing it to itself always
-/// agreed and never ran. Measured 2026-11-21 (#120): `sudo kuma switch`
-/// staged root's stale copy of the tag and answered "no changes" while
-/// the user's fresh build sat un-synced in the store the build actually
-/// filled. When kuma runs under sudo, ask for the invoking user's store
-/// by name.
-fn builder_store_image_id(tag: &str) -> Result<String> {
+/// The invoking user's environment when kuma runs under sudo, resolved
+/// far enough for a podman call to land in THEIR store: the account
+/// (SUDO_USER), its passwd home, and the runtime dir podman wants even
+/// for a read. None when kuma runs as itself — then a plain call
+/// already answers the builder's store.
+fn invoking_user_env() -> Result<Option<(String, Vec<String>)>> {
     let user = std::env::var("SUDO_USER").ok().filter(|name| name != "root" && !name.is_empty());
-    match user {
-        None => image_id(tag),
-        Some(user) => {
-            let (home, uid) = passwd_home_uid(
-                &host_output(&["getent", "passwd", &user])
-                    .with_context(|| format!("cannot resolve the invoking user {user}"))?,
-            )
-            .with_context(|| format!("cannot read the invoking user's {user} environment"))?;
-            // The store follows the account's home; a custom
-            // XDG_DATA_HOME in the user's own shell would move it, and
-            // this cannot see that — the passwd home is the honest
-            // default. The runtime dir matters to podman even for a
-            // read-only inspect.
-            host_output(&[
-                "sudo",
-                "-u",
-                &user,
-                "env",
-                &format!("HOME={home}"),
-                &format!("XDG_RUNTIME_DIR=/run/user/{uid}"),
-                "podman",
-                "image",
-                "inspect",
-                "--format",
-                "{{.Id}}",
-                tag,
-            ])
+    let Some(user) = user else { return Ok(None) };
+    let (home, uid) = passwd_home_uid(
+        &host_output(&["getent", "passwd", &user])
+            .with_context(|| format!("cannot resolve the invoking user {user}"))?,
+    )
+    .with_context(|| format!("cannot read the invoking user's {user} environment"))?;
+    // The store follows the account's home; a custom XDG_DATA_HOME in
+    // the user's own shell would move it, and this cannot see that —
+    // the passwd home is the honest default.
+    Ok(Some((user, vec![format!("HOME={home}"), format!("XDG_RUNTIME_DIR=/run/user/{uid}")])))
+}
+
+/// podman against the store `kuma build` fills: the current user's,
+/// except under sudo, where the plain call answers root's — the same
+/// store bootc reads — and every comparison becomes a store agreeing
+/// with itself (#120, measured 2026-11-21).
+fn builder_podman_output(args: &[&str]) -> Result<String> {
+    match invoking_user_env()? {
+        None => host_output(args),
+        Some((user, env)) => {
+            let mut argv: Vec<&str> = vec!["sudo", "-u", &user, "env"];
+            argv.extend(env.iter().map(|e| e.as_str()));
+            argv.extend(args.iter().copied());
+            host_output(&argv)
         }
     }
+}
+
+fn builder_store_image_id(tag: &str) -> Result<String> {
+    builder_podman_output(&["image", "inspect", "--format", "{{.Id}}", tag])
 }
 
 /// The home directory and uid out of a `getent passwd` line
@@ -5037,82 +5049,109 @@ fn passwd_home_uid(line: &str) -> Result<(String, String)> {
     }
 }
 
-fn sync_image_to_root(tag: &str) -> Result<String> {
-    let local_id = builder_store_image_id(tag)
-        .with_context(|| format!("{tag} not found; run `kuma build` first"))?;
+fn sync_image_to_root(tag: &str, built: Option<&str>) -> Result<String> {
+    // What the last build produced. The lock's record is the honest
+    // answer — `record` took it from the image the moment it came out —
+    // and the store probe is the fallback for callers with no record.
+    // The probe under sudo reads the invoking user's store (#120): the
+    // plain call runs as root, whose store is the same one bootc reads,
+    // and a store compared to itself always agreed.
+    let local_id = match built {
+        Some(id) => id.to_string(),
+        None => builder_store_image_id(tag)
+            .with_context(|| format!("{tag} not found; run `kuma build` first"))?,
+    };
     let root_id = host_output(&["sudo", "podman", "image", "inspect", "--format", "{{.Id}}", tag])
         .unwrap_or_default();
-    if local_id != root_id {
-        note(&format!("Syncing {tag} into root podman storage (may take a minute)..."));
-        // Piped rather than staged through a file, which `vm_apply`
-        // already does for the same job over ssh.
-        //
-        // Measured on a 1.55 GB image: `podman save` alone streams for
-        // 40 s, and `podman load` cannot start until it finishes, so the
-        // two passes were strictly sequential. The archive also landed
-        // in a tempdir, which is /tmp, which is tmpfs: 1.55 GB of RAM
-        // held for the duration. On live media that is the RAM overlay,
-        // the same ceiling the ISO work already had to get out from
-        // under once.
-        //
-        // `set -o pipefail` is load-bearing: without it a failed save is
-        // masked by a load that succeeded at reading nothing.
-        //
-        // A load leaves the image as blobs: containers/storage unpacks
-        // layers when a container is created from them, not when they
-        // are loaded. The install's build mounts its working container
-        // with lowerdirs from THIS store (additionalimagestore,
-        // partition.rs), and a store that has never created a container
-        // has no layer directories to mount — the first COPY died with
-        // "no such file or directory" inside an overlay mount. Measured
-        // on 2026-09-04, where every install-bearing CI job on runner
-        // image 20260828 failed this way while the same job on
-        // 20260819 booted. Creating one container materializes the
-        // layer directories and costs seconds; it runs inside the sync
-        // so a store that already has them pays nothing extra.
-        run_host(&[
-            "bash",
-            "-c",
-            &format!(
-                // The tag is a CLI argument, so it arrives in the shell
-                // string quoted — the same courtesy vm_apply extends
-                // over ssh. An unquoted interpolation lets the
-                // argument's own characters split the command, and this
-                // one runs its second half under sudo.
-                "set -o pipefail; podman save --format oci-archive {} | sudo podman load \
-                 && sudo podman rm -f kuma-sync-unpack \
-                 && sudo podman create --name kuma-sync-unpack {} true \
-                 && sudo podman rm -f kuma-sync-unpack",
-                shell_quote(tag),
-                shell_quote(tag)
-            ),
-        ])?;
-        // The sync's whole job is making root's store hold THIS image —
-        // the switch below stages whatever the tag resolves to there. A
-        // load that quietly failed partway would leave the old copy
-        // under the tag, and the stage would deploy it as if it were
-        // the build. Read back what is actually there (#120).
-        let synced =
-            host_output(&["sudo", "podman", "image", "inspect", "--format", "{{.Id}}", tag])
-                .unwrap_or_default();
-        if synced.trim() != local_id {
-            bail!(
-                "root storage still does not hold the built {tag} after the sync; \
-                 refusing to stage a different image"
-            );
-        }
-        // The load re-tagged the NEW image, which strands the copy root
-        // already had — one dangling image (~3 GB) per sync, in a store
-        // `kuma clean` prunes only on a bootc machine (elsewhere root
-        // storage may not be kuma's to prune; a workstation's dangling
-        // images can be its own). Removed here instead, at the source,
-        // after the load succeeded so a failed sync keeps the old copy.
-        // A booted deployment does not need it: bootc copies the content
-        // into its own store at deploy time, and the origin spec is the
-        // tag, which this load just re-pointed.
-        if !root_id.is_empty() {
-            let _ = run_host(&["sudo", "podman", "image", "rm", "-f", root_id.trim()]);
-        }
+    if root_id.trim() == local_id {
+        // Root's storage already holds exactly the built image — the
+        // build ran as root, or a sync already landed. Leaving without
+        // "syncing" is the honest no-op; the vacuous compare this used
+        // to be answered the same way for the wrong reason and staged
+        // root's stale copy as if it were the build.
+        return Ok(local_id);
+    }
+    note(&format!("Syncing {tag} into root podman storage (may take a minute)..."));
+    // The save side must read the store that HOLDS the build. Under
+    // sudo that is the invoking user's, so the plain call — root's own
+    // (stale) copy — would make the sync a self-move that lands
+    // nothing. The env mirrors what the user's own shell resolves.
+    let save_prefix = match invoking_user_env()? {
+        None => String::new(),
+        Some((user, env)) => format!(
+            "sudo -u {} env {} ",
+            shell_quote(&user),
+            env.iter().map(|e| shell_quote(e)).collect::<Vec<_>>().join(" ")
+        ),
+    };
+    // Piped rather than staged through a file, which `vm_apply`
+    // already does for the same job over ssh.
+    //
+    // Measured on a 1.55 GB image: `podman save` alone streams for
+    // 40 s, and `podman load` cannot start until it finishes, so the
+    // two passes were strictly sequential. The archive also landed
+    // in a tempdir, which is /tmp, which is tmpfs: 1.55 GB of RAM
+    // held for the duration. On live media that is the RAM overlay,
+    // the same ceiling the ISO work already had to get out from
+    // under once.
+    //
+    // `set -o pipefail` is load-bearing: without it a failed save is
+    // masked by a load that succeeded at reading nothing.
+    //
+    // A load leaves the image as blobs: containers/storage unpacks
+    // layers when a container is created from them, not when they
+    // are loaded. The install's build mounts its working container
+    // with lowerdirs from THIS store (additionalimagestore,
+    // partition.rs), and a store that has never created a container
+    // has no layer directories to mount — the first COPY died with
+    // "no such file or directory" inside an overlay mount. Measured
+    // on 2026-09-04, where every install-bearing CI job on runner
+    // image 20260828 failed this way while the same job on
+    // 20260819 booted. Creating one container materializes the
+    // layer directories and costs seconds; it runs inside the sync
+    // so a store that already has them pays nothing extra.
+    run_host(&[
+        "bash",
+        "-c",
+        &format!(
+            // The tag is a CLI argument, so it arrives in the shell
+            // string quoted — the same courtesy vm_apply extends
+            // over ssh. An unquoted interpolation lets the
+            // argument's own characters split the command, and this
+            // one runs its second half under sudo.
+            "set -o pipefail; {}podman save --format oci-archive {} | sudo podman load \
+             && sudo podman rm -f kuma-sync-unpack \
+             && sudo podman create --name kuma-sync-unpack {} true \
+             && sudo podman rm -f kuma-sync-unpack",
+            save_prefix,
+            shell_quote(tag),
+            shell_quote(tag)
+        ),
+    ])?;
+    // The sync's whole job is making root's store hold THIS image —
+    // the switch below stages whatever the tag resolves to there. A
+    // load that quietly failed partway would leave the old copy
+    // under the tag, and the stage would deploy it as if it were
+    // the build. Read back what is actually there (#120).
+    let synced = host_output(&["sudo", "podman", "image", "inspect", "--format", "{{.Id}}", tag])
+        .unwrap_or_default();
+    if synced.trim() != local_id {
+        bail!(
+            "root storage still does not hold the built {tag} after the sync; \
+             refusing to stage a different image"
+        );
+    }
+    // The load re-tagged the NEW image, which strands the copy root
+    // already had — one dangling image (~3 GB) per sync, in a store
+    // `kuma clean` prunes only on a bootc machine (elsewhere root
+    // storage may not be kuma's to prune; a workstation's dangling
+    // images can be its own). Removed here instead, at the source,
+    // after the load succeeded so a failed sync keeps the old copy.
+    // A booted deployment does not need it: bootc copies the content
+    // into its own store at deploy time, and the origin spec is the
+    // tag, which this load just re-pointed.
+    if !root_id.is_empty() {
+        let _ = run_host(&["sudo", "podman", "image", "rm", "-f", root_id.trim()]);
     }
     Ok(local_id)
 }

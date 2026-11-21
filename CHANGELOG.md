@@ -17,15 +17,18 @@
   mismatching tag can only be something the lock does not speak for;
   the build now names `kuma update` and stops.
 
-- **The user-store/root-store sync survives sudo.** `kuma switch`
-  syncs the built image into root's podman storage before staging,
-  but its "local" read ran podman as the current user — under sudo,
-  root, so the comparison was root's store against itself, the sync
-  never ran, and bootc staged root's stale copy while the answer was
-  "no changes" (#120). When `SUDO_USER` names an invoking user, the
-  sync reads that user's store by name (home and runtime dir from
-  the passwd entry), and after any sync it reads root's store back
-  and refuses to stage unless it now holds the built image.
+- **The user-store/root-store sync keys off what the build produced.**
+  `kuma switch` syncs the built image into root's podman storage
+  before staging, but its "local" read ran podman as the current user
+  — under sudo, root, so the comparison was root's store against
+  itself, the sync never ran, and bootc staged root's stale copy
+  while the answer was "no changes" (#120). The lock now records the
+  image ID every build produces (full, delta, and update lanes), and
+  the sync moves THAT image: when root's storage already holds it the
+  sync leaves without pretending to run; when it doesn't, the save
+  side reads the store that holds the build (the invoking user's,
+  under sudo); and after any sync root's store is read back, refusing
+  to stage unless it holds the recorded build.
 
 - **The keyring regression 45.7.0 shipped is fixed: the adopt half is
   back.** The dbus-activation cut (#116) removed niri's only road to
