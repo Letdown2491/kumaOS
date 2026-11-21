@@ -2195,6 +2195,11 @@ fstab=${1:-/etc/fstab}
 # Already-commented lines cannot match, so this is idempotent without
 # needing to look for its own marker.
 new=$(mktemp)
+# A trap, because the script runs under set -e: an awk failure (or a
+# cmp on a full disk) exits mid-flight and would otherwise leave the
+# temp file beside fstab forever — one stray dotfile per failed boot,
+# accumulating for as long as the machine lives.
+trap 'rm -f "$new"' EXIT
 awk '
 $1 !~ /^#/ && $2 == "/" {
     print "# Commented out by kuma-fstab-sync: this machine boots a composefs"
@@ -3310,6 +3315,16 @@ pub(crate) fn branding() -> String {
 /// can't be image content. First boot installs it; the tarball is the
 /// official "untar anywhere" method. Prefix owned by uid 1000, brew's
 /// single-user model (same choice Bluefin makes).
+///
+/// The tarball is fetched at floating HEAD, deliberately, and that is an
+/// accepted supply-chain trade rather than an oversight: brew is a rolling
+/// tree whose releases are a daily re-tag, so a digest pin (the ngit
+/// treatment) would freeze the installer or demand a human bump every day,
+/// and the daily sync would turn every hash change into an emergency. What
+/// the pin would buy — immunity to a Homebrew upstream compromise — is
+/// traded for TLS to github.com plus brew's own release process. A hardened
+/// deployment that wants the pin can mirror the tarball and serve a digest;
+/// the verb and the unit both honor an image that carries one.
 ///
 /// The in-script guard duplicates the unit's ConditionPathExists on
 /// purpose: PID 1 evaluates conditions as init_t, and the script runs
