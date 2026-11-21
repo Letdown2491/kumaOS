@@ -191,49 +191,11 @@ jobs:
 
       - name: the release before this one
         id: fixture
-        env:
+        uses: ./.github/actions/previous-release
+        with:
           # Env, not interpolation: the input is a caller's string, and
           # this run block is where it would otherwise become code.
-          FROM_IMAGE: ${{ inputs.from_image }}
-        run: |
-          set -euo pipefail
-          repo="ghcr.io/letdown2491/kuma"
-          if [ -n "$FROM_IMAGE" ]; then
-            echo "from=$FROM_IMAGE" >> "$GITHUB_OUTPUT"
-            echo "caller named the fixture: $FROM_IMAGE"
-            exit 0
-          fi
-          command -v skopeo >/dev/null || sudo apt-get install -y -qq skopeo
-          # The version being published already has its pinned tag by the
-          # time this runs, so "previous" is the highest pinned tag that
-          # is strictly OLDER than the version — the release this road
-          # really replaces. Excluded by comparison, not by name: "not
-          # it" let 45.0.0 serve as the previous release of a 44.15.2
-          # road — a downgrade no machine is ever offered, aimed at a
-          # gate whose machine must be the release the registry served
-          # before this one. A rebuilt tag equals the version, and an
-          # equal tag is not older, so the by-name exclusion the old
-          # derivation carried is subsumed.
-          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
-          # Version-shaped tags only: the prefix match also catches the
-          # road's own niri-staging candidate, and sort -V puts that
-          # non-version string after every real version — the first
-          # live lap "upgraded" the candidate onto itself and the
-          # delta gate's version assertion held the release for it
-          # (measured, the first tag road, 2026-10-22).
-          previous=$(skopeo list-tags "docker://$repo" \
-            | jq -r '.Tags[] | select(test("^niri-[0-9]+[.][0-9]+[.][0-9]+$"))' \
-            | sed 's/^niri-//' \
-            | while read -r tag; do
-                  { [ "$(printf '%s\n%s\n' "$tag" "$version" | sort -V | head -1)" = "$tag" ] &&
-                    [ "$tag" != "$version" ]; } && echo "$tag" || true
-              done \
-            | sort -V | tail -1)
-          # Loud, because a silent fallback here is the whole failure mode
-          # this derivation exists to avoid.
-          [ -n "$previous" ] || { echo "::error::no pinned niri-* tag older than $version"; exit 1; }
-          echo "upgrading from $previous to $version"
-          echo "from=$repo:niri-$previous" >> "$GITHUB_OUTPUT"
+          from_image: ${{ inputs.from_image }}
 
       - name: install an old version, upgrade it, and boot what it became
         uses: ./.github/actions/install-boot
@@ -285,32 +247,7 @@ jobs:
 
       - name: the release before this one
         id: fixture
-        run: |
-          set -euo pipefail
-          repo="ghcr.io/letdown2491/kuma"
-          command -v skopeo >/dev/null || sudo apt-get install -y -qq skopeo
-          # This checkout IS the version being published, so the
-          # exclusion reads the same Cargo.toml the compose built from.
-          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
-          # Version-shaped tags only: the prefix match also catches the
-          # road's own niri-staging candidate, and sort -V puts that
-          # non-version string after every real version — the first
-          # live lap "upgraded" the candidate onto itself and the
-          # delta gate's version assertion held the release for it
-          # (measured, the first tag road, 2026-10-22).
-          # Strictly OLDER than the version (see the cross-version
-          # fixture's derivation for why "not it" was not enough).
-          previous=$(skopeo list-tags "docker://$repo" \
-            | jq -r '.Tags[] | select(test("^niri-[0-9]+[.][0-9]+[.][0-9]+$"))' \
-            | sed 's/^niri-//' \
-            | while read -r tag; do
-                  { [ "$(printf '%s\n%s\n' "$tag" "$version" | sort -V | head -1)" = "$tag" ] &&
-                    [ "$tag" != "$version" ]; } && echo "$tag" || true
-              done \
-            | sort -V | tail -1)
-          [ -n "$previous" ] || { echo "::error::no pinned niri-* tag older than $version"; exit 1; }
-          echo "upgrading from $previous to $version through the delta lane"
-          echo "from=$repo:niri-$previous" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/previous-release
 
       - name: upgrade a published machine through the delta lane
         uses: ./.github/actions/install-boot
