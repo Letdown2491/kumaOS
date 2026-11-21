@@ -175,7 +175,13 @@ fn heal_from(
         // The directory tightens too: 0600 files in a 0755 directory
         // are enumerated, and the names alone are the account list.
         std::fs::create_dir_all(machine_users_d)?;
-        let _ = std::fs::set_permissions(machine_users_d, std::fs::Permissions::from_mode(0o700));
+        // Propagated, not best-effort: this verb runs as root, once per
+        // boot, and a directory it failed to tighten defeats the point
+        // of the 0600 file inside it — a quietly enumerable account
+        // list. A failure here is a real one (read-only /var, an
+        // immutable bit), and the heal stopping loudly names it.
+        std::fs::set_permissions(machine_users_d, std::fs::Permissions::from_mode(0o700))
+            .context("cannot tighten the machine account directory to 0700")?;
         let tmp = machine_users_d.join(format!(".{name}.kuma-heal"));
         // A tmp a kill left behind would make create_new refuse this
         // and every later heal.
@@ -292,11 +298,14 @@ mod tests {
         // closes the single quote and runs a command when the file is
         // sourced by the root converger. The escape sends the key
         // byte-for-byte into KUMA_SSH_KEY and nothing else happens.
-        let hostile = "ssh-ed25519 AAA'; touch /tmp/kuma-heal-poc; echo '";
+        // The canary lives inside this test's own tempdir — a global
+        // /tmp path would collide with parallel or interrupted runs.
+        let dir = tempfile::tempdir().unwrap();
+        let canary = dir.path().join("poc");
+        let hostile = format!("ssh-ed25519 AAA'; touch {}; echo '", canary.display());
         let extra =
             config::AdditionalUser { ssh_keys: vec![hostile.to_string()], ..Default::default() };
         let body = account_file("deltauser", &extra);
-        let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("sourced.sh");
         std::fs::write(&file, &body).unwrap();
         let out = std::process::Command::new("bash")
@@ -310,10 +319,7 @@ mod tests {
             .unwrap();
         assert!(out.status.success(), "sourcing failed: {}", String::from_utf8_lossy(&out.stderr));
         assert_eq!(String::from_utf8_lossy(&out.stdout), hostile);
-        assert!(
-            !std::path::Path::new("/tmp/kuma-heal-poc").exists(),
-            "the breakout must not have run"
-        );
+        assert!(!canary.exists(), "the breakout must not have run");
     }
 
     #[test]
