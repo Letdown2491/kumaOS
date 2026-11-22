@@ -82,6 +82,16 @@ the bus name answers a `Peer.Ping`, and exits one when it stops.
 `Restart=` finally has a failure to act on, and its restart's adopt
 finds no daemon and becomes one — a LOCKED name-holder.
 
+The restart arithmetic, stated deliberately: `RestartSec=2s` plus the
+adopt plus at most one ping interval makes each life ~2–4s, against
+systemd's default limit of five starts in ten seconds. A daemon that
+dies once and stays dead — the observed failure mode, the #190 abort
+cascade — costs one restart, and the fresh locked daemon holds. The
+limit can only trip on a daemon that aborts repeatedly, and a unit
+that cannot keep a name-holder alive SHOULD show as failed: the
+default limit is the honest verdict, not a number to tune. Doctor's
+`units` check is what reports it.
+
 ## The failure taxonomy
 
 What the bunker's retry ladder reports names the boot fact and the

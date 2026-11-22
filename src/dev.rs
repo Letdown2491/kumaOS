@@ -202,26 +202,35 @@ pub(crate) fn daemon_override() -> PathBuf {
 /// be.
 fn bounce_daemon() -> Vec<String> {
     let mut failures = Vec::new();
-    if !Command::new("systemctl")
-        .args(["--user", "daemon-reload"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-    {
+    // The retire lanes run under sudo, and plain `systemctl --user`
+    // answers root's bus — none, or the wrong session's (#122's other
+    // half). The bounce follows the lease: the runtime dir the passwd
+    // road names is where the invoking user's manager lives, the same
+    // road the sync fix (#120) gives podman.
+    let cmd = |args: &[&str]| {
+        let mut command = Command::new("systemctl");
+        command.args(args);
+        let sudo = std::env::var("SUDO_USER").ok().filter(|n| n != "root" && !n.is_empty());
+        let line = sudo.and_then(|user| {
+            Command::new("getent")
+                .args(["passwd", &user])
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+                .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        });
+        let uid = line.and_then(|l| l.split(':').nth(2).map(str::to_string));
+        if let Some(uid) = uid.filter(|u| !u.is_empty()) {
+            command.env("XDG_RUNTIME_DIR", format!("/run/user/{uid}"));
+            command.env("DBUS_SESSION_BUS_ADDRESS", format!("unix:path=/run/user/{uid}/bus"));
+        }
+        command.status().map(|s| s.success()).unwrap_or(false)
+    };
+    if !cmd(&["--user", "daemon-reload"]) {
         failures.push("systemctl --user daemon-reload failed".to_string());
     }
-    let active = Command::new("systemctl")
-        .args(["--user", "is-active", "--quiet", DAEMON_UNIT])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if active
-        && !Command::new("systemctl")
-            .args(["--user", "restart", DAEMON_UNIT])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    {
+    let active = cmd(&["--user", "is-active", "--quiet", DAEMON_UNIT]);
+    if active && !cmd(&["--user", "restart", DAEMON_UNIT]) {
         failures.push(format!(
             "systemctl --user restart {DAEMON_UNIT} failed — the daemon may still \
              run the image's binary until it is restarted for real"

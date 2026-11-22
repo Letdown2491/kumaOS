@@ -732,14 +732,14 @@ fn fstab_declares_root(text: &str) -> bool {
     })
 }
 
-/// User unit files and drop-ins whose ExecStart names an absolute path
-/// that does not exist — the 203/EXEC class (#125): dev leases and
-/// overrides that outlived their binaries, invisible until the next
-/// boot restarts the unit into a loop. Every `.service` and every
-/// drop-in conf under `~/.config/systemd/user` is read; every
-/// ExecStart= line with a value is judged, `None` when the directory
-/// cannot be read at all (a machine that keeps no user units answers
-/// nothing rather than everything).
+/// User unit files and drop-ins whose ExecStart, ExecStartPre or
+/// ExecStartPost names an absolute path that does not exist — the
+/// 203/EXEC class (#125): dev leases and overrides that outlived their
+/// binaries, invisible until the next boot restarts the unit into a
+/// loop. Every `.service` and every drop-in conf under
+/// `~/.config/systemd/user` is read; every exec line with a value is
+/// judged, `None` when the directory cannot be read at all (a machine
+/// that keeps no user units answers nothing rather than everything).
 fn dead_execstart_overrides() -> Option<Vec<(String, String)>> {
     let home = std::env::var("HOME").ok()?;
     let user_dir = Path::new(&home).join(".config/systemd/user");
@@ -750,8 +750,13 @@ fn dead_execstart_overrides() -> Option<Vec<(String, String)>> {
     let judge = |path: &Path, stale: &mut Vec<(String, String)>| {
         let text = std::fs::read_to_string(path).unwrap_or_default();
         for line in text.lines() {
-            let value = match line.trim().strip_prefix("ExecStart=") {
-                Some(v) if !v.trim().is_empty() => v.trim(),
+            let trimmed = line.trim();
+            let value = match (
+                trimmed.strip_prefix("ExecStart="),
+                trimmed.strip_prefix("ExecStartPre="),
+                trimmed.strip_prefix("ExecStartPost="),
+            ) {
+                (Some(v), _, _) | (_, Some(v), _) | (_, _, Some(v)) if !v.trim().is_empty() => v,
                 _ => continue,
             };
             // systemd's argv[0] prefixes: `-` ignores the failure, `+`,
@@ -780,8 +785,7 @@ fn dead_execstart_overrides() -> Option<Vec<(String, String)>> {
         let name = name.to_string_lossy();
         if name.ends_with(".service") {
             judge(&path, &mut stale);
-        } else if let Some(dir) = name.strip_suffix(".service.d") {
-            let _ = dir;
+        } else if name.ends_with(".service.d") {
             if let Ok(dropins) = std::fs::read_dir(&path) {
                 for dropin in dropins.flatten() {
                     if dropin.file_name().to_string_lossy().ends_with(".conf") {
@@ -922,13 +926,12 @@ pub fn doctor(json: bool, as_report: bool) -> Result<()> {
             report(Grade::Ok, "user units", "no user unit names a missing binary".into(), None)
         }
         Some(stale) => {
-            let (file, _) = &stale[0];
             let mut detail = format!(
-                "{} ExecStarts a binary that is gone ({})",
-                file,
+                "user units name binaries that are gone: {}",
                 stale.iter().map(|(f, b)| format!("{f} → {b}")).collect::<Vec<_>>().join("; "),
             );
             detail.truncate(300);
+            let (file, _) = &stale[0];
             let fix = Action::new(
                 "inspect",
                 format!("rm {} && systemctl --user daemon-reload", file),
