@@ -562,7 +562,12 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [when, siblings]
     if: needs.when.outputs.heavy == 'true'
-    timeout-minutes: 90
+    # The 45.7.0 road's red (2026-11-21, run 44888557065) died at 90m16s —
+    # the runner's ceiling, reported as cancelled, indistinguishable from
+    # an operator's. 150 gives the lap the room its green runs (42m) and
+    # the slow-runner survey both ask for, and the marker step below turns
+    # a ceiling kill into a named verdict instead of a bare cancelled.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: install the image this tree builds, and boot it
@@ -581,6 +586,14 @@ jobs:
           name: console-install
           path: vm-smoke/console-published.log
           if-no-files-found: warn
+      - name: the ceiling verdict
+        # A timeout-kill arrives as cancelled(), which reads like an
+        # operator's action — 45.7.0's road paid for that twice over: the
+        # lap died without a diagnosis and the summary said cancelled.
+        # This step runs only when the run was cancelled and gives the
+        # kill its name: the ceiling, not the work.
+        if: cancelled()
+        run: echo "::error::the install job was killed at its timeout-minutes ceiling — a slow runner, not a red lap. Re-run once before diagnosing the work; a second ceiling kill is the lap's own verdict."
 
   # 0.15's gate. Every other job here asks whether a machine booted; this
   # one asks whether it is the SAME boot.

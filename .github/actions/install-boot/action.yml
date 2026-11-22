@@ -137,7 +137,7 @@ runs:
             fi
           done
           [ "$(date +%s)" -lt "$deadline" ] \
-            || { echo "::error::no ci run for $SHA produced a kuma-siblings artifact within 60 minutes"; exit 1; }
+            || { echo "::error::no ci run for $SHA produced a kuma-siblings artifact within 60 minutes. The artifact is heavy-tier only and heavy runs are per-sha: a fast-tier main push builds none. Dispatch the heavy battery for this head first (gh workflow run ci.yml -R $REPO -f heavy=true), wait for it green, then re-dispatch this run."; exit 1; }
           sleep 120
         done
     - name: make the downloaded binaries executable again

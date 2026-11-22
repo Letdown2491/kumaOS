@@ -732,6 +732,70 @@ fn fstab_declares_root(text: &str) -> bool {
     })
 }
 
+/// User unit files and drop-ins whose ExecStart names an absolute path
+/// that does not exist — the 203/EXEC class (#125): dev leases and
+/// overrides that outlived their binaries, invisible until the next
+/// boot restarts the unit into a loop. Every `.service` and every
+/// drop-in conf under `~/.config/systemd/user` is read; every
+/// ExecStart= line with a value is judged, `None` when the directory
+/// cannot be read at all (a machine that keeps no user units answers
+/// nothing rather than everything).
+fn dead_execstart_overrides() -> Option<Vec<(String, String)>> {
+    let home = std::env::var("HOME").ok()?;
+    let user_dir = Path::new(&home).join(".config/systemd/user");
+    let mut stale = Vec::new();
+    // Two levels only: the units themselves and one drop-in directory
+    // each — `*.service` beside `*.service.d/*.conf` — which is the
+    // whole shape a user unit tree has.
+    let judge = |path: &Path, stale: &mut Vec<(String, String)>| {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        for line in text.lines() {
+            let value = match line.trim().strip_prefix("ExecStart=") {
+                Some(v) if !v.trim().is_empty() => v.trim(),
+                _ => continue,
+            };
+            // systemd's argv[0] prefixes: `-` ignores the failure, `+`,
+            // `!` and `!!` are privilege/ambient modifiers. Strip them
+            // and judge the path itself.
+            let argv0 = match value.split_whitespace().next() {
+                Some(a) => a.trim_start_matches(['-', '+', '!', ':']),
+                None => continue,
+            };
+            let expanded = argv0.replace("%h", &home);
+            if let Some(p) = expanded.strip_prefix('/') {
+                if !Path::new("/").join(p).exists() {
+                    stale.push((path.display().to_string(), expanded));
+                }
+            }
+        }
+    };
+    let entries = match std::fs::read_dir(&user_dir) {
+        Ok(entries) => entries,
+        // No user units at all answers nothing rather than everything.
+        Err(_) => return Some(Vec::new()),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.ends_with(".service") {
+            judge(&path, &mut stale);
+        } else if let Some(dir) = name.strip_suffix(".service.d") {
+            let _ = dir;
+            if let Ok(dropins) = std::fs::read_dir(&path) {
+                for dropin in dropins.flatten() {
+                    if dropin.file_name().to_string_lossy().ends_with(".conf") {
+                        judge(&dropin.path(), &mut stale);
+                    }
+                }
+            }
+        }
+    }
+    stale.sort();
+    stale.dedup();
+    Some(stale)
+}
+
 /// Is this installer media rather than a machine?
 ///
 /// A marker file, not an inference. The tempting test is "a kuma image
@@ -842,6 +906,36 @@ pub fn doctor(json: bool, as_report: bool) -> Result<()> {
             }
         }
         Err(_) => report(Grade::Warn, "units", "systemctl unavailable".into(), None),
+    }
+
+    // The 203/EXEC class (#125): a user unit or drop-in whose ExecStart
+    // names a binary under the home that is gone. Dev residue that
+    // outlived its binaries — a lease's overrides, a receipt's unnamed
+    // siblings — reads as nothing until the next boot restarts the unit
+    // into a loop and the session arrives without its shell. Scanned
+    // here so the verdict is a check's one command, not a journal
+    // session; only absolute paths are judged, because anything else is
+    // the daemon's PATH search and a guess.
+    match dead_execstart_overrides() {
+        None => {}
+        Some(stale) if stale.is_empty() => {
+            report(Grade::Ok, "user units", "no user unit names a missing binary".into(), None)
+        }
+        Some(stale) => {
+            let (file, _) = &stale[0];
+            let mut detail = format!(
+                "{} ExecStarts a binary that is gone ({})",
+                file,
+                stale.iter().map(|(f, b)| format!("{f} → {b}")).collect::<Vec<_>>().join("; "),
+            );
+            detail.truncate(300);
+            let fix = Action::new(
+                "inspect",
+                format!("rm {} && systemctl --user daemon-reload", file),
+                "stale dev residue: the unit restarts into 203/EXEC at the next boot",
+            );
+            report(Grade::Warn, "user units", detail, Some(fix));
+        }
     }
 
     // Three different places kuma can be asked how a machine is doing,

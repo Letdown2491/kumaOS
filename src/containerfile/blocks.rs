@@ -552,14 +552,27 @@ pub(crate) fn keyring_no_activation() -> String {
 /// road on purpose — deterministic, ordered ahead of the bunker, and
 /// the same argv activation ran.
 pub(crate) const KEYRING_SERVICE: &str = r#"[Unit]
-Description=Bring the PAM-unlocked keyring to the session bus
+Description=Guard the PAM-unlocked keyring on the session bus
 # Half of one daemon: the login half (PAM's --daemonize --login) holds
-# the unlocked keyring, this half adopts it and owns the bus name.
+# the unlocked keyring, this half adopts it, owns the bus name, and
+# then holds the watch.
 PartOf=graphical-session.target
 After=graphical-session-pre.target
 
 [Service]
-ExecStart=/usr/bin/gnome-keyring-daemon --start --foreground --components=secrets
+# The adopt, then the guardian. --start exits zero once it has found
+# (or become) the daemon; what follows is the watch the 45.7.2 proof
+# boots bought: while the bus name answers, the shell holds. When the
+# daemon dies — 45.7.1's and 45.7.2's losing boots both lost it to the
+# upstream #190 abort — the hold ends and the shell exits one, which
+# is the failure Restart= was always waiting for. The restart's adopt
+# finds no daemon and becomes one: a LOCKED name-holder, the honest
+# verdict every client can see, instead of a name unowned and
+# unactivatable for the rest of the session. The unlock is gone either
+# way — nothing client-side recovers it — but a corpse that answers is
+# a diagnosis, and a locked collection is a fact, where ServiceUnknown
+# against nobody is a void.
+ExecStart=/bin/sh -c '/usr/bin/gnome-keyring-daemon --start --foreground --components=secrets; while busctl --user call org.freedesktop.secrets /org/freedesktop/secrets org.freedesktop.DBus.Peer Ping >/dev/null 2>&1; do sleep 2; done; exit 1'
 # The adopt's exit zero is not the readiness the bunker's After= names
 # (45.7.1's second hardware boot proved the gap: the unit exited 0, the
 # PAM daemon aborted on the session's first OpenSession a second later,
