@@ -4,23 +4,28 @@
 
 ## v45.7.2 (2026-11-21)
 
-- **The keyring adopt's race is guarded: the 45.7.1 fix could still lose
-  it on real hardware.** 45.7.1's second boot on this machine showed the
-  unguarded timing: the bunker's startup OpenSession arrived inside the
-  PAM daemon's first seconds and gnome-keyring 51.x's abort on exactly
-  that ask took the daemon — and the unlock it holds — down with it
-  (`plain_negotiate`/pkcs11 assertions, `ANOM_ABEND`), leaving the name
-  unowned and unactivatable for the session; the bunker started locked.
-  The same image had won the same race the boot before. Two halves,
-  neither respawn: the keyring unit's `ExecStartPost` holds until
-  `org.freedesktop.secrets` is owned *and* answers a `Peer.Ping` (bus
-  glue, not the secret module — the probe cannot trip the abort it
-  guards), so the bunker's `After=` is a readiness barrier instead of an
-  ordering behind a corpse, and a name that never answers fails the unit
-  into `Restart=`; and the bunker's retry ladder gates every attempt on
-  the name being owned and settled (`wait_for_service_settled`) — no ask
-  into the vulnerable window, a bounded 10s patience, the honest error
-  after the attempts run out.
+- **The keyring adopt's race is guarded at the connection, not the
+  clock.** The bunker's startup OpenSession can arrive before
+  gnome-keyring's daemon has created the caller's record — keyed on the
+  caller's unique bus name, built from an idle callback — and the 51.x
+  assertion cascade on exactly that ask (`get_pkcs11_session: assertion
+  'client' failed`, then `plain_negotiate` building a GVariant from
+  NULL) aborts the daemon, taking the PAM unlock it holds down with it:
+  name unowned, unactivatable, bunker locked for the session (upstream
+  #190). The first 45.7.2 candidate guarded this with a settle of the
+  daemon's age — and the proof boots refuted it: the same +4s ask won
+  one boot and lost the next, because the race is microseconds on the
+  ask's own connection, not seconds on the daemon. The guard now lives
+  where the race lives: `secrets::connect` gives the daemon's event loop
+  a 300ms beat before the first ask goes out on the new connection —
+  the idle callback that creates the caller record runs orders of
+  magnitude inside it, and a beat per connection is inaudible for vault
+  operations that are rare by design. The keyring unit's
+  `ExecStartPost` stays: it holds until `org.freedesktop.secrets` is
+  owned and answers a `Peer.Ping` (bus glue, not the secret module), so
+  the bunker's `After=` is a readiness barrier instead of an ordering
+  behind a corpse, and a name that never answers fails the unit into
+  `Restart=`.
 - **The store probe runs podman, not a program named `image`.** The
   delta lane's store-probe argv dropped the `podman` prefix, so the
   spawn failed with ENOENT on `image` and the error read `failed to run

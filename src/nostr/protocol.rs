@@ -29,7 +29,6 @@ use super::bunker::Bunker;
 use super::keys;
 use super::policy::Level;
 use super::pool::{RelayPool, RelayState, RelayStatus};
-use super::secrets;
 use super::vault::Vault;
 
 /// A request, one line of JSON. `confirm` is the socket spelling of the
@@ -868,15 +867,15 @@ impl<S: super::vault::SecretStore> Daemon<S> {
     }
 
     /// The startup posture with retries. The session's first minute is
-    /// the Secret Service's worst: it can be mid-activation, mid-handoff
-    /// between the PAM-spawned daemon and a DBus-activated one, or — on
-    /// gnome-keyring 51.x — mid-abort when the daemon's first OpenSession
-    /// arrives, and one NoReply would otherwise strand the bunker locked
-    /// for the whole session. Each attempt is preceded by the settle
-    /// gate (`secrets::wait_for_service_settled`): no ask goes to a name
-    /// that is not owned and stable, because an ask into that window is
-    /// what kills the daemon and the unlock it holds. A short retry
-    /// burst gives the same PAM-open wall a second and third chance. A
+    /// the Secret Service's worst: it can be mid-activation or mid-handoff
+    /// between the PAM-spawned daemon and a DBus-activated one, and a
+    /// single NoReply would strand the bunker locked for the whole
+    /// session. A short retry burst gives the same PAM-open wall a second
+    /// and third chance. The OpenSession abort itself is guarded where it
+    /// actually lives — the caller-record beat in `secrets::connect` —
+    /// not here: that race is microseconds on the ask's own connection,
+    /// and a 45.7.2 interim proved a settle of the daemon's age guards
+    /// nothing (the same +4s ask won one boot and lost the next). A
     /// vault that is genuinely absent or locked answers the same every
     /// time, so the last error is returned as-is after the attempts run
     /// out.
@@ -887,13 +886,6 @@ impl<S: super::vault::SecretStore> Daemon<S> {
     ) -> Result<String> {
         let mut last = None;
         for attempt in 1..=attempts.max(1) {
-            // The gate before the ask: 10s of patience for the name to
-            // appear, 2s of settle once it has. Waiting on a name that
-            // never comes is bounded here — the attempt below then
-            // produces the honest ServiceUnknown for the ladder to
-            // report, instead of the bunker hanging forever.
-            secrets::wait_for_service_settled(Duration::from_secs(10), Duration::from_secs(2))
-                .await;
             match self.startup_unlock().await {
                 Ok(npub) => return Ok(npub),
                 Err(e) => {

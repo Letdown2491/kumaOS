@@ -38,56 +38,31 @@ fn wants_prompt(path: &str) -> bool {
 }
 
 async fn connect() -> Result<Connection> {
-    zbus::Connection::session().await.context("cannot reach the session bus")
+    let conn = zbus::Connection::session().await.context("cannot reach the session bus")?;
+    // The caller-record beat, and the reason the 45.7.2 settle-ladder
+    // guard could not work: the daemon keeps a record of each caller —
+    // the caller's PKCS#11 session — keyed on the caller's unique bus
+    // name, and creates that record from an idle callback (upstream
+    // #190). An OpenSession that arrives before the idle callback has
+    // run finds no client record, and the 51.x assertion cascade
+    // (`get_pkcs11_session: assertion 'client' failed`, then
+    // `plain_negotiate` building a GVariant from NULL) aborts the
+    // daemon — taking the PAM unlock it holds down with it. The race is
+    // microseconds on THIS connection, not seconds on the daemon: the
+    // same +4s ask that won one boot lost the next, and no settle of
+    // the daemon's age can guard it. The beat gives the daemon's event
+    // loop the idle turn that creates the record before the first ask
+    // goes out — several orders of magnitude wider than the window.
+    // One new connection per operation makes the beat per operation,
+    // and vault operations are rare enough that it is inaudible.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    Ok(conn)
 }
 
 async fn service_proxy(conn: &Connection) -> Result<Proxy<'_>> {
     Proxy::new(conn, SERVICE, SERVICE_PATH, SERVICE_IFACE)
         .await
         .context("cannot address the Secret Service")
-}
-
-/// Who, if anyone, owns the Secret Service name right now. Asked of the
-/// bus itself, not of the service — a name nobody owns is a lookup that
-/// answers cleanly rather than an activation attempt.
-async fn service_name_owned() -> Result<bool> {
-    let conn = connect().await?;
-    let dbus =
-        Proxy::new(&conn, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus")
-            .await
-            .context("cannot address the bus")?;
-    let owned: bool = dbus
-        .call("NameHasOwner", &("org.freedesktop.secrets",))
-        .await
-        .context("cannot ask the bus who owns the Secret Service")?;
-    Ok(owned)
-}
-
-/// The startup gate: wait until the Secret Service name is owned and
-/// *stays* owned across a settle pause, before the first ask. The
-/// 45.7.1 hardware round caught why the wait matters: gnome-keyring's
-/// PAM-spawned daemon can still be inside its first-second negotiation
-/// setup when the session's first OpenSession arrives, and the 51.x
-/// abort on exactly that ask takes the daemon — and the unlock it
-/// holds — down with it, leaving the name unowned and unactivatable
-/// for the rest of the session. A name that survives the settle is a
-/// daemon past its vulnerable window; a name that dies inside it is a
-/// lost boot regardless, and the caller proceeds to the honest error
-/// rather than waiting out the session.
-pub async fn wait_for_service_settled(max_wait: Duration, settle: Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + max_wait;
-    loop {
-        if service_name_owned().await.unwrap_or(false) {
-            tokio::time::sleep(settle).await;
-            if service_name_owned().await.unwrap_or(false) {
-                return true;
-            }
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
 }
 
 /// A plain session opened on the service. The secret struct every read and
