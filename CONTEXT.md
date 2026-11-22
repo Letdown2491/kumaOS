@@ -115,3 +115,14 @@ a lapsed or broken lease and executes nothing — retirement belongs to
 the paths that end the lease, not the one that reports it.
 _Avoid_: uninstall, cleanup, garbage collection
 
+**Keyring adopt**:
+The user unit (`kuma-keyring.service`) that gives the session's
+PAM-unlocked keyring its bus name: it finds the login half,
+`--start` adopts it, owns `org.freedesktop.secrets`, then holds the
+watch — the name answering is the unit's heartbeat, its loss the
+failure `Restart=` acts on (see docs/adr/0001). The connection beat
+in `secrets::connect` is the adopt's guard, not the unit's: a
+different clock for a different race.
+_Avoid_: keyring service (the login half is also a service and owns
+nothing on the bus), secret service (that is the D-Bus API name)
+

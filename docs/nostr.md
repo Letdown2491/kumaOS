@@ -124,14 +124,16 @@ session, and nothing running there could.
 
 ### When the keyring itself comes up locked
 
-Rare, but it has a shape: the greeter's PAM unlocks the keyring at login,
-and if a dbus-activated keyring instance wins the session's bus name in
-the seconds around that unlock, the instance your session talks to can be
-a locked one — and `kuma-nostr unlock` cannot help, because it re-reads
-the vault through the keyring rather than opening the keyring. The
-doctor names this explicitly when it sees it ("the session's keyring
-itself came up locked"). The fix is a two-step bootstrap only you can
-run, because the password is yours:
+Rare, but it has a shape: the greeter's PAM unlocks the keyring at
+login, and the session's keyring service then adopts that unlocked
+daemon and owns the bus name. If the adopt loses that race — a locked
+daemon won the name first, or the adopt's watch restarted after an
+abort and its fresh adopt is locked by birth — the name your session
+talks to is a locked one, and `kuma-nostr unlock` cannot help, because
+it re-reads the vault through the keyring rather than opening the
+keyring. The doctor names this explicitly when it sees it ("the
+session's keyring itself came up locked"). The fix is a two-step
+bootstrap only you can run, because the password is yours:
 
 ```console
 $ systemctl --user stop 'dbus-:1.2-org.freedesktop.secrets@*.service'
@@ -145,8 +147,8 @@ the PAM path in miniature. Then `kuma-nostr unlock` works, because the
 keyring it reads through is open. Note the `printf '%s'` shape: no
 trailing newline, because the daemon reads the password verbatim. If
 this happens on more boots than the one that named the bug, say
-something — the race is supposed to be an image-level fix away, not a
-ritual you keep.
+something — the adopt's watch exists so a dead or locked name-holder
+is replaced within seconds, not a session-long condition.
 
 You can also arm an inactivity lock: give the daemon a window (an hour at
 minimum) with `--inactivity-lock-secs`, and it locks itself when nothing
