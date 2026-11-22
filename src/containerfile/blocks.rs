@@ -35,6 +35,15 @@ pub(crate) const NIRI_PACKAGES: &[&str] = &[
     // prompts on launch, silently, because the greeter's PAM lines are
     // '-' prefixed and skip a missing module without a word
     "gnome-keyring-pam",
+    // Fedora's vendor PAM stacks (system-auth and everything that
+    // includes it — sudo, the shell's lock screen) call pam_fprintd
+    // un-prefixed, and a missing module is not skipped: every PAM
+    // conversation logged `unable to dlopen pam_fprintd.so` on every
+    // sudo and every unlock. The package satisfies the reference and
+    // arms fingerprint auth on machines whose readers ship an enabled
+    // driver — the Fedora default posture, absent only because bootc
+    // images prune it.
+    "fprintd",
     "polkit",
     "mesa-dri-drivers",
     // OpenGL alone strands Vulkan apps on lavapipe software rendering
