@@ -39,11 +39,16 @@ pub(crate) const NIRI_PACKAGES: &[&str] = &[
     // includes it — sudo, the shell's lock screen) call pam_fprintd
     // un-prefixed, and a missing module is not skipped: every PAM
     // conversation logged `unable to dlopen pam_fprintd.so` on every
-    // sudo and every unlock. The package satisfies the reference and
-    // arms fingerprint auth on machines whose readers ship an enabled
-    // driver — the Fedora default posture, absent only because bootc
-    // images prune it.
+    // sudo and every unlock. The module is a subpackage — the same
+    // split gnome-keyring makes one block above — so the daemon alone
+    // satisfies nothing; the 45.7.3 candidate shipped fprintd and the
+    // noise survived its own fix until this pair landed. The daemon is
+    // the feature (fingerprint unlock on machines whose readers have
+    // an enabled driver); the module subpackage is the reference the
+    // stacks demand. The Fedora default posture, absent only because
+    // bootc images prune both.
     "fprintd",
+    "fprintd-pam",
     "polkit",
     "mesa-dri-drivers",
     // OpenGL alone strands Vulkan apps on lavapipe software rendering

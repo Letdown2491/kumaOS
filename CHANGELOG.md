@@ -47,12 +47,16 @@ journal survey turned up.
   the sync fix (#120) uses, and retired into the home that lease
   names; under sudo with no invoking-user lease there is no second
   guess.
-- **fprintd rides the image.** Every sudo and every lock-screen PAM
-  conversation logged `unable to dlopen pam_fprintd.so` — Fedora's
+- **fprintd-pam rides the image.** Every sudo and every lock-screen
+  PAM conversation logged `unable to dlopen pam_fprintd.so` — Fedora's
   vendor PAM stacks call the module un-prefixed, a missing module is
-  not skipped, and bootc images prune the package. Satisfying the
-  reference is the Fedora default posture, and machines whose readers
-  have drivers gain fingerprint unlock for free.
+  not skipped, and bootc images prune the package. The module is a
+  subpackage (the same split gnome-keyring makes): the first candidate
+  shipped the `fprintd` daemon alone and the noise survived its own
+  fix, caught on the real machine before the tag. Both ship now —
+  `fprintd-pam` satisfies the reference, the daemon arms fingerprint
+  unlock on machines whose readers have drivers — the Fedora default
+  posture either way.
 
 ## v45.7.2 (2026-11-21)
 
