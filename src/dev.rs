@@ -39,6 +39,20 @@ pub struct Checkout {
     pub commit: String,
 }
 
+/// The names are joined into paths — at stage, at retire, at
+/// the daemon adopt — and the receipt is a file any user-level
+/// process can edit. A name with a `/` in it (or `..`, or an
+/// absolute path, which PathBuf::join lets replace the base
+/// whole) would walk outside ~/.local/bin at exactly the
+/// moment `retire` reaches for `remove_file`. An unauthenticated
+/// lease earns the same treatment as an unparseable one: None,
+/// the lease is gone, and doctor grades the machine on what it
+/// finds there.
+fn parse_receipt(text: &str) -> Option<Receipt> {
+    let receipt: Receipt = serde_json::from_str(text).ok()?;
+    receipt.binaries.iter().all(|b| is_bare_name(&b.name)).then_some(receipt)
+}
+
 /// One binary the install staged.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Binary {
@@ -60,18 +74,7 @@ pub struct Receipt {
 
 impl Receipt {
     pub fn read() -> Option<Receipt> {
-        let text = std::fs::read_to_string(receipt_path()).ok()?;
-        let receipt: Receipt = serde_json::from_str(&text).ok()?;
-        // The names are joined into paths — at stage, at retire, at
-        // the daemon adopt — and the receipt is a file any user-level
-        // process can edit. A name with a `/` in it (or `..`, or an
-        // absolute path, which PathBuf::join lets replace the base
-        // whole) would walk outside ~/.local/bin at exactly the
-        // moment `retire` reaches for `remove_file`. An unauthenticated
-        // lease earns the same treatment as an unparseable one: None,
-        // the lease is gone, and doctor grades the machine on what it
-        // finds there.
-        receipt.binaries.iter().all(|b| is_bare_name(&b.name)).then_some(receipt)
+        parse_receipt(&std::fs::read_to_string(receipt_path()).ok()?)
     }
 
     pub fn write(&self) -> Result<()> {
@@ -124,16 +127,22 @@ impl Receipt {
     /// that will not come back after the next reboot. With the
     /// override gone, the unit's baked ExecStart answers — the image's
     /// binary again, which is what "reverts to the image" means.
-    pub fn retire(&self) -> Vec<String> {
+    ///
+    /// The home is the lease's own: the lanes that retire run under
+    /// sudo, and root's HOME names the wrong .local/bin — the lease
+    /// the receipt carries is the invoking user's (#122).
+    pub fn retire_in(&self, home: &Path, receipt_file: &Path) -> Vec<String> {
         let mut retired = Vec::new();
+        let bin = home.join(".local/bin");
         for binary in &self.binaries {
-            let dest = bin_home().join(&binary.name);
+            let dest = bin.join(&binary.name);
             if std::fs::remove_file(&dest).is_ok() {
                 retired.push(dest.display().to_string());
             }
         }
         if self.binaries.iter().any(|b| b.name == "kuma-nostrd") {
-            let override_path = daemon_override();
+            let override_path =
+                home.join(".config/systemd/user/kuma-nostrd.service.d/override.conf");
             if std::fs::remove_file(&override_path).is_ok() {
                 retired.push(override_path.display().to_string());
             }
@@ -141,7 +150,7 @@ impl Receipt {
                 note(&failure);
             }
         }
-        let _ = std::fs::remove_file(receipt_path());
+        let _ = std::fs::remove_file(receipt_file);
         retired
     }
 }
@@ -706,12 +715,19 @@ fn dotted(version: &str) -> Option<Vec<u64>> {
 /// itself is loud on stderr (a JSON caller's progress stream), because
 /// it changed the machine in a way the receipt used to deny.
 pub fn retire_if_lapsed() {
-    let Some(receipt) = Receipt::read() else { return };
+    // The lanes that retire run under sudo, and root's HOME carries no
+    // receipt: a user's lapsed lease read as "nothing to do" forever
+    // (#122, discovered when the boot came up on the dev override the
+    // image had outlived). The lease is read where it lives — HOME's
+    // own, or the invoking user's through the same passwd road the
+    // sync fix (#120) uses — and retired into the home that lease
+    // names, never the caller's.
+    let Some((receipt, home, receipt_file)) = lease_receipt() else { return };
     if !lapsed(&receipt) {
         return;
     }
     let daemon = receipt.binaries.iter().any(|b| b.name == "kuma-nostrd");
-    let retired = receipt.retire();
+    let retired = receipt.retire_in(&home, &receipt_file);
     note(&format!(
         "Retired the dev install (a lease, lapsed when this image reached {}): {}.{}",
         receipt.version(),
@@ -722,6 +738,39 @@ pub fn retire_if_lapsed() {
             ""
         }
     ));
+}
+
+/// The lease receipt, its home, and its file: HOME's own, or — when an
+/// apply lane runs under sudo — the invoking user's, resolved through
+/// the same passwd road the sync fix (#120) uses. The passwd home is
+/// the honest default: a custom XDG_DATA_HOME in the user's own shell
+/// is invisible here, and the sync fix already recorded that answer.
+fn lease_receipt() -> Option<(Receipt, PathBuf, PathBuf)> {
+    let sudo = std::env::var("SUDO_USER").ok().filter(|n| n != "root" && !n.is_empty());
+    if let Some(user) = sudo {
+        let invoked = Command::new("getent")
+            .args(["passwd", &user])
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string());
+        if let Some(line) = invoked {
+            if let Some(home) = line.split(':').nth(5).filter(|h| !h.is_empty()) {
+                let home = PathBuf::from(home);
+                let file = home.join(".local/share/kuma/dev-install.json");
+                if let Some(receipt) = parse_receipt(&std::fs::read_to_string(&file).ok()?) {
+                    return Some((receipt, home, file));
+                }
+            }
+        }
+        // Under sudo with no invoking-user lease, root's home is not a
+        // second guess: a lease there staged nothing the machine runs.
+        return None;
+    }
+    let home = PathBuf::from(std::env::var_os("HOME")?);
+    let file = receipt_path();
+    let receipt = parse_receipt(&std::fs::read_to_string(&file).ok()?)?;
+    Some((receipt, home, file))
 }
 
 fn note(text: &str) {
