@@ -60,6 +60,23 @@ The gates a push claims are the gates the host runs: `cargo fmt --check`,
 beside each other before any push — 45.6.0's first push claimed green
 and shipped red because clippy ran only in CI.
 
+## Come home after a release (45.8.0)
+
+After a release promotes, the build machine comes home: `kuma upgrade
+--yes` delta-builds the declaration onto the published release and
+stages it. The machine that authored the release boots the fleet's
+bytes instead of a localhost cousin. First production run was 45.7.3's
+tail (the lane itself is #38/#44 machinery, never used by its own
+author before then). Candidate testing before the tag stays on the
+local road — compose, verify the digest and the packages inside, `kuma
+switch` — which 45.7.3 proved: the machine validates the candidate,
+the battery validates the publish. Two facts the ritual lives with:
+the staged delta carries the declaration's lock, not the release's
+package updates (the next `kuma update` picks those up), and `kuma
+upgrade --check` on a delta-lane machine cannot say "current" — the
+machine's own digest never equals the release's, so the check answers
+"run it anyway; a rebuild that reproduces what runs stages nothing."
+
 ## The nostr layer's dev loop (44.4.0)
 
 The daemon on a kuma machine is deployed from the checkout: a user-level
