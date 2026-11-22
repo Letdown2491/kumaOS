@@ -163,6 +163,22 @@ offer beyond the confirmation line itself.
   closures are `Fn` — clone captured ids before the listener AND inside
   it. Goldens pin bytes; a moving golden is the review.
 
+## The journal's loaded facts (45.7.3)
+
+- The journal identifier is not the process: Orchard runs its catalog
+  and refresh logging under kuma-shell's syslog identifier, so the
+  flatpak CLI aborts its refreshes spawned read as the shell's, and
+  every grep for shell errors pulls Orchard's work into the net while
+  greps scoped to `kuma-shell` hide Orchard's own failure reports.
+  Trust `_COMM`/`_EXE` (read the entry as json, not the identifier)
+  before diagnosing from a journal line (2026-11-21, #127's diagnosis;
+  the fix is Orchard's, Orchard#17).
+- `/proc/sys/kernel/core_pattern` was `/bin/false` — an ANOM_ABEND with
+  no coredump anywhere, and `coredumpctl` answers "No coredumps found"
+  for every past crash. It is piped to systemd-coredump on this
+  machine now; a fresh abort leaves a backtrace, and an intermittent
+  crash is a wait-for-it, not a repro-until-it.
+
 ## The vm smoke's loaded facts (44.4.0)
 
 - Auditing "does the distro have X" must grep `src/containerfile/blocks.rs`

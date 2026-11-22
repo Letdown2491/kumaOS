@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+## v45.7.3 (2026-11-22)
+
+The failed-road batch (#123): the next mid-release failure recovers in
+one step instead of improvising a road, plus the stability findings the
+journal survey turned up.
+
+- **The publish road names its own prerequisite (#118).** A
+  re-dispatched publish.yml fails loudly when no ci run for that head
+  produced a `kuma-siblings` artifact — but the loud failure did not
+  say why, and the why is a trap: the artifact is heavy-tier and
+  per-sha, so a fast-tier main push builds none and a re-dispatch
+  without a heavy run for that head is a second failure by
+  construction. The error now says so, with the dispatch command in
+  it.
+- **The install lap's ceiling kills by name (#119).** The 45.7.0 road
+  lost an install lap at 90m16s to the runner's ceiling, reported as
+  cancelled — indistinguishable from an operator's action, and the
+  summary said nothing. The ceiling rises to 150 (the lap's green runs
+  answer in 42m), and a cancelled-only marker step names the kill as
+  the ceiling: re-run once before diagnosing the work.
+- **The keyring unit holds the watch (#124).** `--start --foreground`
+  makes the unit's process a client whenever a daemon already exists —
+  and a client that exits 0 when its daemon dies. Twice on real
+  hardware the losing boots showed the unit `Result=success` inside
+  the crash second: `Restart=on-failure` never fired, and the bus name
+  sat unowned and unactivatable for the session. The ExecStart shell
+  now adopts and then holds while `org.freedesktop.secrets` answers a
+  `Peer.Ping`, exiting one when it stops — the failure `Restart=` was
+  always waiting for, whose restart puts a locked name-holder on the
+  bus instead of a void. The unlock dies with the daemon either way;
+  the diagnosis does not have to. (ADR 0001 records the whole
+  architecture, the #190 mechanism, and the failure taxonomy.)
+- **Doctor surfaces the dead-override class (#125).** The 203/EXEC
+  session-killer — a user unit or drop-in whose ExecStart names a
+  binary that is gone — is now a one-command doctor warning with its
+  cure attached, instead of five journal restarts and a start-limit
+  hit at the next boot.
+- **The dev lease reads where it lives (#122).** The lanes that retire
+  a lapsed dev install run under sudo, read root's HOME, found no
+  receipt, and answered "nothing to do" forever — the user's lease
+  outlived its own binaries into the next boot's overrides. The lease
+  is read from the invoking user's home through the same passwd road
+  the sync fix (#120) uses, and retired into the home that lease
+  names; under sudo with no invoking-user lease there is no second
+  guess.
+- **fprintd rides the image.** Every sudo and every lock-screen PAM
+  conversation logged `unable to dlopen pam_fprintd.so` — Fedora's
+  vendor PAM stacks call the module un-prefixed, a missing module is
+  not skipped, and bootc images prune the package. Satisfying the
+  reference is the Fedora default posture, and machines whose readers
+  have drivers gain fingerprint unlock for free.
+
 ## v45.7.2 (2026-11-21)
 
 - **The keyring adopt's race is guarded at the connection, not the

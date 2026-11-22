@@ -48,7 +48,7 @@ and nothing else.
 | Hardware | `NetworkManager-wifi`, `NetworkManager-tui`, `wpa_supplicant`, `bluez`, `blueman`, `brightnessctl`, `power-profiles-daemon` |
 | Printing and discovery | `cups`, `system-config-printer`, `avahi`, `nss-mdns` |
 | Screen and clipboard | `grim`, `slurp`, `swappy`, `wf-recorder`, `wl-clipboard` |
-| Session glue | `polkit`, `mate-polkit`, `dconf`, `gnome-keyring`, `xsettingsd`, `xdg-user-dirs`, `firewalld`, `flatpak`, `desktop-file-utils` |
+| Session glue | `polkit`, `mate-polkit`, `dconf`, `gnome-keyring`, `xsettingsd`, `xdg-user-dirs`, `firewalld`, `flatpak`, `desktop-file-utils`, `fprintd` |
 | Fonts and icons | sans, mono, emoji, CJK, Font Awesome (free and brands), `adwaita-icon-theme`, `adw-gtk3-theme` |
 
 The control centre owns the everyday cases: bluetooth, audio, brightness.
@@ -136,6 +136,12 @@ failure someone had to diagnose:
   lines skip a missing module in total silence. Without it, login
   succeeds, nothing is logged, and every keyring-using app prompts on
   launch forever.
+- **`fprintd`** satisfies the vendor PAM stacks' fingerprint module.
+  Fedora's stacks call `pam_fprintd` un-prefixed, and a missing module
+  is not skipped — every `sudo` and every lock-screen conversation
+  logged `unable to dlopen pam_fprintd.so` (45.7.2 and before). The
+  package is the Fedora default posture, and machines whose readers
+  have an enabled driver gain fingerprint unlock for free.
 - **`nss-mdns`** is what makes `.local` names and driverless printer
   discovery actually resolve. `avahi` alone announces without resolving.
 - **`zram-generator-defaults`** carries the config that activates zram.
