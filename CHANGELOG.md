@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+## v45.7.2 (2026-11-21)
+
+- **The keyring adopt's race is guarded: the 45.7.1 fix could still lose
+  it on real hardware.** 45.7.1's second boot on this machine showed the
+  unguarded timing: the bunker's startup OpenSession arrived inside the
+  PAM daemon's first seconds and gnome-keyring 51.x's abort on exactly
+  that ask took the daemon — and the unlock it holds — down with it
+  (`plain_negotiate`/pkcs11 assertions, `ANOM_ABEND`), leaving the name
+  unowned and unactivatable for the session; the bunker started locked.
+  The same image had won the same race the boot before. Two halves,
+  neither respawn: the keyring unit's `ExecStartPost` holds until
+  `org.freedesktop.secrets` is owned *and* answers a `Peer.Ping` (bus
+  glue, not the secret module — the probe cannot trip the abort it
+  guards), so the bunker's `After=` is a readiness barrier instead of an
+  ordering behind a corpse, and a name that never answers fails the unit
+  into `Restart=`; and the bunker's retry ladder gates every attempt on
+  the name being owned and settled (`wait_for_service_settled`) — no ask
+  into the vulnerable window, a bounded 10s patience, the honest error
+  after the attempts run out.
+- **The store probe runs podman, not a program named `image`.** The
+  delta lane's store-probe argv dropped the `podman` prefix, so the
+  spawn failed with ENOENT on `image` and the error read `failed to run
+  image` — the probe's own `format!("failed to run {}", args[0])` with
+  `args[0] == "image"` naming the victim. The first 45.7.1 tag road died
+  in this lane; the fix is `podman_argv` made pure, with a test.
+- **The kumaui five ride v0.10.1** (shell and greeter 0.10.1; files,
+  term and monitor ride their own version ladders at the same commit):
+  the titlebar glyph set is the platform's (#160), and the
+  percent-decode's bytes core (#159).
+
 ## v45.7.1 (2026-11-21)
 
 - **A compose on a stale base refuses instead of shipping.** The

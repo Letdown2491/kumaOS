@@ -934,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "kuma"
-version = "45.7.1"
+version = "45.7.2"
 dependencies = [
  "anyhow",
  "clap",
