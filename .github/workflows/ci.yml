@@ -269,7 +269,7 @@ jobs:
       # the only Go here is the relay cloned below into /tmp, pinned and
       # single-module, so the check failed on every run for a download
       # the build never needed.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           cache: false
           # The relay's go.mod at the pinned commit asks for go >= 1.25.4,
