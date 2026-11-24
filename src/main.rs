@@ -876,7 +876,11 @@ fn run(
             let config = Config::load(&path)?;
             inspect::diff(&config, &path, json)
         }
-        Cmd::Doctor { json, report } => inspect::doctor(json || root_json, report),
+        Cmd::Doctor { json, report } => inspect::doctor(
+            json || root_json,
+            report,
+            &read_config_path(config_path, explicit, true),
+        ),
         Cmd::Check { json } => {
             let json = json || root_json;
             check(&read_config_path(config_path, explicit, !json), json)

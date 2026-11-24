@@ -831,7 +831,7 @@ fn booted_kuma_machine() -> bool {
     Path::new("/usr/lib/kuma").is_dir() && Path::new("/run/ostree-booted").exists()
 }
 
-pub fn doctor(json: bool, as_report: bool) -> Result<()> {
+pub fn doctor(json: bool, as_report: bool, config_path: &Path) -> Result<()> {
     // Started first and collected last. These two podman calls were
     // ~60% of a doctor run and nothing else here waits on them, so they
     // run alongside everything that follows instead of after it.
@@ -858,6 +858,10 @@ pub fn doctor(json: bool, as_report: bool) -> Result<()> {
     // see that there is no deployment, rather than see the question
     // skipped.
     let status = (!live || as_report).then(bootc_status).flatten();
+    // Parsed once here for the alignment probe's lane decision; the
+    // deployment check re-parses the same document because its
+    // signature and tests speak in raw bootc JSON.
+    let deps = status.as_ref().map(crate::deployment::Deployments::from_status_json);
     if !live {
         check_deployment(status.as_ref(), &mut report);
     }
@@ -975,6 +979,13 @@ pub fn doctor(json: bool, as_report: bool) -> Result<()> {
         // that names an unreadable file; the rest stay silent on None
         // because it already said so.
         let baked = Config::load(Path::new(BAKED_CONFIG)).ok();
+        // The alignment probe starts here, on the leftovers-probe
+        // pattern: everything between this line and its join is local
+        // work, and the read is one bounded registry round trip.
+        let release_probe = deps
+            .as_ref()
+            .zip(baked.as_ref())
+            .and_then(|(d, c)| release_probe(&d.booted, &c.system.desktop));
         check_snapshots(&mut report, baked.as_ref());
         check_shell(&mut report);
         check_niri_shadow(&mut report);
@@ -990,6 +1001,11 @@ pub fn doctor(json: bool, as_report: bool) -> Result<()> {
         check_oo7_posture(&mut report);
         check_dev_install(&mut report);
         check_cargo_bin(&mut report);
+        let release_answer = release_probe.map(|h| h.join().ok().flatten());
+        let lock_release = crate::lock::for_config(config_path).and_then(|l| l.release);
+        if let Some(d) = deps.as_ref() {
+            check_release_alignment(&d.booted, release_answer, lock_release.as_ref(), &mut report);
+        }
     } else if Path::new("/usr/lib/kuma").is_dir() {
         report(
             Grade::Warn,
@@ -1546,6 +1562,186 @@ fn check_deployment(
             let _ = host_output(&["sudo", "sh", "-c", &heal]);
         }
     }
+}
+
+/// The delta lane's blind spot, graded as a check. A machine that
+/// builds locally never carries the release's digest — by
+/// construction — so nothing digest-shaped can ever tell it that a
+/// newer release shipped; `kuma upgrade --check` says as much. The
+/// version can. This is the come-home ritual's standing reminder: the
+/// release the machine shadows, graded from one bounded registry
+/// metadata read, with the verdict the lane itself writes.
+///
+/// Only delta-lane machines run it. A fetch machine's origin IS the
+/// release tag — bootc owns its currency, and `bootc upgrade` is the
+/// road; a headless machine has no release tier to shadow. Skipping
+/// is silent on both: doctor reports the checks that ran, and a
+/// check that names a fact the machine's own lane already answers
+/// is a second alarm for a fire already covered.
+fn check_release_alignment(
+    booted: &crate::deployment::Slot,
+    release: Option<Option<(String, String)>>,
+    lock_release: Option<&crate::lock::Release>,
+    report: &mut impl FnMut(Grade, &str, String, Option<Action>),
+) {
+    // The lane gate, kept in the check and not only in the probe: a
+    // fetch lane's currency is bootc's to say (its origin IS the
+    // release tag) and a headless lane has no release tier to shadow.
+    // Silent skip on both — doctor reports the checks that ran.
+    let local = booted.transport.as_deref() == Some("containers-storage")
+        || booted.image.as_deref().unwrap_or_default().starts_with("localhost/");
+    if !local {
+        return;
+    }
+    // Outer None: the probe never started — same lanes, or a booted
+    // slot unreadable enough that no lane could be decided.
+    let Some(release) = release else {
+        return;
+    };
+    let Some((release_version, release_digest)) = release else {
+        // "Could not ask" is not "wrong": an offline machine gets the
+        // line without a grade attached to it, the same posture `kuma
+        // edit` takes when it cannot read a catalog.
+        report(
+            Grade::Ok,
+            "release",
+            "could not ask the registry what the release tag serves; nothing graded on it".into(),
+            None,
+        );
+        return;
+    };
+    let fix = || {
+        Some(Action::new(
+            "upgrade",
+            "kuma upgrade --yes",
+            "delta-build this declaration onto the release and stage it (applies on reboot)",
+        ))
+    };
+    match lock_release {
+        // The lock's record is the lane's own answer, the same verdict
+        // `kuma upgrade --check` computes: Current and Behind are
+        // claimed only where a comparison actually happened.
+        Some(record) if record.digest == release_digest => report(
+            Grade::Ok,
+            "release",
+            "came home: the lock's release record matches what the release tag serves".into(),
+            None,
+        ),
+        Some(_) => report(
+            Grade::Warn,
+            "release",
+            format!(
+                "the release tag moved past this machine's record ({release_version} is \
+                 published); the base the next build compiles onto is the old one"
+            ),
+            fix(),
+        ),
+        // No record — the machine that has never come home. The
+        // versions still speak where both sides have labels.
+        None => match (
+            booted.version.as_deref().map(|v| version_compare(v, &release_version)),
+            booted.version.as_deref(),
+        ) {
+            (Some(Some(std::cmp::Ordering::Less)), Some(running)) => report(
+                Grade::Warn,
+                "release",
+                format!(
+                    "shadows a newer release: {release_version} is published, this machine \
+                     runs {running}; a local build never equalizes the digest on its own"
+                ),
+                fix(),
+            ),
+            (Some(Some(std::cmp::Ordering::Equal)), Some(running)) => report(
+                Grade::Ok,
+                "release",
+                format!(
+                    "runs the release's own version ({running}) on its own build; the lock \
+                     carries no release record yet — the first `kuma upgrade --yes` records one"
+                ),
+                None,
+            ),
+            (Some(Some(_)), Some(running)) => report(
+                Grade::Ok,
+                "release",
+                format!(
+                    "runs ahead of the published release ({running} vs {release_version}): \
+                     a local build between releases, exactly what the tree is for"
+                ),
+                None,
+            ),
+            _ => report(
+                Grade::Ok,
+                "release",
+                format!(
+                    "cannot judge: the booted image reports no version to set against \
+                     {release_version}"
+                ),
+                None,
+            ),
+        },
+    }
+}
+
+/// Dot-separated numeric compare for kumaOS version labels (`45.7.3`).
+/// A missing part reads as zero, so `45.7` sorts before `45.7.3`; a
+/// part that refuses to parse is no answer rather than a wrong one —
+/// a suffixed label grades as unjudgeable, never as less.
+fn version_compare(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+    let mut ai = a.split('.').map(|p| p.parse::<u64>());
+    let mut bi = b.split('.').map(|p| p.parse::<u64>());
+    loop {
+        match (ai.next(), bi.next()) {
+            (None, None) => return Some(std::cmp::Ordering::Equal),
+            (None, Some(part)) => {
+                // A missing part reads as zero: 45.7 sorts before 45.7.3.
+                return Some(0u64.cmp(&part.ok()?));
+            }
+            (Some(part), None) => return Some(part.ok()?.cmp(&0u64)),
+            (Some(x), Some(y)) => {
+                let (x, y) = (x.ok()?, y.ok()?);
+                match x.cmp(&y) {
+                    std::cmp::Ordering::Equal => continue,
+                    other => return Some(other),
+                }
+            }
+        }
+    }
+}
+
+/// The alignment check's one network read, started beside the
+/// leftovers probe so it hides behind the local checks: a
+/// metadata-only skopeo inspect of the release tag — no layers, the
+/// system signature policy enforced, bounded so a registry that
+/// accepts the connection and stalls cannot hold the run. Unprivileged
+/// on purpose: the tag is public and the policy is world-readable.
+/// The lane gate lives here rather than in the check: a fetch lane's
+/// currency is bootc's to say and a headless lane has no tag, so only
+/// a delta-lane machine starts the read at all.
+fn release_probe(
+    booted: &crate::deployment::Slot,
+    desktop: &crate::config::Desktop,
+) -> Option<std::thread::JoinHandle<Option<(String, String)>>> {
+    let local = booted.transport.as_deref() == Some("containers-storage")
+        || booted.image.as_deref().unwrap_or_default().starts_with("localhost/");
+    if !local {
+        return None;
+    }
+    let tag = desktop.release_tag()?;
+    Some(std::thread::spawn(move || {
+        let raw = host_output(&[
+            "timeout",
+            "30",
+            "skopeo",
+            "inspect",
+            &format!("docker://{}:{tag}", crate::published_repo()),
+        ])
+        .ok()?;
+        let inspect: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+        Some((
+            inspect.pointer("/Labels/org.opencontainers.image.version")?.as_str()?.to_string(),
+            inspect.get("Digest")?.as_str()?.to_string(),
+        ))
+    }))
 }
 
 /// Where flatpak keeps per-app permission overrides: one store for the
@@ -6337,5 +6533,113 @@ mod tests {
         assert_eq!(plain("org.mozilla.firefox"), "org.mozilla.firefox");
         assert_eq!(plain("café.desktop"), "café.desktop", "UTF-8 names pass");
         assert_eq!(plain("two\r\nlines"), "twolines", "newline is control too");
+    }
+
+    /// The alignment check's collector: the deltas the test wants to
+    /// name, nothing else.
+    fn aligned(
+        booted: &crate::deployment::Slot,
+        release: Option<Option<(String, String)>>,
+        lock_release: Option<&crate::lock::Release>,
+    ) -> (Grade, String, Option<Action>) {
+        let mut out: Option<(Grade, String, Option<Action>)> = None;
+        check_release_alignment(booted, release, lock_release, &mut |grade, _name, detail, fix| {
+            assert!(out.is_none(), "the alignment check speaks once");
+            out = Some((grade, detail, fix));
+        });
+        out.expect("the delta lane always gets an answer")
+    }
+
+    fn slot(version: &str) -> crate::deployment::Slot {
+        crate::deployment::Slot {
+            image: Some("localhost/kuma:latest".into()),
+            digest: Some("sha256:aaa".into()),
+            timestamp: None,
+            transport: Some("containers-storage".into()),
+            version: Some(version.into()),
+        }
+    }
+
+    #[test]
+    fn the_alignment_rows() {
+        let release = || ("45.8.0".to_string(), "sha256:rel".to_string());
+        // The drift state the check exists for: a local build that has
+        // never come home, with a newer release published.
+        let (grade, detail, fix) = aligned(&slot("45.7.3"), Some(Some(release())), None);
+        assert_eq!(grade, Grade::Warn);
+        assert!(detail.contains("45.8.0") && detail.contains("45.7.3"), "{detail}");
+        assert!(fix.is_some(), "drift carries the come-home command");
+        // Same version, own build: the quiet healthy answer, with the
+        // record note naming how it stops being Unknown.
+        let (grade, detail, fix) = aligned(&slot("45.8.0"), Some(Some(release())), None);
+        assert_eq!(grade, Grade::Ok, "{detail}");
+        assert!(detail.contains("no release record yet"), "{detail}");
+        assert!(fix.is_none());
+        // A local build ahead of the tag is the dev machine's normal
+        // state between bumps, not a warning about anything.
+        let (grade, _detail, fix) = aligned(&slot("45.9.0"), Some(Some(release())), None);
+        assert_eq!(grade, Grade::Ok);
+        assert!(fix.is_none());
+        // The lock's record answers before the versions do.
+        let record = crate::lock::Release {
+            reference: "ghcr.io/letdown2491/kuma:niri".into(),
+            digest: "sha256:rel".into(),
+            version: Some("45.8.0".into()),
+        };
+        let (grade, detail, fix) = aligned(&slot("45.8.0"), Some(Some(release())), Some(&record));
+        assert_eq!(grade, Grade::Ok);
+        assert!(detail.contains("came home"), "{detail}");
+        assert!(fix.is_none());
+        // A moved tag with a record: Behind, even at the same version —
+        // the same-release-republish shape --check names.
+        let (grade, _detail, fix) = aligned(
+            &slot("45.8.0"),
+            Some(Some(("45.8.0".to_string(), "sha256:moved".to_string()))),
+            Some(&record),
+        );
+        assert_eq!(grade, Grade::Warn);
+        assert!(fix.is_some());
+        // An unparseable label is no answer, never a wrong one — but
+        // only where the parse failure decides: earlier parts compare
+        // first, so a suffixed 45.7.3 label genuinely is behind 45.8.0.
+        let (grade, detail, fix) = aligned(&slot("45.8.0+dev"), Some(Some(release())), None);
+        assert_eq!(grade, Grade::Ok, "{detail}");
+        assert!(detail.contains("cannot judge"), "{detail}");
+        assert!(fix.is_none());
+        // Could not ask: the offline posture, ungraded.
+        let (grade, detail, fix) = aligned(&slot("45.7.3"), Some(None), None);
+        assert_eq!(grade, Grade::Ok);
+        assert!(detail.contains("could not ask"), "{detail}");
+        assert!(fix.is_none());
+        // Wrong lane: the fetch machine's currency is bootc's to say.
+        let mut fetched = slot("45.7.3");
+        fetched.image = Some("ghcr.io/letdown2491/kuma:niri".into());
+        fetched.transport = Some("registry".into());
+        let mut out: Option<(Grade, String, Option<Action>)> = None;
+        check_release_alignment(
+            &fetched,
+            Some(Some(release())),
+            None,
+            &mut |grade, _name, detail, fix| {
+                out = Some((grade, detail, fix));
+            },
+        );
+        assert!(out.is_none(), "the fetch lane gets no alignment line");
+    }
+
+    #[test]
+    fn version_labels_compare_in_parts() {
+        use std::cmp::Ordering::*;
+        assert_eq!(version_compare("45.7.3", "45.8.0"), Some(Less));
+        assert_eq!(version_compare("45.8.0", "45.7.3"), Some(Greater));
+        assert_eq!(version_compare("45.7.3", "45.7.3"), Some(Equal));
+        assert_eq!(version_compare("45.7", "45.7.0"), Some(Equal), "a missing part is zero");
+        assert_eq!(version_compare("45.7", "45.7.3"), Some(Less));
+        // Earlier parts decide first: the suffix never even gets read
+        // when they already differ.
+        assert_eq!(version_compare("45.7.3+dev", "45.8.0"), Some(Less));
+        // A suffix is no answer only when the earlier parts tie.
+        assert_eq!(version_compare("45.8.0+dev", "45.8.0"), None, "a suffix is no answer");
+        assert_eq!(version_compare("", "45.8.0"), None);
     }
 }
