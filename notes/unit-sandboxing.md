@@ -1,10 +1,13 @@
 # Unit sandboxing — systemd hardening for the converger and backup units
 
-Status: planned 2026-09-27, from the security audit (four sweeps, nothing
-above Low; this is the one finding worth work). Not started. Base-independent:
-works identically on a Fedora 44 image, and landing 44.x work before the
-45.0.0 rebase is the standing doctrine — so this is a 44.x item, not a
-45.0.0 rider.
+Status: **landed** — superseded by the tree, which carries the full
+directive set on all four units (landed as riders across the nostr-era
+releases, `9a0e7bc` onward, asserted in `containerfile/mod.rs`'s unit
+tests). Planned 2026-09-27 from the security audit (four sweeps,
+nothing above Low; this was the one finding worth work). The proposal
+below matches what shipped directive-for-directive; kept for the
+threat model, the out-of-scope fence, and the test plan's reasoning.
+Base-independent, as predicted: it lives identically on 45.x.
 
 ## The threat model, stated precisely
 
