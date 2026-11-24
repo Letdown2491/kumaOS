@@ -876,11 +876,16 @@ fn run(
             let config = Config::load(&path)?;
             inspect::diff(&config, &path, json)
         }
-        Cmd::Doctor { json, report } => inspect::doctor(
-            json || root_json,
-            report,
-            &read_config_path(config_path, explicit, true),
-        ),
+        Cmd::Doctor { json, report } => {
+            let json = json || root_json;
+            // The announce that names the baked fallback is a stdout
+            // feature, and a JSON document is not stdout's: one prose
+            // line ahead of the findings turned every doctor_grade
+            // probe on the smoke's guests into an empty grade (the
+            // publish road's red lap, 2026-11-24). The check arm's
+            // `!json` is the rule; doctor matches it.
+            inspect::doctor(json, report, &read_config_path(config_path, explicit, !json))
+        }
         Cmd::Check { json } => {
             let json = json || root_json;
             check(&read_config_path(config_path, explicit, !json), json)
