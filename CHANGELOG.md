@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## v45.8.0 (2026-11-24)
+
+The quiet one: a ride, a lock fix, and the check that tells the build
+machine when a release moved past it.
+
+- **kumaUI rides to v0.11.0.** The pin moves `329ac01c` (v0.10.1) to
+  `7088b9dc`, and all five siblings stage beside the running kuma at
+  the new stamp — the image build's identity gate verifies the ride
+  before it ships, as always.
+- **The nightly's audit red clears (#130).** `url` 2.5.8 → 2.5.9
+  (RUSTSEC-2026-0592, a stack overflow in `Url::origin()` on nested
+  `blob:` URLs); the advisory's fix line took the lock, and the
+  battery's audit lap reads green again.
+- **Doctor grades the release a local machine shadows.** A machine
+  whose origin is a local build never carries the release's digest —
+  by construction — so nothing digest-shaped could tell it that a
+  newer release shipped; `kuma upgrade --check` said so honestly and
+  stopped there. Doctor now asks the registry the same bounded,
+  metadata-only question once per run and grades the version: a newer
+  release than the machine runs is a warning with the come-home
+  command attached (`kuma upgrade --yes`), the lock's release record
+  matching the tag reads "came home", a local build ahead of the tag
+  is a dev machine between bumps and reads ok, and could-not-ask
+  grades nothing. The check exists because the come-home ritual does:
+  after a release promotes, the machine that authored it upgrades
+  onto the published bytes, and something on the machine has to say
+  when that is due.
+
 ## v45.7.3 (2026-11-22)
 
 The failed-road batch (#123): the next mid-release failure recovers in
